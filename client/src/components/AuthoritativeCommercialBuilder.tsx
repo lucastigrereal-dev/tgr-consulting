@@ -289,13 +289,9 @@ export function AuthoritativeCommercialBuilder({
     setDrafts(readDrafts(catalogQuery.data, conditionsQuery.data));
   }, [catalogQuery.data, conditionsQuery.data]);
 
-  const replaceCatalog = trpc.igr.replaceProductCatalog.useMutation();
-  const upsertCondition = trpc.igr.upsertCommercialCondition.useMutation();
+  const saveCommercialModel = trpc.igr.saveCommercialModel.useMutation();
   const calculate = trpc.igr.calculate.useMutation();
-  const isSaving =
-    replaceCatalog.isPending ||
-    upsertCondition.isPending ||
-    calculate.isPending;
+  const isSaving = saveCommercialModel.isPending || calculate.isPending;
 
   const blockers = useMemo(() => {
     const product = catalogQuery.data?.evaluation.violations ?? [];
@@ -366,7 +362,6 @@ export function AuthoritativeCommercialBuilder({
       return toast.error("Selecione uma versão de trabalho antes de salvar.");
     if (!drafts.length)
       return toast.error("Adicione ao menos um SKU ao catálogo.");
-    let catalogSaved = false;
     try {
       const parsedAsOfMonth = toInteger(asOfMonth, "Mês de referência");
       const parsedHorizon = toInteger(horizonMonths, "Horizonte");
@@ -381,7 +376,7 @@ export function AuthoritativeCommercialBuilder({
           );
       }
 
-      await replaceCatalog.mutateAsync({
+      await saveCommercialModel.mutateAsync({
         versionId,
         asOfMonth: parsedAsOfMonth,
         skus: drafts.map(({ sku }) => ({
@@ -417,12 +412,7 @@ export function AuthoritativeCommercialBuilder({
             price: phase.price,
           })),
         })),
-      });
-      catalogSaved = true;
-
-      for (const { sku, condition } of drafts) {
-        await upsertCondition.mutateAsync({
-          versionId,
+        conditions: drafts.map(({ sku, condition }) => ({
           productSkuCode: sku.id.trim(),
           status: condition.status,
           sourceType: condition.sourceType,
@@ -461,8 +451,8 @@ export function AuthoritativeCommercialBuilder({
             materialityTolerance: condition.materialityTolerance,
             campaign: condition.campaign.trim() || undefined,
           },
-        });
-      }
+        })),
+      });
 
       await Promise.all([
         utils.igr.productCatalog.invalidate(),
@@ -494,15 +484,9 @@ export function AuthoritativeCommercialBuilder({
             "Revise as pendências autoritativas indicadas pelo cálculo.",
         });
     } catch (error) {
-      if (catalogSaved) {
-        await Promise.all([
-          utils.igr.productCatalog.invalidate(),
-          utils.igr.commercialConditions.invalidate(),
-        ]);
-      }
       toast.error("Não foi possível concluir o fluxo comercial.", {
         description:
-          `${catalogSaved ? "O catálogo foi salvo, mas as condições ficaram parciais. Recarregue e tente novamente. " : ""}${error instanceof Error ? error.message : "Erro não identificado."}`,
+          error instanceof Error ? error.message : "Erro não identificado.",
       });
     }
   };
@@ -1063,7 +1047,7 @@ export function AuthoritativeCommercialBuilder({
             onClick={() => void save(false)}
             disabled={isSaving || !drafts.length}
           >
-            {replaceCatalog.isPending || upsertCondition.isPending ? (
+            {saveCommercialModel.isPending ? (
               <Spinner />
             ) : (
               <Save />

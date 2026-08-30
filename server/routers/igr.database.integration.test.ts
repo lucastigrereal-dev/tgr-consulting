@@ -62,7 +62,7 @@ describe("igrRouter + banco", () => {
     const cost = await owner.createCostCatalogItem({ versionId: created.versionId, category: "operations", name: "Custo validado", frequency: "monthly", amountText: "1200", status: "provided", sourceType: "current_document", sourceRef: "Contrato operacional" });
     ids.costId = cost.id;
 
-    await owner.replaceProductCatalog({
+    const commercialModelInput = {
       versionId: created.versionId,
       asOfMonth: 0,
       skus: [
@@ -81,7 +81,30 @@ describe("igrRouter + banco", () => {
           pricePhases: [{ id: "launch", startsAtMonth: 0, price: "110000" }],
         },
       ],
-    });
+      conditions: [{
+        productSkuCode: "pipa-2q",
+        status: "provided" as const,
+        sourceType: "current_document" as const,
+        sourceRef: "Tabela comercial",
+        condition: {
+          id: "standard",
+          name: "Condição padrão",
+          listPrice: "110000",
+          discount: "0",
+          entry: { total: "20000", installments: 4, firstDueMonth: 0 },
+          balance: {
+            principal: "90000",
+            installments: 48,
+            graceMonths: 1,
+            firstDueMonth: 2,
+          },
+          explicitCharges: "0",
+          materialityTolerance: "0.01",
+        },
+      }],
+    };
+    const savedCommercialModel = await owner.saveCommercialModel(commercialModelInput);
+    ids.commercialConditionId = savedCommercialModel.conditions[0]!.record.id;
     const catalog = await owner.productCatalog({
       versionId: created.versionId,
       asOfMonth: 0,
@@ -92,29 +115,7 @@ describe("igrRouter + banco", () => {
       availableShares: 76,
     });
     await expect(outsider.productCatalog({ versionId: created.versionId, asOfMonth: 0 })).rejects.toThrow("não autorizado");
-    const commercial = await owner.upsertCommercialCondition({
-      versionId: created.versionId,
-      productSkuCode: "pipa-2q",
-      status: "provided",
-      sourceType: "current_document",
-      sourceRef: "Tabela comercial",
-      condition: {
-        id: "standard",
-        name: "Condição padrão",
-        listPrice: "110000",
-        discount: "0",
-        entry: { total: "20000", installments: 4, firstDueMonth: 0 },
-        balance: {
-          principal: "90000",
-          installments: 48,
-          graceMonths: 1,
-          firstDueMonth: 2,
-        },
-        explicitCharges: "0",
-        materialityTolerance: "0.01",
-      },
-    });
-    ids.commercialConditionId = commercial.record.id;
+    await expect(outsider.saveCommercialModel(commercialModelInput)).rejects.toThrow("não autorizado");
     expect((await owner.commercialConditions({ versionId: created.versionId }))[0]?.reconciliation.status).toBe("valid");
 
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });

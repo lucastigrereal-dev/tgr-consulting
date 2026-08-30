@@ -29,6 +29,7 @@ import {
   generateAuthorizedExportForTenant,
   freezeBaselineForTenant,
   replaceProductCatalogForTenant,
+  saveCommercialModelForTenant,
   updateInputsForTenant,
   upsertBuilderComponentForTenant,
   upsertCommercialConditionForTenant,
@@ -90,6 +91,18 @@ const commercialConditionSchema = z.object({
   materialityTolerance: nonNegativeDecimalSchema,
   campaign: z.string().trim().max(255).optional(),
 });
+const persistedCommercialConditionSchema = z
+  .object({
+    productSkuCode: z.string().trim().min(1).max(120).optional(),
+    status: z.enum(["provided", "pending"]),
+    sourceType: provenanceSourceSchema,
+    sourceRef: z.string().trim().max(500).optional(),
+    condition: commercialConditionSchema,
+  })
+  .refine(data => data.status === "pending" || Boolean(data.sourceRef?.trim()), {
+    message: "Condição comercial informada exige fonte ou responsável.",
+    path: ["sourceRef"],
+  });
 
 export const igrRouter = router({
   projects: protectedProcedure.query(({ ctx }) => listProjectsForTenant(tenantIdFromUser(ctx.user.id))),
@@ -143,21 +156,27 @@ export const igrRouter = router({
   upsertCommercialCondition: protectedProcedure
     .input(
       z
-        .object({
-          versionId: z.string().min(1),
-          productSkuCode: z.string().trim().min(1).max(120).optional(),
-          status: z.enum(["provided", "pending"]),
-          sourceType: provenanceSourceSchema,
-          sourceRef: z.string().trim().max(500).optional(),
-          condition: commercialConditionSchema,
-        })
-        .refine(data => data.status === "pending" || Boolean(data.sourceRef?.trim()), {
-          message: "Condição comercial informada exige fonte ou responsável.",
-          path: ["sourceRef"],
-        })
+        .object({ versionId: z.string().min(1) })
+        .and(persistedCommercialConditionSchema)
     )
     .mutation(({ ctx, input }) =>
       upsertCommercialConditionForTenant({
+        tenantId: tenantIdFromUser(ctx.user.id),
+        actorId: ctx.user.id,
+        ...input,
+      })
+    ),
+  saveCommercialModel: protectedProcedure
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        asOfMonth: z.number().int().min(0).max(1200),
+        skus: z.array(productSkuSchema),
+        conditions: z.array(persistedCommercialConditionSchema),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      saveCommercialModelForTenant({
         tenantId: tenantIdFromUser(ctx.user.id),
         actorId: ctx.user.id,
         ...input,

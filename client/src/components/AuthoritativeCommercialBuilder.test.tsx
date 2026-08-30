@@ -37,10 +37,7 @@ vi.mock("@/lib/trpc", () => ({
           error: null,
         }),
       },
-      replaceProductCatalog: {
-        useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
-      },
-      upsertCommercialCondition: {
+      saveCommercialModel: {
         useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
       },
       calculate: {

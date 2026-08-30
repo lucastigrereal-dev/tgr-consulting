@@ -19,6 +19,7 @@ import {
   listCommercialConditionsForTenant,
   listHistoricalBenchmarksForTenant,
   replaceProductCatalogForTenant,
+  saveCommercialModelForTenant,
   upsertCommercialConditionForTenant,
   updateInputsForTenant,
 } from "./db";
@@ -542,6 +543,76 @@ describe("IGR database integration", () => {
       (await getProductCatalogForTenant(created.versionId, tenantId, 3))
         .evaluation.totals.potentialVgv
     ).toBe("9000000.00000000");
+
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+    await db.execute(
+      sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_atomic_commercial_save")
+    );
+    await db.execute(
+      sql.raw(
+        "CREATE TRIGGER tgr_test_fail_atomic_commercial_save BEFORE INSERT ON commercial_conditions FOR EACH ROW BEGIN IF NEW.conditionCode = 'atomic-failure' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced atomic commercial failure'; END IF; END"
+      )
+    );
+    try {
+      await expect(
+        saveCommercialModelForTenant({
+          tenantId,
+          actorId,
+          versionId: created.versionId,
+          asOfMonth: 3,
+          skus: [{
+            id: "atomic-new",
+            name: "Produto que não deve persistir",
+            unitType: "1Q",
+            unitQuantity: 1,
+            sharesPerUnit: 4,
+            grossSoldShares: 0,
+            returnedShares: 0,
+            blockedShares: 0,
+            status: "provided",
+            sourceType: "current_document",
+            sourceRef: "db.integration.test:atomic-product",
+            pricePhases: [{ id: "launch", startsAtMonth: 0, price: "1000" }],
+          }],
+          conditions: [{
+            productSkuCode: "atomic-new",
+            status: "provided",
+            sourceType: "current_document",
+            sourceRef: "db.integration.test:atomic-condition",
+            condition: {
+              id: "atomic-failure",
+              name: "Condição que força rollback",
+              listPrice: "1000",
+              discount: "0",
+              entry: { total: "100", installments: 1, firstDueMonth: 0 },
+              balance: {
+                principal: "900",
+                installments: 1,
+                graceMonths: 0,
+                firstDueMonth: 1,
+              },
+              explicitCharges: "0",
+              correctionRate: "0",
+              interestRate: "0",
+              materialityTolerance: "0.01",
+            },
+          }],
+        })
+      ).rejects.toThrow();
+    } finally {
+      await db.execute(
+        sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_atomic_commercial_save")
+      );
+    }
+    expect(
+      (await getProductCatalogForTenant(created.versionId, tenantId, 3)).records
+        .map(record => record.skuCode)
+    ).toEqual(["beach-2q", "garden-3q"]);
+    expect(
+      (await listCommercialConditionsForTenant(created.versionId, tenantId))
+        .map(item => item.condition.id)
+    ).toEqual(["standard"]);
   });
 
   it("não deixa versão órfã quando a criação do cenário falha", async () => {

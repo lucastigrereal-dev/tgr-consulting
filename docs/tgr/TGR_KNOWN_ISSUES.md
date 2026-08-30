@@ -5,7 +5,7 @@
 1. **The BRD master journey is not implemented end to end.** Product/inventory and commercial-condition reconciliation are now authoritative and operable in the Builder, but capture-point economics, sales cohorts, receivables, delinquency/cure and Healthy D90 are not yet authoritative domain modules.
 2. **Payment Calendar and portfolio accounting remain release blockers.** Positive correction/interest is intentionally rejected until an indexed payment calendar exists; cancellation, delinquency, cure and Healthy D90 are still aggregate rates rather than cohort/ledger events.
 3. **Production credentials and infrastructure are absent from this checkout.** OAuth, database and object storage behavior cannot be called production-ready without an authorized environment.
-4. **The combined catalog + commercial-condition UI save is not atomic across endpoints.** Each endpoint is transactional, but a network/error failure after catalog replacement and before all condition upserts can produce an honest partial save that requires retry.
+4. **Production credentials and infrastructure remain an external release gate.** Local MySQL integration is proven, but OAuth, object storage, backup and deployment behavior still require an authorized production-like environment.
 
 ## P1 — material product gaps
 
@@ -29,3 +29,4 @@
 8. Product, inventory, price phases and commercial conditions now persist as normalized domains and drive ticket, entry and inventory limits across snapshot, simulation, Capital Envelope and Goal Seek.
 9. Builder now exposes the authoritative product/commercial editor and the calculate action; Boardroom and Scenario Lab propagate the price-reference month and show domain blockers.
 10. MySQL 8.4 integration tests now exercise authority, tenant isolation, rollback, baseline, scenarios, exports, product and commercial conditions locally through the repository test harness.
+11. Builder saves the complete product catalog and its commercial conditions through one backend transaction; a forced condition-write failure proves full rollback of both domains.

@@ -526,6 +526,14 @@ export type PersistedProductSkuInput = ProductSkuInput & {
   sourceRef?: string;
 };
 
+export type PersistedCommercialConditionInput = {
+  productSkuCode?: string;
+  status: "provided" | "pending";
+  sourceType: ProvenanceSourceType;
+  sourceRef?: string;
+  condition: CommercialConditionInput;
+};
+
 export async function getProductCatalogForTenant(
   versionId: string,
   tenantId: number,
@@ -911,6 +919,187 @@ export async function upsertCommercialConditionForTenant(params: {
     condition: params.condition,
     productSkuCode: params.productSkuCode ?? null,
     reconciliation,
+  };
+}
+
+export async function saveCommercialModelForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  asOfMonth: number;
+  skus: PersistedProductSkuInput[];
+  conditions: PersistedCommercialConditionInput[];
+}) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  if (version.isImmutable || version.state !== "draft")
+    throw new Error(
+      "Produto e condição comercial só aceitam edição na versão de trabalho."
+    );
+
+  for (const sku of params.skus) {
+    if (sku.status === "provided" && !sku.sourceRef?.trim())
+      throw new Error(`SKU informado exige fonte ou responsável: ${sku.id}.`);
+  }
+  const evaluation = evaluateProductInventory({
+    asOfMonth: params.asOfMonth,
+    skus: params.skus,
+  });
+  if (evaluation.status === "invalid")
+    throw new Error(
+      `Catálogo de produto inválido: ${evaluation.violations
+        .map(violation => violation.code)
+        .join(", ")}.`
+    );
+
+  const incomingSkuCodes = new Set(params.skus.map(sku => sku.id));
+  const conditionCodes = new Set<string>();
+  for (const item of params.conditions) {
+    if (conditionCodes.has(item.condition.id))
+      throw new Error(
+        `Código de condição comercial duplicado: ${item.condition.id}.`
+      );
+    conditionCodes.add(item.condition.id);
+    if (item.productSkuCode && !incomingSkuCodes.has(item.productSkuCode))
+      throw new Error(
+        `SKU da condição comercial não encontrado no catálogo recebido: ${item.productSkuCode}.`
+      );
+    if (item.status === "provided" && !item.sourceRef?.trim())
+      throw new Error(
+        `Condição comercial informada exige fonte ou responsável: ${item.condition.id}.`
+      );
+    const reconciliation = reconcileCommercialCondition(item.condition);
+    if (item.status === "provided" && reconciliation.status === "invalid")
+      throw new Error(
+        `Condição comercial inválida: ${reconciliation.violations
+          .map(violation => violation.code)
+          .join(", ")}.`
+      );
+  }
+
+  await db.transaction(async transaction => {
+    const beforeSkus = await transaction
+      .select()
+      .from(productSkus)
+      .where(eq(productSkus.versionId, version.id));
+    const beforeConditions = await transaction
+      .select()
+      .from(commercialConditions)
+      .where(eq(commercialConditions.versionId, version.id));
+
+    if (beforeConditions.length)
+      await transaction
+        .delete(commercialConditions)
+        .where(eq(commercialConditions.versionId, version.id));
+    if (beforeSkus.length) {
+      await transaction.delete(productPricePhases).where(
+        inArray(
+          productPricePhases.productSkuId,
+          beforeSkus.map(row => row.id)
+        )
+      );
+      await transaction
+        .delete(productSkus)
+        .where(eq(productSkus.versionId, version.id));
+    }
+
+    const insertedSkus = params.skus.map(sku => ({
+      id: nanoid(),
+      versionId: version.id,
+      skuCode: sku.id,
+      name: sku.name,
+      unitType: sku.unitType,
+      unitQuantity: sku.unitQuantity,
+      sharesPerUnit: sku.sharesPerUnit,
+      grossSoldShares: sku.grossSoldShares,
+      returnedShares: sku.returnedShares,
+      blockedShares: sku.blockedShares,
+      status: sku.status,
+      sourceType: sku.sourceType,
+      sourceRef: sku.sourceRef ?? null,
+      updatedBy: params.actorId,
+    }));
+    if (insertedSkus.length) {
+      await transaction.insert(productSkus).values(insertedSkus);
+      const phases = params.skus.flatMap((sku, skuIndex) =>
+        sku.pricePhases.map(phase => ({
+          id: nanoid(),
+          productSkuId: insertedSkus[skuIndex]!.id,
+          phaseCode: phase.id,
+          name: phase.id,
+          startsAtMonth: phase.startsAtMonth,
+          priceText: phase.price,
+          promotionalPriceText: null,
+        }))
+      );
+      if (phases.length)
+        await transaction.insert(productPricePhases).values(phases);
+    }
+
+    const insertedSkuIdByCode = new Map(
+      insertedSkus.map(row => [row.skuCode, row.id])
+    );
+    const insertedConditions = params.conditions.map(item => ({
+      id: nanoid(),
+      versionId: version.id,
+      productSkuId: item.productSkuCode
+        ? insertedSkuIdByCode.get(item.productSkuCode)!
+        : null,
+      conditionCode: item.condition.id,
+      name: item.condition.name,
+      listPriceText: item.condition.listPrice,
+      discountText: item.condition.discount,
+      entryTotalText: item.condition.entry.total,
+      entryInstallments: item.condition.entry.installments,
+      entryFirstDueMonth: item.condition.entry.firstDueMonth,
+      balancePrincipalText: item.condition.balance.principal,
+      balanceInstallments: item.condition.balance.installments,
+      graceMonths: item.condition.balance.graceMonths,
+      balanceFirstDueMonth: item.condition.balance.firstDueMonth,
+      explicitChargesText: item.condition.explicitCharges,
+      correctionRateText: item.condition.correctionRate ?? null,
+      interestRateText: item.condition.interestRate ?? null,
+      materialityToleranceText: item.condition.materialityTolerance,
+      campaign: item.condition.campaign ?? null,
+      status: item.status,
+      sourceType: item.sourceType,
+      sourceRef: item.sourceRef ?? null,
+      updatedBy: params.actorId,
+    }));
+    if (insertedConditions.length)
+      await transaction.insert(commercialConditions).values(insertedConditions);
+
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "commercial_model",
+      entityId: version.id,
+      action: "commercial_model.replaced",
+      actorId: params.actorId,
+      beforeHash:
+        beforeSkus.length || beforeConditions.length
+          ? sha256({ skus: beforeSkus, conditions: beforeConditions })
+          : null,
+      afterHash: sha256({ skus: params.skus, conditions: params.conditions }),
+      metadata: {
+        versionId: version.id,
+        skuCount: insertedSkus.length,
+        conditionCount: insertedConditions.length,
+        asOfMonth: params.asOfMonth,
+      },
+    });
+  });
+
+  return {
+    catalog: await getProductCatalogForTenant(
+      version.id,
+      params.tenantId,
+      params.asOfMonth
+    ),
+    conditions: await listCommercialConditionsForTenant(
+      version.id,
+      params.tenantId
+    ),
   };
 }
 
