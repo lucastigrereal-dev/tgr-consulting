@@ -140,7 +140,14 @@ export const projectComponentRecords = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  (table) => [index("project_component_records_version_idx").on(table.versionId, table.componentType)],
+  (table) => [
+    uniqueIndex("project_component_records_version_type_name_unique").on(
+      table.versionId,
+      table.componentType,
+      table.name,
+    ),
+    index("project_component_records_version_idx").on(table.versionId, table.componentType),
+  ],
 );
 
 export const productSkus = mysqlTable(

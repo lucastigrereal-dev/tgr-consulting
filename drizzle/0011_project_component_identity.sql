@@ -1,0 +1,1 @@
+ALTER TABLE `project_component_records` ADD CONSTRAINT `project_component_records_version_type_name_unique` UNIQUE(`versionId`,`componentType`,`name`);
