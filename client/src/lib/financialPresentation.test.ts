@@ -15,6 +15,8 @@ describe("financialPresentation", () => {
     expect(formatPercent("0.18")).toContain("18");
     expect(formatKpi("paybackMonths", "12.7")).toBe("13 meses");
     expect(formatKpi("npv", "1000")).toContain("R$");
+    expect(formatKpi("grossSales", "240000")).toContain("R$");
+    expect(formatKpi("averageTicket", "1000")).toContain("R$");
     expect(formatKpi("netCollections", "1000")).toContain("R$");
     expect(formatKpi("paymentFees", "25")).toContain("R$");
   });

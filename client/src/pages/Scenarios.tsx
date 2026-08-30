@@ -73,6 +73,49 @@ export function selectGoalSeekDraftBranch(
   );
 }
 
+export function coerceAsOfMonthInput(value: string | number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(1200, Math.max(0, Math.trunc(numeric)));
+}
+
+export type GoalSeekSelection = {
+  variableKey: keyof typeof goalVariables;
+  target: string;
+  lowerBound: string;
+  upperBound: string;
+};
+
+export type GoalSeekResultSelection = {
+  variableKey: string;
+  target: string;
+  lowerBound: string;
+  upperBound: string;
+};
+
+function decimalTextEquals(left: string, right: string) {
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  return (
+    Number.isFinite(leftNumber) &&
+    Number.isFinite(rightNumber) &&
+    leftNumber === rightNumber
+  );
+}
+
+export function goalSeekResultMatchesSelection(
+  result: GoalSeekResultSelection | null | undefined,
+  selection: GoalSeekSelection
+) {
+  return (
+    Boolean(result) &&
+    result?.variableKey === selection.variableKey &&
+    decimalTextEquals(result.target, selection.target) &&
+    decimalTextEquals(result.lowerBound, selection.lowerBound) &&
+    decimalTextEquals(result.upperBound, selection.upperBound)
+  );
+}
+
 export default function Scenarios() {
   const projectsQuery = trpc.igr.projects.useQuery(undefined, { retry: false });
   const [projectId, setProjectId] = useState("");
@@ -121,6 +164,10 @@ export default function Scenarios() {
     onError: error =>
       toast.error("Goal Seek recusado.", { description: error.message }),
   });
+  const resetGoalSeekResult = () => {
+    goalSeek.reset();
+    setGoalRunVersionId("");
+  };
   const applyGoalSeek = trpc.igr.applyGoalSeek.useMutation();
   const capitalEnvelope = trpc.igr.capitalEnvelope.useQuery(
     {
@@ -136,6 +183,10 @@ export default function Scenarios() {
       setProjectId(projectsQuery.data[0].id);
   }, [projectId, projectsQuery.data]);
   const result = goalSeek.data;
+  const goalResultMatchesSelection = goalSeekResultMatchesSelection(
+    result,
+    goal
+  );
   const capitalResult = capitalEnvelope.data;
   const goalReady =
     isDecimal(goal.target) &&
@@ -148,6 +199,7 @@ export default function Scenarios() {
       !result.result ||
       !result.objectiveValue ||
       result.residual === null ||
+      !goalResultMatchesSelection ||
       !activeVersionId
     )
       return;
@@ -210,7 +262,10 @@ export default function Scenarios() {
           id="scenario-project"
           className="mt-1.5 h-10 min-w-64 rounded-md border border-white/15 bg-white/5 px-3 text-sm text-slate-200"
           value={projectId}
-          onChange={event => setProjectId(event.target.value)}
+          onChange={event => {
+            resetGoalSeekResult();
+            setProjectId(event.target.value);
+          }}
           disabled={projectsQuery.isLoading}
         >
           <option value="">
@@ -333,10 +388,12 @@ export default function Scenarios() {
                     type="number"
                     min={0}
                     max={1200}
+                    step={1}
                     value={asOfMonth}
-                    onChange={event =>
-                      setAsOfMonth(Math.max(0, Number(event.target.value) || 0))
-                    }
+                    onChange={event => {
+                      resetGoalSeekResult();
+                      setAsOfMonth(coerceAsOfMonthInput(event.target.value));
+                    }}
                   />
                 </div>
                 <div>
@@ -418,12 +475,13 @@ export default function Scenarios() {
                     id="goal-kpi"
                     className="mt-2 h-10 w-full rounded-md border border-white/15 bg-white/5 px-3 text-sm"
                     value={goal.targetKpi}
-                    onChange={event =>
+                    onChange={event => {
+                      resetGoalSeekResult();
                       setGoal(current => ({
                         ...current,
                         targetKpi: event.target.value as keyof typeof goalKpis,
-                      }))
-                    }
+                      }));
+                    }}
                   >
                     {Object.entries(goalKpis).map(([key, label]) => (
                       <option value={key} key={key}>
@@ -439,6 +497,7 @@ export default function Scenarios() {
                     className="mt-2 h-10 w-full rounded-md border border-white/15 bg-white/5 px-3 text-sm"
                     value={goal.variableKey}
                     onChange={event => {
+                      resetGoalSeekResult();
                       const variableKey = event.target
                         .value as keyof typeof goalVariables;
                       setGoal(current => ({
@@ -471,12 +530,13 @@ export default function Scenarios() {
                       className="mt-2 bg-white/[0.03] font-mono"
                       value={goal[key]}
                       inputMode="decimal"
-                      onChange={event =>
+                      onChange={event => {
+                        resetGoalSeekResult();
                         setGoal(current => ({
                           ...current,
                           [key]: normalizeDecimalInput(event.target.value),
-                        }))
-                      }
+                        }));
+                      }}
                     />
                   </div>
                 ))}
@@ -533,7 +593,9 @@ export default function Scenarios() {
                     >
                       {result.iterations} iterações
                     </Badge>
-                    {result.status === "converged" && result.result !== null ? (
+                    {result.status === "converged" &&
+                    result.result !== null &&
+                    goalResultMatchesSelection ? (
                       <Button
                         variant="outline"
                         className="border-emerald-300/30 bg-emerald-300/5 text-emerald-100 hover:bg-emerald-300/10"

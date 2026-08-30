@@ -83,6 +83,7 @@ vi.mock("@/lib/trpc", () => ({
 }));
 
 import Scenarios, {
+  coerceAsOfMonthInput,
   selectGoalSeekDraftBranch,
   selectScenarioBaseVersion,
   type ScenarioVersionCandidate,
@@ -156,5 +157,30 @@ describe("Scenarios", () => {
       iterations: 7,
     };
     expect(renderToStaticMarkup(<Scenarios />)).toContain("Aplicar em branch");
+  });
+
+  it("bloqueia aplicação quando o resultado convergido não pertence à seleção atual", () => {
+    state.goalResult = {
+      status: "converged",
+      variableKey: "conversionRate",
+      target: "0.00000000",
+      result: "0.42000000",
+      objectiveValue: "0.00000000",
+      residual: "0.00000000",
+      lowerBound: "0.00000000",
+      upperBound: "1.00000000",
+      iterations: 7,
+    };
+
+    expect(renderToStaticMarkup(<Scenarios />)).not.toContain(
+      "Aplicar em branch"
+    );
+  });
+
+  it("normaliza o mês de referência para inteiro dentro do contrato", () => {
+    expect(coerceAsOfMonthInput("1.9")).toBe(1);
+    expect(coerceAsOfMonthInput("-3")).toBe(0);
+    expect(coerceAsOfMonthInput("1201")).toBe(1200);
+    expect(coerceAsOfMonthInput("")).toBe(0);
   });
 });

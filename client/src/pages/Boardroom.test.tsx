@@ -1,12 +1,15 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { calculateFinancialProjection } from "@shared/financial/engine";
 import { calculateCommercialOperations } from "@shared/financial/commercialOperations";
 import { calculatePointEconomics } from "@shared/financial/pointEconomics";
 import type { FinancialCalculation, FinancialInputSnapshot } from "@shared/financial/types";
 
-const state = vi.hoisted(() => ({ calculation: null as FinancialCalculation | null }));
+const state = vi.hoisted(() => ({
+  calculation: null as FinancialCalculation | null,
+  workingVersion: { id: "version-1" } as { id: string } | null,
+}));
 
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "lucas" } }) }));
 vi.mock("wouter", () => ({ Link: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
@@ -21,7 +24,7 @@ vi.mock("@/lib/trpc", () => ({
             latestSnapshot: { id: "snapshot-1", projectVersionId: "version-1", snapshotHash: "abc12345", isAuthoritative: true, payload: state.calculation },
             latestApproval: null,
             project: { status: "draft" },
-            workingVersion: { id: "version-1" },
+            workingVersion: state.workingVersion,
             latestImpact: { changedInputKeys: [] },
             snapshotHistory: [{ id: "snapshot-1", calculationStatus: "valid", missingInputKeys: [] }],
           },
@@ -31,13 +34,13 @@ vi.mock("@/lib/trpc", () => ({
         }),
       },
       versionInputs: {
-        useQuery: () => ({
-          data: { preOperationMonths: { status: "provided", value: "0" } },
+        useQuery: ({ versionId }: { versionId: string }) => ({
+          data: versionId ? { preOperationMonths: { status: "provided", value: "0" } } : undefined,
         }),
       },
       builderComponents: {
-        useQuery: () => ({
-          data: [{ componentType: "project_assembly", payload: { nomeProjeto: "Estudo de Teste", praca: "Cotia", inicioOperacao: "01/2027", totalApartamentos: "40", cotasPorApartamento: "13" } }],
+        useQuery: ({ versionId }: { versionId: string }) => ({
+          data: versionId ? [{ componentType: "project_assembly", payload: { nomeProjeto: "Estudo de Teste", praca: "Cotia", inicioOperacao: "01/2027", totalApartamentos: "40", cotasPorApartamento: "13" } }] : undefined,
         }),
       },
       exportEligibility: { useQuery: () => ({ data: { eligible: false }, refetch: async () => undefined }) },
@@ -125,6 +128,11 @@ const commercialOperations = calculateCommercialOperations({
 });
 
 describe("Boardroom · trilha editorial", () => {
+  beforeEach(() => {
+    state.calculation = null;
+    state.workingVersion = { id: "version-1" };
+  });
+
   it("renderiza um snapshot calculado com origem ficha-mãe e fórmulas versionadas nos capítulos do estudo", () => {
     const calculation = calculateFinancialProjection(inputs, 24);
     expect(calculation.status).toBe("valid");
@@ -149,6 +157,20 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain("Página 07 · Indicadores");
     expect(html).toContain("Como o estudo chegou aqui");
     expect(html).toContain("operating-cash-flow · v1.2.0");
+  });
+
+  it("usa a versão do snapshot quando não há working version ativa", () => {
+    const calculation = calculateFinancialProjection(inputs, 24);
+    expect(calculation.status).toBe("valid");
+    if (calculation.status !== "valid") return;
+    state.calculation = calculation;
+    state.workingVersion = null;
+
+    const html = renderToStaticMarkup(<Boardroom />);
+
+    expect(html).toContain("Página 01 · Premissas");
+    expect(html).toContain("Página 03 · Produto");
+    expect(html).toContain("Estudo de Teste");
   });
 
   it("apresenta Point Economics por ponto sem perder os agregados autoritativos", () => {

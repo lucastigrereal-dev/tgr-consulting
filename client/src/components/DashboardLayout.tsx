@@ -31,7 +31,7 @@ import {
   Settings2,
   WalletCards,
 } from "lucide-react";
-import { CSSProperties, useEffect, useRef, useState } from "react";
+import React, { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { Button } from "./ui/button";
@@ -102,7 +102,10 @@ export default function DashboardLayout({
         } as CSSProperties
       }
     >
-      <DashboardLayoutContent setSidebarWidth={setSidebarWidth}>
+      <DashboardLayoutContent
+        sidebarWidth={sidebarWidth}
+        setSidebarWidth={setSidebarWidth}
+      >
         {children}
       </DashboardLayoutContent>
     </SidebarProvider>
@@ -111,11 +114,13 @@ export default function DashboardLayout({
 
 type DashboardLayoutContentProps = {
   children: React.ReactNode;
-  setSidebarWidth: (width: number) => void;
+  sidebarWidth: number;
+  setSidebarWidth: React.Dispatch<React.SetStateAction<number>>;
 };
 
 function DashboardLayoutContent({
   children,
+  sidebarWidth,
   setSidebarWidth,
 }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
@@ -126,6 +131,15 @@ function DashboardLayoutContent({
   const sidebarRef = useRef<HTMLDivElement>(null);
   const activeMenuItem = menuItems.find(item => item.path === location);
   const isMobile = useIsMobile();
+  const accountInitials =
+    user?.name
+      ?.split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map(part => part.charAt(0).toUpperCase())
+      .join("") ||
+    user?.email?.slice(0, 2).toUpperCase() ||
+    "US";
 
   useEffect(() => {
     if (isCollapsed) {
@@ -162,6 +176,12 @@ function DashboardLayoutContent({
       document.body.style.userSelect = "";
     };
   }, [isResizing, setSidebarWidth]);
+
+  const resizeSidebarBy = (delta: number) => {
+    setSidebarWidth(width =>
+      Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width + delta))
+    );
+  };
 
   return (
     <>
@@ -214,12 +234,15 @@ function DashboardLayoutContent({
           </SidebarContent>
 
           <SidebarFooter className="p-3">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                <button
+                  aria-label="Abrir menu da conta"
+                  className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   <Avatar className="h-9 w-9 border shrink-0">
                     <AvatarFallback className="text-xs font-medium">
-                      {user?.name?.charAt(0).toUpperCase()}
+                      {accountInitials}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
@@ -245,12 +268,38 @@ function DashboardLayoutContent({
           </SidebarFooter>
         </Sidebar>
         <div
+          aria-label="Redimensionar navegação lateral"
+          aria-orientation="vertical"
+          aria-valuemax={MAX_WIDTH}
+          aria-valuemin={MIN_WIDTH}
+          aria-valuenow={sidebarWidth}
           className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isCollapsed ? "hidden" : ""}`}
           onMouseDown={() => {
             if (isCollapsed) return;
             setIsResizing(true);
           }}
+          onKeyDown={event => {
+            if (isCollapsed) return;
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              resizeSidebarBy(-16);
+            }
+            if (event.key === "ArrowRight") {
+              event.preventDefault();
+              resizeSidebarBy(16);
+            }
+            if (event.key === "Home") {
+              event.preventDefault();
+              setSidebarWidth(MIN_WIDTH);
+            }
+            if (event.key === "End") {
+              event.preventDefault();
+              setSidebarWidth(MAX_WIDTH);
+            }
+          }}
+          role="separator"
           style={{ zIndex: 50 }}
+          tabIndex={isCollapsed ? -1 : 0}
         />
       </div>
 
