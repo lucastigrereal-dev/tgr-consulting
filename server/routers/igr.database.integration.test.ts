@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import type { FinancialInputSnapshot } from "../../shared/financial/types";
+import type { CommercialOperationsDefinition } from "../../shared/financial/commercialOperations";
 import type { TrpcContext } from "../_core/context";
 import { getDb } from "../db";
 import { igrRouter } from "./igr";
@@ -19,6 +20,47 @@ const inputs: FinancialInputSnapshot = {
   paymentRecurringChequeMixRate: provided("0"), paymentRecurringChequeMdrRate: provided("0"), paymentRecurringChequeSettlementDays: provided("0"),
   paymentBoletoMixRate: provided("0"), paymentBoletoMdrRate: provided("0"), paymentBoletoSettlementDays: provided("0"), discountRateAnnual: provided("0.12"),
 };
+const commercialOperationsDefinition = {
+  room: {
+    rooms: [{ roomId: "main", tables: "4", overflowTables: "1" }],
+    operatingDaysPerMonth: "20", operatingHoursPerDay: "8", shifts: "2",
+    averageTourDurationMinutes: "60", toursPerTable: "1",
+    receptionists: "2", receptionCapacityPerPerson: "200",
+    consultants: "2", consultantCapacityPerPerson: "100",
+    closers: "2", closerSalesCapacityPerPerson: "20",
+    peakFlowFactor: "1.5", maxWaitMinutes: "15",
+  },
+  workforce: {
+    cashflowTreatment: "included_in_project_totals",
+    cohorts: [
+      {
+        cohortId: "tours-team", role: "consultant", capacityUnit: "tours",
+        headcount: "2", hireMonth: 0, trainingMonths: 0,
+        certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }],
+        matureProductivity: "100", absenteeismRate: "0", monthlyTurnoverRate: "0",
+        fixedCompensation: "1000", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0",
+      },
+      {
+        cohortId: "sales-team", role: "closer", capacityUnit: "sales",
+        headcount: "2", hireMonth: 0, trainingMonths: 0,
+        certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }],
+        matureProductivity: "20", absenteeismRate: "0", monthlyTurnoverRate: "0",
+        fixedCompensation: "1500", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0",
+      },
+    ],
+  },
+  training: {
+    cashflowTreatment: "included_in_project_totals",
+    plans: [{
+      trainingId: "academy", role: "closer", startMonth: 0,
+      candidates: "2", classes: "1", durationMonths: 1, trainers: "1",
+      trainerMonthlyCost: "100", candidateMonthlySalary: "50", monthlySupportCost: "0",
+      approvalRate: "1", certificationRate: "1", timeToProductiveMonths: 0,
+      targetProductivePeople: "2",
+    }],
+  },
+  commissions: { cashflowTreatment: "included_in_project_totals", policies: [] },
+} satisfies CommercialOperationsDefinition;
 
 function contextFor(userId: number, role: "user" | "admin" = "admin"): TrpcContext {
   return { user: { id: userId, openId: `igr-e2e-${userId}`, name: "IGR E2E", email: `igr-e2e-${userId}@test.local`, loginMethod: "test", role, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() }, req: { protocol: "https", headers: {} } as TrpcContext["req"], res: {} as TrpcContext["res"] };
@@ -194,6 +236,30 @@ describe("igrRouter + banco", () => {
     })).rejects.toThrow();
     await expect(outsider.capturePoints({ versionId: created.versionId }))
       .rejects.toThrow("não autorizado");
+    const pendingOperations = await owner.upsertCommercialOperations({
+      versionId: created.versionId,
+      status: "pending",
+      sourceType: "current_decision",
+      definition: commercialOperationsDefinition,
+    });
+    expect(pendingOperations).toMatchObject({
+      record: { status: "pending", name: "commercial-operations" },
+      definition: { room: { rooms: [{ roomId: "main" }] } },
+    });
+    expect(await owner.commercialOperations({ versionId: created.versionId }))
+      .toMatchObject({ record: { status: "pending" } });
+    await expect(owner.upsertCommercialOperations({
+      versionId: created.versionId,
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "Plano de operações",
+      definition: {
+        ...commercialOperationsDefinition,
+        room: { ...commercialOperationsDefinition.room, shifts: "0" },
+      },
+    })).rejects.toThrow();
+    await expect(outsider.commercialOperations({ versionId: created.versionId }))
+      .rejects.toThrow("não autorizado");
     const pendingPolicy = await owner.upsertReceivablesPolicy({
       versionId: created.versionId,
       status: "pending",
@@ -219,6 +285,7 @@ describe("igrRouter + banco", () => {
     expect(pendingSnapshot.status).toBe("blocked_by_pending_inputs");
     expect(pendingSnapshot.domainBlockers).toContain("receivables_policy.pending");
     expect(pendingSnapshot.domainBlockers).toContain("capture_points.pending");
+    expect(pendingSnapshot.domainBlockers).toContain("commercial_operations.pending");
     expect(pendingSnapshot.domainInvalidities).not.toContain("receivables_policy.invalid");
 
     const providedPolicy = await owner.upsertReceivablesPolicy({
@@ -259,6 +326,20 @@ describe("igrRouter + banco", () => {
         definition: capturePoint,
       }],
     })).rejects.toThrow("não autorizado");
+    await owner.upsertCommercialOperations({
+      versionId: created.versionId,
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "Plano de operações",
+      definition: commercialOperationsDefinition,
+    });
+    await expect(outsider.upsertCommercialOperations({
+      versionId: created.versionId,
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "Plano de operações",
+      definition: commercialOperationsDefinition,
+    })).rejects.toThrow("não autorizado");
 
     const scenario = await owner.createScenario({
       baseVersionId: created.versionId,
@@ -276,6 +357,11 @@ describe("igrRouter + banco", () => {
       status: "provided",
       definition: { pointId: "pipa-pdv" },
     }]);
+    expect(await owner.commercialOperations({ versionId: scenario.versionId }))
+      .toMatchObject({
+        record: { versionId: scenario.versionId, status: "provided" },
+        definition: { room: { rooms: [{ roomId: "main" }] } },
+      });
 
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });
     ids.snapshotId = snapshot.id; ids.snapshotHash = snapshot.snapshotHash;
@@ -304,6 +390,16 @@ describe("igrRouter + banco", () => {
         },
       },
     });
+    expect(snapshot.authoritativeDomains?.commercialOperations).toMatchObject({
+      status: "provided",
+      definition: { room: { rooms: [{ roomId: "main" }] } },
+      results: {
+        room: { capacity: { limitedToursMonthly: "200.00000000" } },
+        training: [{ trainingId: "academy" }],
+      },
+    });
+    expect(snapshot.authoritativeDomains?.commercialOperations?.results?.workforce.months[0])
+      .toMatchObject({ month: 0 });
     expect(Number(snapshot.projections[7]?.grossReceivablesSettled)).toBeGreaterThan(0);
     const contextWithSnapshot = await owner.projectContext({ projectId: created.projectId });
     const validSnapshotHistory = contextWithSnapshot.snapshotHistory.find(item => item.id === snapshot.id);
@@ -366,6 +462,13 @@ describe("igrRouter + banco", () => {
         sourceRef: "Cadastro de pontos revisado",
         definition: capturePoint,
       }],
+    })).rejects.toThrow("versão de trabalho");
+    await expect(owner.upsertCommercialOperations({
+      versionId: created.versionId,
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "Plano revisado",
+      definition: commercialOperationsDefinition,
     })).rejects.toThrow("versão de trabalho");
   }, 30_000);
 });

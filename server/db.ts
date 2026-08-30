@@ -58,6 +58,11 @@ import {
   type PointEconomicsPortfolio,
 } from "../shared/financial/pointEconomics";
 import {
+  calculateCommercialOperations,
+  type CommercialOperationsDefinition,
+  type CommercialOperationsResult,
+} from "../shared/financial/commercialOperations";
+import {
   assertReceivablesPolicy,
   type ReceivablesPolicy,
 } from "../shared/financial/receivablesPortfolio";
@@ -570,6 +575,126 @@ export type PersistedCapturePoint = {
   sourceRef?: string;
   definition: CapturePointDefinition;
 };
+
+export type PersistedCommercialOperations = {
+  status: "provided" | "pending";
+  sourceType: ProvenanceSourceType;
+  sourceRef?: string;
+  definition: CommercialOperationsDefinition;
+};
+
+const COMMERCIAL_OPERATIONS_COMPONENT_TYPE = "commercial_operations" as const;
+const COMMERCIAL_OPERATIONS_COMPONENT_NAME = "commercial-operations";
+
+export async function getCommercialOperationsForTenant(
+  versionId: string,
+  tenantId: number
+) {
+  await getVersionForTenant(versionId, tenantId);
+  const db = await requireDb();
+  const rows = await db
+    .select()
+    .from(projectComponentRecords)
+    .where(
+      and(
+        eq(projectComponentRecords.versionId, versionId),
+        eq(
+          projectComponentRecords.componentType,
+          COMMERCIAL_OPERATIONS_COMPONENT_TYPE
+        ),
+        eq(
+          projectComponentRecords.name,
+          COMMERCIAL_OPERATIONS_COMPONENT_NAME
+        )
+      )
+    )
+    .limit(1);
+  if (!rows[0]) return null;
+  return {
+    record: rows[0],
+    definition: rows[0].payload as CommercialOperationsDefinition,
+  };
+}
+
+export async function upsertCommercialOperationsForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  status: "provided" | "pending";
+  sourceType: ProvenanceSourceType;
+  sourceRef?: string;
+  definition: CommercialOperationsDefinition;
+}) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  if (version.isImmutable || version.state !== "draft") {
+    throw new Error(
+      "Operações comerciais só aceitam edição na versão de trabalho."
+    );
+  }
+  if (params.status === "provided" && !params.sourceRef?.trim()) {
+    throw new Error(
+      "Operações comerciais informadas exigem fonte ou responsável."
+    );
+  }
+  const before = await db
+    .select()
+    .from(projectComponentRecords)
+    .where(
+      and(
+        eq(projectComponentRecords.versionId, version.id),
+        eq(
+          projectComponentRecords.componentType,
+          COMMERCIAL_OPERATIONS_COMPONENT_TYPE
+        ),
+        eq(
+          projectComponentRecords.name,
+          COMMERCIAL_OPERATIONS_COMPONENT_NAME
+        )
+      )
+    )
+    .limit(1);
+  const record = {
+    id: before[0]?.id ?? nanoid(),
+    versionId: version.id,
+    componentType: COMMERCIAL_OPERATIONS_COMPONENT_TYPE,
+    name: COMMERCIAL_OPERATIONS_COMPONENT_NAME,
+    status: params.status,
+    payload: params.definition,
+    sourceType: params.sourceType,
+    sourceRef: params.sourceRef?.trim() || null,
+    updatedBy: params.actorId,
+  };
+  await db.transaction(async transaction => {
+    await transaction
+      .insert(projectComponentRecords)
+      .values(record)
+      .onDuplicateKeyUpdate({
+        set: {
+          status: record.status,
+          payload: record.payload,
+          sourceType: record.sourceType,
+          sourceRef: record.sourceRef,
+          updatedBy: record.updatedBy,
+        },
+      });
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "project_component",
+      entityId: record.id,
+      action: "commercial_operations.upserted",
+      actorId: params.actorId,
+      beforeHash: before[0] ? sha256(before[0]) : null,
+      afterHash: sha256(record),
+      metadata: {
+        versionId: version.id,
+        status: params.status,
+      },
+    });
+  });
+  return getCommercialOperationsForTenant(version.id, params.tenantId);
+}
 
 function capturePointFromRow(
   row: typeof projectComponentRecords.$inferSelect
@@ -1771,6 +1896,7 @@ async function getAuthoritativeCalculationContext(params: {
   tenantId: number;
   versionId: string;
   asOfMonth: number;
+  horizonMonths: number;
 }) {
   const version = await getVersionForTenant(params.versionId, params.tenantId);
   if (version.formulaSetVersionId !== IGR_CORE_FORMULA_SET_V1.id)
@@ -1795,6 +1921,8 @@ async function getAuthoritativeCalculationContext(params: {
     version.id,
     params.tenantId
   );
+  const persistedCommercialOperations =
+    await getCommercialOperationsForTenant(version.id, params.tenantId);
   const usesStructuredCommercialDomains =
     productCatalog.records.length > 0 || conditions.length > 0;
   const providedSkuCodes = new Set(
@@ -1826,6 +1954,10 @@ async function getAuthoritativeCalculationContext(params: {
     domainBlockers.push("capture_points.missing");
   else if (capturePoints.some(item => item.status === "pending"))
     domainBlockers.push("capture_points.pending");
+  if (!persistedCommercialOperations)
+    domainBlockers.push("commercial_operations.missing");
+  else if (persistedCommercialOperations.record.status === "pending")
+    domainBlockers.push("commercial_operations.pending");
   let authoritativeReceivablesPolicy: ReceivablesPolicy | undefined;
   if (persistedReceivablesPolicy) {
     try {
@@ -1910,7 +2042,25 @@ async function getAuthoritativeCalculationContext(params: {
       domainInvalidities.push("capture_points.invalid");
     }
   }
-  const authoritativeDomains = usesStructuredCommercialDomains || persistedReceivablesPolicy || capturePoints.length > 0
+  let commercialOperations: CommercialOperationsResult | undefined;
+  if (
+    persistedCommercialOperations?.record.status === "provided" &&
+    pointEconomics
+  ) {
+    try {
+      commercialOperations = calculateCommercialOperations({
+        definition: persistedCommercialOperations.definition,
+        horizonMonths: params.horizonMonths,
+        pointDemand: {
+          toursMonthly: pointEconomics.totals.funnel.tours,
+          salesMonthly: pointEconomics.totals.production.totalSales,
+        },
+      });
+    } catch {
+      domainInvalidities.push("commercial_operations.invalid");
+    }
+  }
+  const authoritativeDomains = usesStructuredCommercialDomains || persistedReceivablesPolicy || capturePoints.length > 0 || persistedCommercialOperations
     ? {
         asOfMonth: params.asOfMonth,
         productCatalog: {
@@ -1949,6 +2099,15 @@ async function getAuthoritativeCalculationContext(params: {
           authoritativeInputs: authoritativePointInputs ?? null,
           economics: pointEconomics ?? null,
         },
+        commercialOperations: persistedCommercialOperations
+          ? {
+              status: persistedCommercialOperations.record.status,
+              sourceType: persistedCommercialOperations.record.sourceType,
+              sourceRef: persistedCommercialOperations.record.sourceRef,
+              definition: persistedCommercialOperations.definition,
+              results: commercialOperations ?? null,
+            }
+          : null,
       }
     : undefined;
   const calculationInputs =
@@ -2000,6 +2159,7 @@ async function getAuthoritativeCalculationContext(params: {
           commercialModel!.derived.paymentSchedulePerContract,
         receivablesPolicy: authoritativeReceivablesPolicy!,
         pointEconomics: pointEconomics!,
+        commercialOperations: commercialOperations!,
       }
     : undefined;
   return {
@@ -2010,6 +2170,7 @@ async function getAuthoritativeCalculationContext(params: {
     domainInvalidities,
     commercialModel,
     pointEconomics,
+    commercialOperations,
     calculationInputs,
     calculationOptions,
     authoritativeInputHash: authoritativeDomains
@@ -2030,6 +2191,7 @@ export async function createCalculationSnapshot(params: {
     tenantId: params.tenantId,
     versionId: params.versionId,
     asOfMonth: params.asOfMonth ?? 0,
+    horizonMonths: params.horizonMonths,
   });
   const {
     version,
@@ -2135,9 +2297,10 @@ export async function simulateCaptadorChangeForTenant(params: {
     tenantId: params.tenantId,
     versionId: params.versionId,
     asOfMonth: params.asOfMonth ?? 0,
+    horizonMonths: params.horizonMonths,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("A simulação exige produto, condição comercial, política de carteira e pontos de captação válidos, sem itens pendentes.");
+    throw new Error("A simulação exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
   return simulateCaptadorChange({
     inputs: context.calculationInputs,
     maxContracts: context.calculationOptions?.maxContracts,
@@ -2549,9 +2712,10 @@ export async function calculateCapitalEnvelopeForTenant(params: {
     tenantId: params.tenantId,
     versionId: params.versionId,
     asOfMonth: params.asOfMonth ?? 0,
+    horizonMonths: params.horizonMonths,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("Capital Envelope exige produto, condição comercial, política de carteira e pontos de captação válidos, sem itens pendentes.");
+    throw new Error("Capital Envelope exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
   const calculation = calculateFinancialProjection(
     context.calculationInputs,
     params.horizonMonths,
@@ -2596,9 +2760,10 @@ export async function runProjectGoalSeekForTenant(params: {
     tenantId: params.tenantId,
     versionId: params.versionId,
     asOfMonth: params.asOfMonth ?? 0,
+    horizonMonths: params.horizonMonths,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("Goal Seek exige produto, condição comercial, política de carteira e pontos de captação válidos, sem itens pendentes.");
+    throw new Error("Goal Seek exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
   const inputs = context.calculationInputs;
   const baseline = calculateFinancialProjection(inputs, params.horizonMonths, context.calculationOptions);
   if (baseline.status !== "valid")

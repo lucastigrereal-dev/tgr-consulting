@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { CotiaProjectMatrix } from "@/components/CotiaProjectMatrix";
 import { AuthoritativeCommercialBuilder } from "@/components/AuthoritativeCommercialBuilder";
 import { CapturePointsBuilder } from "@/components/CapturePointsBuilder";
+import { CommercialOperationsBuilder } from "@/components/CommercialOperationsBuilder";
 import { ReceivablesPolicyBuilder } from "@/components/ReceivablesPolicyBuilder";
 import {
   Card,
@@ -592,6 +593,7 @@ export default function Builder() {
       />
       <AuthoritativeCommercialBuilder versionId={activeVersionId} />
       <CapturePointsBuilder versionId={activeVersionId} />
+      <CommercialOperationsBuilder versionId={activeVersionId} />
       <ReceivablesPolicyBuilder versionId={activeVersionId} />
     </div>
   );

@@ -15,6 +15,7 @@ import {
   createScenarioForTenant,
   getExportEligibilityForTenant,
   getCapturePointsForTenant,
+  getCommercialOperationsForTenant,
   getProductCatalogForTenant,
   getReceivablesPolicyForTenant,
   getProjectContextForTenant,
@@ -32,6 +33,7 @@ import {
   freezeBaselineForTenant,
   replaceProductCatalogForTenant,
   replaceCapturePointsForTenant,
+  upsertCommercialOperationsForTenant,
   saveCommercialModelForTenant,
   updateInputsForTenant,
   upsertBuilderComponentForTenant,
@@ -49,6 +51,11 @@ const nonNegativeDecimalSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
 const unitRateSchema = nonNegativeDecimalSchema.refine(value => Number(value) <= 1, {
   message: "Taxa deve estar entre 0 e 1.",
 });
+const positiveDecimalSchema = nonNegativeDecimalSchema.refine(
+  value => Number(value) > 0,
+  { message: "Valor deve ser maior que zero." }
+);
+const nonNegativeIntegerTextSchema = z.string().regex(/^(?:0|[1-9]\d*)$/);
 const productSkuSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
@@ -175,6 +182,190 @@ const capturePointCollectionSchema = z.array(persistedCapturePointSchema).superR
     });
   }
 );
+const cashflowTreatmentSchema = z.enum([
+  "incremental",
+  "included_in_project_totals",
+]);
+const roomDefinitionSchema = z.object({
+  rooms: z.array(z.object({
+    roomId: z.string().trim().min(1).max(120),
+    tables: nonNegativeIntegerTextSchema,
+    overflowTables: nonNegativeIntegerTextSchema,
+  })).min(1).superRefine((rooms, ctx) => {
+    const ids = new Set<string>();
+    rooms.forEach((room, index) => {
+      if (ids.has(room.roomId)) ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `roomId duplicado: ${room.roomId}.`,
+        path: [index, "roomId"],
+      });
+      ids.add(room.roomId);
+    });
+  }),
+  operatingDaysPerMonth: nonNegativeIntegerTextSchema,
+  operatingHoursPerDay: positiveDecimalSchema,
+  shifts: nonNegativeIntegerTextSchema.refine(value => Number(value) > 0, {
+    message: "shifts deve ser maior que zero.",
+  }),
+  averageTourDurationMinutes: positiveDecimalSchema,
+  toursPerTable: nonNegativeDecimalSchema,
+  receptionists: nonNegativeIntegerTextSchema,
+  receptionCapacityPerPerson: nonNegativeDecimalSchema,
+  consultants: nonNegativeIntegerTextSchema,
+  consultantCapacityPerPerson: nonNegativeDecimalSchema,
+  closers: nonNegativeIntegerTextSchema,
+  closerSalesCapacityPerPerson: nonNegativeDecimalSchema,
+  peakFlowFactor: nonNegativeDecimalSchema,
+  maxWaitMinutes: nonNegativeDecimalSchema,
+});
+const workforceCohortSchema = z.object({
+  cohortId: z.string().trim().min(1).max(120),
+  role: z.string().trim().min(1).max(120),
+  capacityUnit: z.enum(["tours", "sales", "support"]),
+  headcount: nonNegativeDecimalSchema,
+  hireMonth: z.number().int().min(0),
+  trainingMonths: z.number().int().min(0),
+  certificationRate: unitRateSchema,
+  rampCurve: z.array(z.object({
+    productiveAgeMonth: z.number().int().min(0),
+    productivityRate: unitRateSchema,
+  })).min(1),
+  matureProductivity: nonNegativeDecimalSchema,
+  absenteeismRate: unitRateSchema,
+  monthlyTurnoverRate: unitRateSchema,
+  fixedCompensation: nonNegativeDecimalSchema,
+  burden: nonNegativeDecimalSchema,
+  guarantee: nonNegativeDecimalSchema,
+  allowance: nonNegativeDecimalSchema,
+  replacementCost: nonNegativeDecimalSchema,
+}).superRefine((cohort, ctx) => {
+  const ages = new Set<number>();
+  cohort.rampCurve.forEach((entry, index) => {
+    if (ages.has(entry.productiveAgeMonth)) ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Idade produtiva duplicada.",
+      path: ["rampCurve", index, "productiveAgeMonth"],
+    });
+    ages.add(entry.productiveAgeMonth);
+  });
+  if (!ages.has(0)) ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: "A curva de ramp deve iniciar na idade zero.",
+    path: ["rampCurve"],
+  });
+});
+const trainingPlanSchema = z.object({
+  trainingId: z.string().trim().min(1).max(120),
+  role: z.string().trim().min(1).max(120),
+  startMonth: z.number().int().min(0),
+  candidates: nonNegativeDecimalSchema,
+  classes: positiveDecimalSchema,
+  durationMonths: z.number().int().min(1),
+  trainers: nonNegativeDecimalSchema,
+  trainerMonthlyCost: nonNegativeDecimalSchema,
+  candidateMonthlySalary: nonNegativeDecimalSchema,
+  monthlySupportCost: nonNegativeDecimalSchema,
+  approvalRate: unitRateSchema,
+  certificationRate: unitRateSchema,
+  timeToProductiveMonths: z.number().int().min(0),
+  targetProductivePeople: nonNegativeDecimalSchema,
+});
+const commissionPolicySchema = z.object({
+  policyId: z.string().trim().min(1).max(120),
+  role: z.string().trim().min(1).max(120),
+  eligibleBase: z.enum([
+    "gross_sales", "contracted_entry", "collected_entry", "validated_sale",
+    "d30", "d90", "fixed",
+  ]),
+  mode: z.enum(["fixed", "percentage"]),
+  fixedAmount: nonNegativeDecimalSchema,
+  percentageRate: unitRateSchema,
+  tiers: z.array(z.object({
+    fromAmount: positiveDecimalSchema,
+    rate: unitRateSchema,
+    accelerator: nonNegativeDecimalSchema,
+  })),
+  guarantee: nonNegativeDecimalSchema,
+  cutoffDay: z.number().int().min(1).max(31),
+  paymentLagMonths: z.number().int().min(0),
+  qualityMultiplier: unitRateSchema,
+  holdbackRate: unitRateSchema,
+  reversalEnabled: z.boolean(),
+}).superRefine((policy, ctx) => {
+  const thresholds = new Set<string>();
+  policy.tiers.forEach((tier, index) => {
+    if (thresholds.has(tier.fromAmount)) ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Threshold de tier duplicado.",
+      path: ["tiers", index, "fromAmount"],
+    });
+    thresholds.add(tier.fromAmount);
+  });
+});
+const commercialOperationsDefinitionSchema = z.object({
+  room: roomDefinitionSchema,
+  workforce: z.object({
+    cashflowTreatment: cashflowTreatmentSchema,
+    cohorts: z.array(workforceCohortSchema).min(1),
+  }),
+  training: z.object({
+    cashflowTreatment: cashflowTreatmentSchema,
+    plans: z.array(trainingPlanSchema),
+  }),
+  commissions: z.object({
+    cashflowTreatment: cashflowTreatmentSchema,
+    policies: z.array(commissionPolicySchema),
+  }),
+}).superRefine((definition, ctx) => {
+  const cohortIds = new Set<string>();
+  definition.workforce.cohorts.forEach((cohort, index) => {
+    if (cohortIds.has(cohort.cohortId)) ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `cohortId duplicado: ${cohort.cohortId}.`,
+      path: ["workforce", "cohorts", index, "cohortId"],
+    });
+    cohortIds.add(cohort.cohortId);
+  });
+  for (const capacityUnit of ["tours", "sales"] as const) {
+    if (!definition.workforce.cohorts.some(cohort => cohort.capacityUnit === capacityUnit)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Workforce exige uma coorte de ${capacityUnit}.`,
+        path: ["workforce", "cohorts"],
+      });
+    }
+  }
+  const trainingIds = new Set<string>();
+  definition.training.plans.forEach((plan, index) => {
+    if (trainingIds.has(plan.trainingId)) ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `trainingId duplicado: ${plan.trainingId}.`,
+      path: ["training", "plans", index, "trainingId"],
+    });
+    trainingIds.add(plan.trainingId);
+  });
+  const policyIds = new Set<string>();
+  definition.commissions.policies.forEach((policy, index) => {
+    if (policyIds.has(policy.policyId)) ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `policyId duplicado: ${policy.policyId}.`,
+      path: ["commissions", "policies", index, "policyId"],
+    });
+    policyIds.add(policy.policyId);
+  });
+});
+const persistedCommercialOperationsSchema = z.object({
+  status: z.enum(["provided", "pending"]),
+  sourceType: provenanceSourceSchema,
+  sourceRef: z.string().trim().max(500).optional(),
+  definition: commercialOperationsDefinitionSchema,
+}).refine(
+  data => data.status === "pending" || Boolean(data.sourceRef?.trim()),
+  {
+    message: "Operações comerciais informadas exigem fonte ou responsável.",
+    path: ["sourceRef"],
+  }
+);
 
 export const igrRouter = router({
   projects: protectedProcedure.query(({ ctx }) => listProjectsForTenant(tenantIdFromUser(ctx.user.id))),
@@ -244,6 +435,26 @@ export const igrRouter = router({
     )
     .mutation(({ ctx, input }) =>
       replaceCapturePointsForTenant({
+        tenantId: tenantIdFromUser(ctx.user.id),
+        actorId: ctx.user.id,
+        ...input,
+      })
+    ),
+  commercialOperations: protectedProcedure
+    .input(z.object({ versionId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      getCommercialOperationsForTenant(
+        input.versionId,
+        tenantIdFromUser(ctx.user.id)
+      )
+    ),
+  upsertCommercialOperations: protectedProcedure
+    .input(
+      z.object({ versionId: z.string().min(1) })
+        .and(persistedCommercialOperationsSchema)
+    )
+    .mutation(({ ctx, input }) =>
+      upsertCommercialOperationsForTenant({
         tenantId: tenantIdFromUser(ctx.user.id),
         actorId: ctx.user.id,
         ...input,

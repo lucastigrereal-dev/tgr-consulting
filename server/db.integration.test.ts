@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { exportArtifacts } from "../drizzle/schema";
 import { FinanceDecimal } from "../shared/financial/engine";
+import type { CommercialOperationsDefinition } from "../shared/financial/commercialOperations";
 import type { FinancialInputSnapshot } from "../shared/financial/types";
 import {
   approveSnapshotForTenant,
@@ -20,6 +21,7 @@ import {
   listHistoricalBenchmarksForTenant,
   replaceProductCatalogForTenant,
   replaceCapturePointsForTenant,
+  upsertCommercialOperationsForTenant,
   saveCommercialModelForTenant,
   upsertCommercialConditionForTenant,
   upsertReceivablesPolicyForTenant,
@@ -94,6 +96,55 @@ const inputs: FinancialInputSnapshot = {
   paymentBoletoMdrRate: provided("0"),
   paymentBoletoSettlementDays: provided("0"),
   discountRateAnnual: provided("0.12"),
+};
+
+const commercialOperationsDefinition: CommercialOperationsDefinition = {
+  room: {
+    rooms: [{ roomId: "main", tables: "4", overflowTables: "1" }],
+    operatingDaysPerMonth: "20",
+    operatingHoursPerDay: "8",
+    shifts: "2",
+    averageTourDurationMinutes: "60",
+    toursPerTable: "1",
+    receptionists: "2",
+    receptionCapacityPerPerson: "200",
+    consultants: "2",
+    consultantCapacityPerPerson: "100",
+    closers: "2",
+    closerSalesCapacityPerPerson: "20",
+    peakFlowFactor: "1.5",
+    maxWaitMinutes: "15",
+  },
+  workforce: {
+    cashflowTreatment: "included_in_project_totals",
+    cohorts: [
+      {
+        cohortId: "tours-team", role: "consultant", capacityUnit: "tours",
+        headcount: "2", hireMonth: 0, trainingMonths: 0,
+        certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }],
+        matureProductivity: "100", absenteeismRate: "0", monthlyTurnoverRate: "0",
+        fixedCompensation: "1000", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0",
+      },
+      {
+        cohortId: "sales-team", role: "closer", capacityUnit: "sales",
+        headcount: "2", hireMonth: 0, trainingMonths: 0,
+        certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }],
+        matureProductivity: "20", absenteeismRate: "0", monthlyTurnoverRate: "0",
+        fixedCompensation: "1500", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0",
+      },
+    ],
+  },
+  training: {
+    cashflowTreatment: "included_in_project_totals",
+    plans: [{
+      trainingId: "academy", role: "closer", startMonth: 0,
+      candidates: "2", classes: "1", durationMonths: 1, trainers: "1",
+      trainerMonthlyCost: "100", candidateMonthlySalary: "50",
+      monthlySupportCost: "0", approvalRate: "1", certificationRate: "1",
+      timeToProductiveMonths: 0, targetProductivePeople: "2",
+    }],
+  },
+  commissions: { cashflowTreatment: "included_in_project_totals", policies: [] },
 };
 
 async function seedAuthoritativeCommercialDomains(
@@ -202,6 +253,15 @@ async function seedAuthoritativeCommercialDomains(
       },
     }],
   });
+  await upsertCommercialOperationsForTenant({
+    tenantId,
+    actorId,
+    versionId,
+    status: "provided",
+    sourceType: "current_document",
+    sourceRef: "db.integration.test:commercial-operations",
+    definition: commercialOperationsDefinition,
+  });
 }
 
 afterAll(async () => {
@@ -209,6 +269,9 @@ afterAll(async () => {
   if (!db || !ids.projectId) return;
   await db.execute(
     sql`DELETE FROM project_component_records WHERE sourceRef = ${"db.integration.test:capture-point"}`
+  );
+  await db.execute(
+    sql`DELETE FROM project_component_records WHERE sourceRef = ${"db.integration.test:commercial-operations"}`
   );
   await db.execute(
     sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId}, ${ids.missingDomainProjectId}, ${ids.missingDomainVersionId}, ${ids.missingDomainSnapshotId})`
@@ -406,6 +469,7 @@ describe("IGR database integration", () => {
     expect(snapshot.domainBlockers).toEqual(expect.arrayContaining([
       "product_catalog.missing",
       "commercial_conditions.missing",
+      "commercial_operations.missing",
     ]));
     const context = await getProjectContextForTenant(created.projectId, tenantId);
     expect(context.project.status).toBe("draft");
@@ -413,6 +477,7 @@ describe("IGR database integration", () => {
       expect.arrayContaining([
         "product_catalog.missing",
         "commercial_conditions.missing",
+        "commercial_operations.missing",
       ])
     );
   });
