@@ -11,6 +11,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:integration:db": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-integration-db.ps1",
+    "test:backup-restore": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-backup-restore.ps1",
     "test:smoke": "node scripts/smoke-ui.mjs",
     "test:smoke:auth": "tsx scripts/smoke-authenticated-ui.ts",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
