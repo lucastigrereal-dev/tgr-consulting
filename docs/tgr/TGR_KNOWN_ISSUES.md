@@ -1,35 +1,40 @@
-# TGR Consulting — Known Issues
+# TGR Consulting — Known Issues e gates externos
 
-## P0 — release blockers
+Este registro separa dívida implementável de decisões de negócio e de dependências externas. Código e testes são a autoridade para o estado atual.
 
-1. **The BRD master journey is not implemented end to end.** Product/inventory, commercial conditions, Payment Calendar and an aggregate monthly sales-cohort/receivables ledger are authoritative. Capture-point economics, room capacity, workforce/training cohorts and commission policy are still not authoritative domain modules.
-2. **Portfolio accounting is not yet contract-complete.** Cancellation, delinquency, conditional cure, write-off, aging and Healthy D90 are separated and feed cash, scenarios and Goal Seek, but cohorts do not yet carry product/channel/capture-point dimensions. Refunds, commission reversal and inventory return after cancellation are not modeled.
-3. **Positive correction and interest remain blocked.** Entry, explicit charges and balance installments generate an authoritative Payment Calendar, but indexed correction/interest require an explicit index, periodicity and capitalization contract before they may enter an official snapshot.
-4. **Production credentials and infrastructure remain an external release gate.** Local MySQL integration is proven, but OAuth, object storage, backup/restore, deployment and the complete authenticated browser journey require an authorized production-like environment.
+## Gates externos para produção
 
-## P1 — material product gaps
+1. **OAuth real:** login/logout e cookies foram testados localmente, mas o provedor de produção exige URL, app id e credenciais autorizadas.
+2. **Object storage real:** o proxy restringe cada usuário a `igr/{userId}/exports/`, porém upload/download contra o Forge de produção depende de credenciais externas.
+3. **Deploy e observabilidade:** o build local é reproduzível; preview/produção, alertas, logs centralizados e retenção precisam do ambiente escolhido.
+4. **Backup gerenciado:** o restore drill MySQL efêmero é executável e destrutivo somente sobre `tgr_consulting_test`. RPO, RTO, retenção e restauração do banco gerenciado continuam decisões operacionais externas.
 
-1. XLSX now exports snapshot KPIs, formula memory and monthly projections, but inputs/status/source provenance are not embedded in the snapshot payload and therefore cannot yet be reconciled into the workbook.
-2. PDF and PPTX are valid artifacts but still represent an executive summary, not the multi-chapter investor pack required by the BRD.
-3. Goal Seek remains V0: three target KPIs (including Healthy D90) and two economically free levers. Bounds are validated, but non-monotonic objective detection and multi-objective constraints are not implemented.
-4. Boardroom exists and is tested at component level, but fullscreen 1920×1080, keyboard navigation, 200% zoom and visual-regression evidence are not proven.
-5. Backup, retention, RPO/RTO and restore drill are not implemented or proven.
-6. Structured observability, security headers, rate limiting and production error-redaction evidence remain incomplete.
-7. The repository contains extensive discovery and product notes, but the BRD's final canonical set — product BRD, architecture, formula dictionary, data dictionary, E2E matrix, security checklist and operational runbook — is not yet reconciled into one authoritative documentation suite.
+Nenhum desses gates autoriza o uso de credenciais no repositório.
 
-## Corrected during this round
+## P1 — contratos de negócio que podem permanecer `PENDING`
 
-1. A partially informed CAPEX implementation schedule can no longer fall back silently to uniform allocation.
-2. Material unit rates, payment mix shares and MDR values are rejected outside the 0–100% interval.
-3. Unresolved analytics placeholders are no longer emitted into the production HTML.
-4. XLSX was added to the same approved-snapshot export flow used by PDF/PPTX, including schema migration and Boardroom action.
-5. The authorized export path now attaches the authoritative database-row hash to the persisted calculation payload before building or storing an artifact.
-6. Negative economic volumes and monetary inputs are rejected instead of producing plausible-looking invalid projections.
-7. User-facing export, README and governance labels now consistently identify TGR Consulting; legacy `IGR_*` technical identifiers remain unchanged to avoid an unrelated compatibility migration.
-8. Product, inventory, price phases and commercial conditions now persist as normalized domains and drive ticket, entry and inventory limits across snapshot, simulation, Capital Envelope and Goal Seek.
-9. Builder now exposes the authoritative product/commercial editor and the calculate action; Boardroom and Scenario Lab propagate the price-reference month and show domain blockers.
-10. MySQL 8.4 integration tests now exercise authority, tenant isolation, rollback, baseline, scenarios, exports, product and commercial conditions locally through the repository test harness.
-11. Builder saves the complete product catalog and its commercial conditions through one backend transaction; a forced condition-write failure proves full rollback of both domains.
-12. Reconciled commercial conditions now generate a weighted Payment Calendar per contract. Snapshots separate entry, gross receivables, settled receivables, installment collections and payment fees without floating-point arithmetic.
-13. A normalized, tenant-protected receivables policy now controls cumulative cancellation, delinquency, conditional cure and write-off by version; missing or pending policy blocks the authoritative snapshot.
-14. The financial engine now materializes monthly sales cohorts, receivables ledger, aging, cures, write-off and Healthy D90; the Boardroom, XLSX and Goal Seek consume the same formula-set `1.5.0` outputs.
+1. **Carteira multidimensional:** coortes e recebíveis ainda não carregam simultaneamente produto, canal e ponto de captação em todas as linhas do ledger.
+2. **Pós-cancelamento:** reembolso, devolução de inventário e liberação/reversão de holdback de comissão requerem política financeira explícita.
+3. **Correção e juros:** o Payment Calendar é autoritativo sem indexação positiva. Índice, periodicidade, base e capitalização precisam ser decididos antes de entrar em snapshot oficial.
+4. **Goal Seek avançado:** V0 converge e agora aplica dois levers suportados a uma branch auditável. Restrições multiobjetivo e detecção geral de não monotonicidade não fazem parte do contrato atual.
+5. **Rate limit distribuído:** o limitador atual é local por processo; múltiplas réplicas exigem um store compartilhado.
+6. **Jornada visual com dados completos:** o smoke autenticado cobre shell, rotas, landmarks, teclado, overflow, 1920×1080, zoom 200% e mobile. A digitação de um estudo completo no navegador ainda não substitui os testes transacionais e de domínio existentes.
+
+## Limitações de apresentação
+
+- PDF e PPTX são entregas executivas determinísticas, não um template de agência com edição visual irrestrita.
+- XLSX contém resumo, memória de fórmulas, projeção mensal, Point Economics e Commercial Operations. Ele não pretende ser uma segunda implementação do motor.
+- O Boardroom sem estudo mostra estados vazios honestos; números só aparecem após cálculo autoritativo.
+
+## Fechado nesta rodada
+
+- produto, estoque, fases de preço e condições comerciais normalizados;
+- salvamento comercial único e transacional, com rollback provado;
+- pontos de captação e Point Economics autoritativos;
+- sala, workforce, ramp, turnover, treinamento e comissão autoritativos;
+- Payment Calendar, coortes, carteira, aging, cancelamento, inadimplência, cura, write-off e Healthy D90;
+- Goal Seek V0 preservado, validado e aplicável a cenário auditável;
+- Boardroom e exportações reconciliados com o mesmo snapshot;
+- approval e baseline idempotentes sob repetição sequencial e concorrente;
+- startup de produção fail-closed, redaction, limite de body, rate limit local e storage tenant-bound;
+- restore drill isolado e smoke autenticado responsivo.

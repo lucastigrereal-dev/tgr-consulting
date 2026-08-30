@@ -1,41 +1,43 @@
 # TGR Consulting — Delivery Receipt
 
-**Status:** `PARTIAL`  
-**Repository:** `lucastigrereal-dev/tgr-consulting`  
-**Branch:** `codex/tgr-master-brd-v1`  
-**Base commit:** `210a748fe30229b3200a7ee2650f390ebcf6a2ae`  
-**Environment:** local Windows checkout; no production credentials used
+**Status:** `LOCAL RELEASE CANDIDATE / PRODUCTION GATED`
 
-## Verification receipt
+**Repository:** `lucastigrereal-dev/tgr-consulting`
 
-| Gate                        | Result                                                                                        |
-| --------------------------- | --------------------------------------------------------------------------------------------- |
-| Dependency bootstrap        | PASS — frozen pnpm lockfile                                                                   |
-| TypeScript                  | PASS — `pnpm run check`                                                                       |
-| Non-database tests          | PASS — 26 files, 64 tests, 0 failures                                                         |
-| Full suite                  | PARTIAL — 28 files / 66 tests: 64 pass; 2 DB integrations fail without a database             |
-| Production build            | PASS — `pnpm run build`                                                                       |
-| Production dependency audit | PASS — no known vulnerabilities found                                                         |
-| Schema/migrations           | 17 tables; migrations `0000`–`0007`; `0007` adds XLSX format                                  |
-| Financial formula set       | Engine/formula-set state remains source-authoritative; no retroactive formula version rewrite |
-| PDF                         | Unit artifact proof present                                                                   |
-| PPTX                        | Unit artifact/OpenXML proof present                                                           |
-| XLSX                        | Unit artifact/OpenXML proof present; summary, formula memory and monthly projection sheets    |
-| Auth/tenant                 | Static and authorization tests present; DB-backed proof blocked                               |
-| Visual E2E                  | NOT TESTED                                                                                    |
-| Backup/restore              | NOT TESTED                                                                                    |
-| Deployment/preview          | NOT PERFORMED                                                                                 |
+**Branch:** `codex/tgr-master-brd-v1`
 
-## Delivered delta
+**Implementation head before receipt:** `5488879`
 
-- real source extracted from the tracked checkpoint ZIP into the repository tree;
-- financial engine validation for incomplete CAPEX schedules and invalid rates;
-- removal of invalid analytics placeholders from production HTML;
-- XLSX generation and authorized export integration across engine snapshot, router, persistence, migration and Boardroom;
-- correction of the approved-export hash handoff between the persisted snapshot row and artifact builders;
-- rejection of negative economic inputs and removal of user-facing IGR brand leakage;
-- evidence-first AS-IS proof and honest known-issues register.
+**Environment:** Windows local; MySQL e sessão de browser efêmeros; nenhuma credencial de produção usada
 
-## Release decision
+## Resultado entregue
 
-This branch is not eligible for `DONE`. P0 items remain in `TGR_KNOWN_ISSUES.md`, especially the absent authoritative cohort/receivables/D90 chain and the unexecuted authenticated database E2E journey.
+O TGR Consulting agora transforma o estudo em um fluxo rastreável: Builder → snapshot determinístico → cenários/Goal Seek → approval/baseline → Boardroom → PDF/PPTX/XLSX. Produto, comercial, pontos, sala, workforce, treinamento, comissão, pagamentos, coortes, carteira e capital usam o mesmo motor decimal e o formula set `1.7.0`.
+
+## Gates provados
+
+| Gate | Resultado |
+| --- | --- |
+| TypeScript | PASS — `pnpm run check` |
+| Build | PASS — Vite + bundle Node |
+| Integração MySQL | PASS — migrations `0000`–`0013`, tenant, transações, Goal Seek e lifecycle concorrente |
+| Restore drill | PASS — ambiente isolado, dump + SHA-256 + restore + canary + limpeza |
+| UI autenticada | PASS — 7 rotas e 11 capítulos em 4 viewports, teclado e overflow |
+| Boardroom visual | PASS local — capturas 1920×1080 e zoom 200% inspecionadas |
+| PDF/PPTX/XLSX | PASS — artefatos derivados do snapshot aprovado |
+| Segurança local | PASS — startup fail-closed, cookies, redaction, body limit, rate limit e storage tenant-bound |
+| OAuth/storage/deploy reais | GATE EXTERNO — credenciais e ambiente não foram fornecidos |
+
+As contagens finais de testes e o SHA exato são registrados no PR e no relatório de execução do Codex, porque este próprio receipt integra o último commit.
+
+## Decisão de release
+
+O branch está elegível para revisão e deploy em ambiente autorizado. Não é correto chamá-lo de produção concluída antes dos gates externos de OAuth, storage, deploy/observabilidade e backup gerenciado. As limitações que dependem de política financeira permanecem explicitamente `PENDING` em `TGR_KNOWN_ISSUES.md`, sem números inventados.
+
+## Documentação
+
+- `TGR_CANONICAL_DOCS.md`: índice e autoridade;
+- `TGR_E2E_MATRIX.md`: jornadas e evidências;
+- `TGR_SECURITY_CHECKLIST.md`: controles e gates;
+- `TGR_OPERATIONAL_RUNBOOK.md`: certificação, smoke, restore e produção;
+- `TGR_KNOWN_ISSUES.md`: riscos externos e contratos pendentes.
