@@ -30,6 +30,10 @@ const ids = {
   rollbackSnapshotId: "",
   snapshotRollbackProjectId: "",
   snapshotRollbackVersionId: "",
+  baselineRollbackProjectId: "",
+  baselineRollbackVersionId: "",
+  baselineRollbackSnapshotId: "",
+  baselineRollbackSnapshotHash: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -73,16 +77,22 @@ afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
+  );
+  await db.execute(
+    sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.baselineRollbackSnapshotHash}`}`
   );
   await db.execute(
     sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.snapshotId}`
   );
   await db.execute(
     sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.rollbackSnapshotId}`
+  );
+  await db.execute(
+    sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.baselineRollbackSnapshotId}`
   );
   await db.execute(
     sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.snapshotId}`
@@ -92,6 +102,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.rollbackSnapshotId}`
+  );
+  await db.execute(
+    sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.baselineRollbackSnapshotId}`
   );
   await db.execute(
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.versionId}`
@@ -106,6 +119,9 @@ afterAll(async () => {
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.snapshotRollbackVersionId}`
   );
   await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.baselineRollbackVersionId}`
+  );
+  await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`
   );
   await db.execute(
@@ -116,6 +132,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.snapshotRollbackVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId = ${ids.baselineRollbackVersionId}`
   );
   await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`
@@ -130,6 +149,9 @@ afterAll(async () => {
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.snapshotRollbackProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.baselineRollbackProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`
   );
   await db.execute(
@@ -138,6 +160,9 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.snapshotRollbackVersionId}`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.baselineRollbackVersionId}`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
@@ -145,9 +170,74 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.snapshotRollbackProjectId}`
   );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id = ${ids.baselineRollbackProjectId}`
+  );
 });
 
 describe("IGR database integration", () => {
+  it("reverte toda a baseline quando o benchmark intermediário falha", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Rollback de baseline",
+      inputs: { ...inputs, averageTicket: provided("1002") },
+    });
+    ids.baselineRollbackProjectId = created.projectId;
+    ids.baselineRollbackVersionId = created.versionId;
+    const snapshot = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    ids.baselineRollbackSnapshotId = snapshot.id;
+    ids.baselineRollbackSnapshotHash = snapshot.snapshotHash;
+    await approveSnapshotForTenant({
+      tenantId,
+      actorId,
+      snapshotId: snapshot.id,
+      rationale: "Aprovação anterior ao teste de rollback da baseline.",
+    });
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+
+    await db.execute(
+      sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_baseline_benchmark")
+    );
+    await db.execute(
+      sql.raw(
+        "CREATE TRIGGER tgr_test_fail_baseline_benchmark BEFORE INSERT ON historical_benchmarks FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced baseline benchmark failure'"
+      )
+    );
+    try {
+      await expect(
+        freezeBaselineForTenant({
+          tenantId,
+          actorId,
+          snapshotId: snapshot.id,
+        })
+      ).rejects.toThrow();
+    } finally {
+      await db.execute(
+        sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_baseline_benchmark")
+      );
+    }
+
+    const context = await getProjectContextForTenant(
+      created.projectId,
+      tenantId
+    );
+    expect(context.project.status).toBe("approved");
+    expect(context.versions[0]?.state).toBe("approved");
+    expect(context.versions[0]?.isImmutable).toBe(false);
+    expect(
+      (await listHistoricalBenchmarksForTenant(tenantId)).some(
+        item => item.sourceRef === `snapshot:${snapshot.snapshotHash}`
+      )
+    ).toBe(false);
+  });
+
   it("reverte snapshot e workflow quando a memória de KPI falha", async () => {
     const created = await createProjectForTenant({
       tenantId,

@@ -1169,43 +1169,47 @@ export async function freezeBaselineForTenant(params: {
     throw new Error(
       "A versão precisa estar aprovada antes de congelar baseline."
     );
-  await recordWorkflowEvent({
-    projectId: version.projectId,
-    versionId: version.id,
-    fromState: "approved",
-    toState: "baseline",
-    action: "baseline.frozen",
-    actorId: params.actorId,
-  });
-  await db
-    .update(projectVersions)
-    .set({ state: "baseline", kind: "baseline", isImmutable: true })
-    .where(eq(projectVersions.id, version.id));
-  await db
-    .update(projects)
-    .set({ status: "baseline" })
-    .where(eq(projects.id, version.projectId));
   const calculation =
     snapshot.payload as unknown as import("../shared/financial/types").FinancialCalculation;
-  await db.insert(historicalBenchmarks).values({
-    id: nanoid(),
-    tenantId: params.tenantId,
-    name: `Baseline interno ${version.projectId.slice(0, 8)}`,
-    vertical: "internal_decision",
-    periodLabel: new Date().toISOString().slice(0, 10),
-    status: "provided",
-    metrics: calculation.kpis as unknown as Record<string, unknown>,
-    sourceType: "derived_analysis",
-    sourceRef: `snapshot:${snapshot.snapshotHash}`,
-    createdBy: params.actorId,
-  });
-  await recordAuditEvent({
-    tenantId: params.tenantId,
-    entityType: "project_version",
-    entityId: version.id,
-    action: "baseline.frozen",
-    actorId: params.actorId,
-    afterHash: snapshot.snapshotHash,
+  await db.transaction(async transaction => {
+    await transaction.insert(workflowEvents).values({
+      id: nanoid(),
+      projectId: version.projectId,
+      versionId: version.id,
+      fromState: "approved",
+      toState: "baseline",
+      action: "baseline.frozen",
+      actorId: params.actorId,
+    });
+    await transaction
+      .update(projectVersions)
+      .set({ state: "baseline", kind: "baseline", isImmutable: true })
+      .where(eq(projectVersions.id, version.id));
+    await transaction
+      .update(projects)
+      .set({ status: "baseline" })
+      .where(eq(projects.id, version.projectId));
+    await transaction.insert(historicalBenchmarks).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      name: `Baseline interno ${version.projectId.slice(0, 8)}`,
+      vertical: "internal_decision",
+      periodLabel: new Date().toISOString().slice(0, 10),
+      status: "provided",
+      metrics: calculation.kpis as unknown as Record<string, unknown>,
+      sourceType: "derived_analysis",
+      sourceRef: `snapshot:${snapshot.snapshotHash}`,
+      createdBy: params.actorId,
+    });
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "project_version",
+      entityId: version.id,
+      action: "baseline.frozen",
+      actorId: params.actorId,
+      afterHash: snapshot.snapshotHash,
+    });
   });
   return { versionId: version.id, baseline: true as const };
 }
