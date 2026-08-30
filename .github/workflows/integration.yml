@@ -46,7 +46,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - name: Apply migrations 0000-0007
+      - name: Apply all tracked migrations
         run: pnpm exec drizzle-kit migrate
       - name: Full test suite with MySQL
         run: pnpm test
