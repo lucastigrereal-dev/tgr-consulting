@@ -354,6 +354,8 @@ export async function getProjectContextForTenant(
     const payload =
       snapshot.payload as unknown as import("../shared/financial/types").FinancialCalculation & {
         missingInputKeys?: string[];
+        domainBlockers?: string[];
+        domainInvalidities?: string[];
       };
     return {
       id: snapshot.id,
@@ -364,6 +366,8 @@ export async function getProjectContextForTenant(
       isAuthoritative: snapshot.isAuthoritative,
       kpis: payload.kpis ?? null,
       missingInputKeys: payload.missingInputKeys ?? [],
+      domainBlockers: payload.domainBlockers ?? [],
+      domainInvalidities: payload.domainInvalidities ?? [],
     };
   });
   const workflowHistory = await db
@@ -1937,6 +1941,15 @@ export async function runProjectGoalSeekForTenant(params: {
   lowerBound: string;
   upperBound: string;
 }) {
+  const lowerBound = new FinanceDecimal(params.lowerBound);
+  const upperBound = new FinanceDecimal(params.upperBound);
+  if (lowerBound.isNegative() || upperBound.isNegative())
+    throw new Error("Os limites do Goal Seek não podem ser negativos.");
+  if (
+    params.variableKey === "conversionRate" &&
+    (lowerBound.gt(1) || upperBound.gt(1))
+  )
+    throw new Error("Os limites de conversão devem ficar entre 0 e 1.");
   const context = await getAuthoritativeCalculationContext({
     tenantId: params.tenantId,
     versionId: params.versionId,

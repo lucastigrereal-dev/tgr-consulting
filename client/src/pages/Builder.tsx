@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CotiaProjectMatrix } from "@/components/CotiaProjectMatrix";
+import { AuthoritativeCommercialBuilder } from "@/components/AuthoritativeCommercialBuilder";
 import {
   Card,
   CardContent,
@@ -457,23 +458,6 @@ export default function Builder() {
         description: error.message,
       }),
   });
-  const calculate = trpc.igr.calculate.useMutation({
-    onSuccess: async result => {
-      await contextQuery.refetch();
-      if (result.status === "valid")
-        toast.success("Snapshot autoritativo calculado.", {
-          description: `Hash ${result.snapshotHash.slice(0, 12).toUpperCase()}`,
-        });
-      else
-        toast.warning("Snapshot bloqueado por pendências.", {
-          description: `${result.missingInputKeys.length} input(s) ainda precisam de decisão.`,
-        });
-    },
-    onError: error =>
-      toast.error("O cálculo não pôde ser executado.", {
-        description: error.message,
-      }),
-  });
   const upsertComponent = trpc.igr.upsertBuilderComponent.useMutation({
     onSuccess: async () => {
       await componentsQuery.refetch();
@@ -604,6 +588,7 @@ export default function Builder() {
         onStatusChange={value => patchDraft(assemblyDomain, { status: value })}
         onSave={registerAssembly}
       />
+      <AuthoritativeCommercialBuilder versionId={activeVersionId} />
     </div>
   );
 }

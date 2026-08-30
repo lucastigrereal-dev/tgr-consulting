@@ -183,7 +183,10 @@ export default function Boardroom() {
   );
   const snapshot = contextQuery.data?.latestSnapshot;
   const calculation = snapshot?.payload as unknown as
-    | (FinancialCalculation & { snapshotHash: string })
+    | (FinancialCalculation & {
+        snapshotHash: string;
+        authoritativeDomains?: { asOfMonth?: number };
+      })
     | undefined;
   const approval = contextQuery.data?.latestApproval;
   const activeVersionId = contextQuery.data?.workingVersion?.id ?? "";
@@ -265,6 +268,10 @@ export default function Boardroom() {
     | undefined;
   const missingInputKeys =
     contextQuery.data?.snapshotHistory[0]?.missingInputKeys ?? [];
+  const domainIssues = [
+    ...(contextQuery.data?.snapshotHistory[0]?.domainBlockers ?? []),
+    ...(contextQuery.data?.snapshotHistory[0]?.domainInvalidities ?? []),
+  ];
   const changedInputKeys = (
     contextQuery.data?.latestImpact.changedInputKeys ?? []
   ).filter((key): key is FinancialInputKey =>
@@ -274,7 +281,7 @@ export default function Boardroom() {
   const studyConclusion = !snapshot
     ? "Preencha as premissas essenciais para o TGR montar a primeira leitura de viabilidade."
     : !snapshot.isAuthoritative
-      ? `${missingInputKeys.length || "Algumas"} premissa(s) ainda bloqueiam a conclusão autoritativa deste estudo.`
+      ? `${missingInputKeys.length + domainIssues.length || "Algumas"} premissa(s) ou domínio(s) ainda bloqueiam a conclusão autoritativa deste estudo.`
       : Number(kpis?.npv ?? 0) >= 0
         ? "O estudo está calculado e pronto para revisão executiva. Revise cenários, risco de caixa e racional antes de aprovar."
         : "O estudo está calculado, mas o retorno projetado exige revisão de premissas, capital ou estrutura operacional antes de aprovação.";
@@ -569,11 +576,11 @@ export default function Boardroom() {
               <p className="text-sm leading-6 text-slate-200">
                 {studyConclusion}
               </p>
-              {missingInputKeys.length ? (
+              {missingInputKeys.length || domainIssues.length ? (
                 <div className="rounded-xl border border-amber-200/15 bg-black/10 p-3 text-xs text-amber-100">
                   <p className="font-medium">Pendências críticas</p>
                   <p className="mt-1 leading-5">
-                    {missingInputKeys.join(" · ")}
+                    {[...missingInputKeys, ...domainIssues].join(" · ")}
                   </p>
                 </div>
               ) : (
@@ -643,6 +650,7 @@ export default function Boardroom() {
                 simulateCaptadores.mutate({
                   versionId: snapshot.projectVersionId,
                   horizonMonths: snapshot.horizonMonths,
+                  asOfMonth: calculation?.authoritativeDomains?.asOfMonth ?? 0,
                   captadorDelta,
                   qualifiedCouplesPerCaptadorMonth,
                   loadedCostPerCaptadorMonth,

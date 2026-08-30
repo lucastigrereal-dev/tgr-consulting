@@ -28,6 +28,23 @@ describe("Goal Seek e Capital Envelope", () => {
     expect(result.result).toBeNull();
   });
 
+  it("rejeita bounds invertidos antes de avaliar candidatos", () => {
+    let evaluations = 0;
+    expect(() =>
+      runGoalSeek({
+        variableKey: "conversionRate",
+        target: "1",
+        lowerBound: "2",
+        upperBound: "1",
+        evaluate: candidate => {
+          evaluations += 1;
+          return candidate;
+        },
+      })
+    ).toThrow("limite inferior");
+    expect(evaluations).toBe(0);
+  });
+
   it("calcula capital necessário pela pior posição acumulada", () => {
     const result = calculateCapitalEnvelope("500", [
       { month: 1, cumulativeCashFlow: "-100.00000000" },

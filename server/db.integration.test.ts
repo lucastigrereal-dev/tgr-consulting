@@ -347,6 +347,12 @@ describe("IGR database integration", () => {
     ]));
     const context = await getProjectContextForTenant(created.projectId, tenantId);
     expect(context.project.status).toBe("draft");
+    expect(context.snapshotHistory[0]?.domainBlockers).toEqual(
+      expect.arrayContaining([
+        "product_catalog.missing",
+        "commercial_conditions.missing",
+      ])
+    );
   });
 
   it("bloqueia autoridade quando o domínio estruturado está pendente", async () => {

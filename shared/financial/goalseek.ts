@@ -23,13 +23,12 @@ export function runGoalSeek(params: {
   let upper = new FinanceDecimal(params.upperBound);
   const tolerance = new FinanceDecimal(params.tolerance ?? "0.0001");
   const maxIterations = params.maxIterations ?? 100;
-  let lowerResidual = params.evaluate(lower).minus(target);
-  let upperResidual = params.evaluate(upper).minus(target);
-
   if (lower.gt(upper))
     throw new Error(
       "O limite inferior não pode ser maior que o limite superior."
     );
+  let lowerResidual = params.evaluate(lower).minus(target);
+  let upperResidual = params.evaluate(upper).minus(target);
   if (lowerResidual.times(upperResidual).gt(ZERO)) {
     return {
       status: "unreachable",

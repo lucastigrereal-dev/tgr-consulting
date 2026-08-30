@@ -150,6 +150,17 @@ describe("igrRouter + banco", () => {
       upperBound: "200",
     });
     expect(["converged", "unreachable", "iteration_limit"]).toContain(goal.status);
+    await expect(
+      owner.goalSeek({
+        versionId: created.versionId,
+        horizonMonths: 24,
+        targetKpi: "npv",
+        variableKey: "conversionRate",
+        target: "0",
+        lowerBound: "0",
+        upperBound: "100",
+      })
+    ).rejects.toThrow("entre 0 e 1");
     expect((await owner.exportEligibility({ snapshotId: snapshot.id })).eligible).toBe(false);
     await owner.approveSnapshot({ snapshotId: snapshot.id, rationale: "Ciclo tRPC integrado aprovado para teste." });
     await owner.freezeBaseline({ snapshotId: snapshot.id });
