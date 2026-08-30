@@ -101,11 +101,11 @@ describe("igrRouter + banco", () => {
       condition: {
         id: "standard",
         name: "Condição padrão",
-        listPrice: "440000",
+        listPrice: "110000",
         discount: "0",
-        entry: { total: "80000", installments: 4, firstDueMonth: 0 },
+        entry: { total: "20000", installments: 4, firstDueMonth: 0 },
         balance: {
-          principal: "360000",
+          principal: "90000",
           installments: 48,
           graceMonths: 1,
           firstDueMonth: 2,
@@ -119,6 +119,10 @@ describe("igrRouter + banco", () => {
 
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });
     ids.snapshotId = snapshot.id; ids.snapshotHash = snapshot.snapshotHash;
+    expect(snapshot.kpis.grossSales).toBe("8360000.00000000");
+    expect(snapshot.kpis.grossEntryGenerated).toBe("1520000.00000000");
+    expect(snapshot.projections.reduce((total, row) => total + Number(row.contracts), 0)).toBe(76);
+    expect(snapshot.authoritativeDomains?.commercialModel?.derived).toMatchObject({ averageTicket: "110000.00000000", entryValuePerContract: "20000.00000000", maxContracts: "76.00000000" });
     const contextWithSnapshot = await owner.projectContext({ projectId: created.projectId });
     expect(contextWithSnapshot.snapshotHistory[0]).toMatchObject({ id: snapshot.id, snapshotHash: snapshot.snapshotHash, calculationStatus: "valid" });
     expect(contextWithSnapshot.snapshotHistory[0]?.kpis).toHaveProperty("npv");
@@ -130,6 +134,22 @@ describe("igrRouter + banco", () => {
     expect(simulation.marginal).toMatchObject({ investment: "2500.00000000" });
     expect(simulation.marginal.npv).toMatch(/^-?\d+\.\d{8}$/);
     expect(simulation.marginal.method).toContain("caixa incremental");
+    const envelope = await owner.capitalEnvelope({
+      versionId: created.versionId,
+      horizonMonths: 24,
+      availableCapital: "1000000",
+    });
+    expect(envelope.requiredCapital).toMatch(/^\d+\.\d{8}$/);
+    const goal = await owner.goalSeek({
+      versionId: created.versionId,
+      horizonMonths: 24,
+      targetKpi: "totalOperatingCashFlow",
+      variableKey: "qualifiedCouplesMonth1",
+      target: "0",
+      lowerBound: "0",
+      upperBound: "200",
+    });
+    expect(["converged", "unreachable", "iteration_limit"]).toContain(goal.status);
     expect((await owner.exportEligibility({ snapshotId: snapshot.id })).eligible).toBe(false);
     await owner.approveSnapshot({ snapshotId: snapshot.id, rationale: "Ciclo tRPC integrado aprovado para teste." });
     await owner.freezeBaseline({ snapshotId: snapshot.id });

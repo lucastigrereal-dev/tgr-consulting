@@ -71,6 +71,13 @@ export function reconcileCommercialCondition(input: CommercialConditionInput) {
         path,
         message: "Taxas da condição comercial devem estar entre 0 e 1.",
       });
+    } else if (value.gt(ZERO)) {
+      violations.push({
+        code: "INDEXED_PAYMENT_SCHEDULE_REQUIRED",
+        path,
+        message:
+          "Correção ou juros exigem calendário financeiro indexado antes do snapshot oficial.",
+      });
     }
   }
   if (

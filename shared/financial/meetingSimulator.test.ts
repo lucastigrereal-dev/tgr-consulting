@@ -60,4 +60,19 @@ describe("simulateCaptadorChange", () => {
     expect(inputs.variableCostRate.value).toBe("0.2");
     expect(inputs.capexInitial.value).toBe("5000");
   });
+
+  it("respeita o estoque máximo tanto na base quanto na simulação", () => {
+    const result = simulateCaptadorChange({
+      inputs,
+      horizonMonths: 12,
+      captadorDelta: "10",
+      qualifiedCouplesPerCaptadorMonth: "100",
+      loadedCostPerCaptadorMonth: "0",
+      maxContracts: "2",
+    });
+
+    expect(result.before.kpis.grossSales).toBe("2000.00000000");
+    expect(result.after.kpis.grossSales).toBe("2000.00000000");
+    expect(result.marginal.grossSales).toBe("0.00000000");
+  });
 });

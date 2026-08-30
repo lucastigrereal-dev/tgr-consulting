@@ -130,6 +130,7 @@ function createMemory(
 export function calculateFinancialProjection(
   inputs: FinancialInputSnapshot,
   horizonMonths: number,
+  options?: { maxContracts?: string }
 ): FinancialCalculation {
   if (!Number.isInteger(horizonMonths) || horizonMonths < 1 || horizonMonths > 120) {
     throw new Error("O horizonte deve estar entre 1 e 120 meses.");
@@ -239,6 +240,12 @@ export function calculateFinancialProjection(
   const cashFlows: Decimal[] = [];
   const settlementGrossSchedule = Array.from({ length: horizonMonths + 121 }, () => ZERO);
   const paymentFeeSchedule = Array.from({ length: horizonMonths + 121 }, () => ZERO);
+  let remainingContracts = options?.maxContracts === undefined
+    ? null
+    : new FinanceDecimal(options.maxContracts);
+  if (remainingContracts && remainingContracts.isNegative()) {
+    throw new Error("O limite de contratos não pode ser negativo.");
+  }
 
   for (let month = 1; month <= horizonMonths; month += 1) {
     const operationMonth = month - preOperationMonthsNumber;
@@ -246,7 +253,17 @@ export function calculateFinancialProjection(
     const qualifiedCouples = isOperating
       ? qualifiedCouplesMonth1.times(ONE.plus(qualifiedCouplesGrowthRate).pow(operationMonth - 1))
       : ZERO;
-    const contracts = isOperating ? qualifiedCouples.times(conversionRate) : ZERO;
+    const demandedContracts = isOperating
+      ? qualifiedCouples.times(conversionRate)
+      : ZERO;
+    const contracts = remainingContracts === null
+      ? demandedContracts
+      : demandedContracts.lte(remainingContracts)
+        ? demandedContracts
+        : remainingContracts;
+    if (remainingContracts !== null) {
+      remainingContracts = remainingContracts.minus(contracts);
+    }
     const grossSales = contracts.times(averageTicket);
     const grossEntryGenerated = contracts.times(entryValuePerContract);
     const collectibleEntry = grossEntryGenerated.times(collectionRate).times(ONE.minus(cancellationRate));

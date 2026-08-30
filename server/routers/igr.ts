@@ -186,10 +186,10 @@ export const igrRouter = router({
     .input(z.object({ versionId: z.string().min(1), inputs: FinancialInputSnapshotSchema }))
     .mutation(({ ctx, input }) => updateInputsForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   calculate: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0) }))
     .mutation(({ ctx, input }) => createCalculationSnapshot({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   simulateCaptadores: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), captadorDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), qualifiedCouplesPerCaptadorMonth: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/), loadedCostPerCaptadorMonth: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/), averageTicketDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), fixedCostMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), payrollMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), variableCostMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), capexInitialDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional() }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), captadorDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), qualifiedCouplesPerCaptadorMonth: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/), loadedCostPerCaptadorMonth: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/), averageTicketDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), fixedCostMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), payrollMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), variableCostMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), capexInitialDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional() }))
     .mutation(({ ctx, input }) => simulateCaptadorChangeForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
   createScenario: protectedProcedure
     .input(z.object({ baseVersionId: z.string().min(1), name: z.string().trim().min(3).max(255), reason: z.string().trim().min(3).max(1000) }))
@@ -205,7 +205,7 @@ export const igrRouter = router({
     return freezeBaselineForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input });
   }),
   capitalEnvelope: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), availableCapital: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), availableCapital: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
     .query(({ ctx, input }) => calculateCapitalEnvelopeForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
   exportEligibility: protectedProcedure.input(z.object({ snapshotId: z.string().min(1) })).query(({ ctx, input }) =>
     getExportEligibilityForTenant(input.snapshotId, tenantIdFromUser(ctx.user.id)),
@@ -214,7 +214,7 @@ export const igrRouter = router({
     .input(z.object({ snapshotId: z.string().min(1), format: z.enum(["pdf", "pptx", "xlsx"]) }))
     .mutation(({ ctx, input }) => generateAuthorizedExportForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   goalSeek: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), targetKpi: z.enum(["npv", "totalOperatingCashFlow"]), variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate", "averageTicket"]), target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: z.enum(["npv", "totalOperatingCashFlow"]), variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate"]), target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
     .mutation(({ ctx, input }) => runProjectGoalSeekForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
   lineage: protectedProcedure.input(z.object({ formulaId: z.string().min(1) })).query(({ input }) => {
     const registry = new FormulaRegistry([IGR_CORE_FORMULA_SET_V1], IGR_CORE_FORMULA_SET_V1.id);

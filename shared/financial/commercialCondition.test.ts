@@ -60,4 +60,32 @@ describe("reconcileCommercialCondition", () => {
       message: "O preço líquido não reconcilia com os componentes financeiros.",
     });
   });
+
+  it("bloqueia taxa indexada até existir calendário financeiro aplicável", () => {
+    const result = reconcileCommercialCondition({
+      id: "indexed",
+      name: "Condição indexada",
+      listPrice: "100000",
+      discount: "0",
+      entry: { total: "20000", installments: 2, firstDueMonth: 0 },
+      balance: {
+        principal: "80000",
+        installments: 40,
+        graceMonths: 2,
+        firstDueMonth: 3,
+      },
+      explicitCharges: "0",
+      correctionRate: "0.005",
+      interestRate: "0",
+      materialityTolerance: "0.01",
+    });
+
+    expect(result.status).toBe("invalid");
+    expect(result.blocksOfficialSnapshot).toBe(true);
+    expect(result.violations).toContainEqual({
+      code: "INDEXED_PAYMENT_SCHEDULE_REQUIRED",
+      path: "correctionRate",
+      message: "Correção ou juros exigem calendário financeiro indexado antes do snapshot oficial.",
+    });
+  });
 });

@@ -12,6 +12,7 @@ export type CaptadorSimulationInput = {
   payrollMonthlyDelta?: string;
   variableCostMonthlyDelta?: string;
   capexInitialDelta?: string;
+  maxContracts?: string;
   includeLeverBreakdown?: boolean;
 };
 
@@ -75,7 +76,8 @@ function readProvided(inputs: FinancialInputSnapshot, key: "qualifiedCouplesMont
 }
 
 export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingSimulationResult {
-  const baseline = calculateFinancialProjection(input.inputs, input.horizonMonths);
+  const calculationOptions = { maxContracts: input.maxContracts };
+  const baseline = calculateFinancialProjection(input.inputs, input.horizonMonths, calculationOptions);
   if (baseline.status !== "valid") throw new Error("A simulação exige um estudo calculável, sem premissas financeiras pendentes.");
 
   const delta = new FinanceDecimal(input.captadorDelta);
@@ -113,7 +115,7 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
     variableCostRate: { status: "provided", value: decimalText(nextVariableCostRate), sourceType: "derived_analysis", sourceRef: "meeting_simulator" },
     capexInitial: { status: "provided", value: decimalText(nextCapex), sourceType: "derived_analysis", sourceRef: "meeting_simulator" },
   };
-  const simulated = calculateFinancialProjection(simulatedInputs, input.horizonMonths);
+  const simulated = calculateFinancialProjection(simulatedInputs, input.horizonMonths, calculationOptions);
   if (simulated.status !== "valid") throw new Error("A cópia de simulação ficou inválida.");
   const marginalGrossSales = decimalOrZero(simulated.kpis.grossSales).minus(decimalOrZero(baseline.kpis.grossSales));
   const marginalOperatingCash = decimalOrZero(simulated.kpis.totalOperatingCashFlow).minus(decimalOrZero(baseline.kpis.totalOperatingCashFlow));

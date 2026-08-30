@@ -40,6 +40,20 @@ describe("motor financeiro determinístico", () => {
     ]);
   });
 
+  it("limita contratos ao estoque comercial disponível", () => {
+    const result = calculateFinancialProjection(completeInputs, 3, {
+      maxContracts: "15",
+    });
+
+    expect(result.projections.map(row => row.contracts)).toEqual([
+      "10.00000000",
+      "5.00000000",
+      "0.00000000",
+    ]);
+    expect(result.kpis.grossSales).toBe("15000.00000000");
+    expect(result.kpis.grossEntryGenerated).toBe("1500.00000000");
+  });
+
   it("distribui a implantação antes da abertura e liquida a entrada pelo prazo e MDR de cada método", () => {
     const result = calculateFinancialProjection({
       ...completeInputs,

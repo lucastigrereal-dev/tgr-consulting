@@ -22,4 +22,35 @@ describe("snapshot autoritativo", () => {
     expect(first.snapshotHash).toEqual(second.snapshotHash);
     expect(first.snapshotHash).toHaveLength(64);
   });
+
+  it("não expõe KPIs nem projeções quando um domínio autoritativo bloqueia o cálculo", () => {
+    const result = calculateAuthoritativeSnapshot({
+      inputs,
+      horizonMonths: 12,
+      formulaSetVersionId: "igr-core-formulas-v1",
+      domainBlockers: ["product_catalog.missing"],
+    });
+
+    expect(result.status).toBe("blocked_by_pending_inputs");
+    expect(result.projections).toEqual([]);
+    expect(result.memory).toEqual([]);
+    expect(Object.values(result.kpis)).toEqual(Array(9).fill(null));
+  });
+
+  it("prioriza invalididade autoritativa mesmo quando o motor financeiro tem pendências", () => {
+    const pendingInputs: FinancialInputSnapshot = {
+      ...inputs,
+      averageTicket: { status: "pending", sourceType: "current_decision" },
+    };
+    const result = calculateAuthoritativeSnapshot({
+      inputs: pendingInputs,
+      horizonMonths: 12,
+      formulaSetVersionId: "igr-core-formulas-v1",
+      domainInvalidities: ["product_catalog.invalid"],
+    });
+
+    expect(result.status).toBe("invalid");
+    expect(result.projections).toEqual([]);
+    expect(Object.values(result.kpis)).toEqual(Array(9).fill(null));
+  });
 });

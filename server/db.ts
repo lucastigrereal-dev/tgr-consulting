@@ -50,6 +50,7 @@ import {
   reconcileCommercialCondition,
   type CommercialConditionInput,
 } from "../shared/financial/commercialCondition";
+import { resolveAuthoritativeCommercialModel } from "../shared/financial/authoritativeCommercialModel";
 import { assertExportEligibility } from "./financial/exportEligibility";
 import {
   buildBoardroomPdf,
@@ -1293,19 +1294,17 @@ export async function updateInputsForTenant(params: {
   return { versionId: version.id, inputHash, changedInputKeys };
 }
 
-export async function createCalculationSnapshot(params: {
+async function getAuthoritativeCalculationContext(params: {
   tenantId: number;
-  actorId: number;
   versionId: string;
-  horizonMonths: number;
+  asOfMonth: number;
 }) {
-  const db = await requireDb();
   const version = await getVersionForTenant(params.versionId, params.tenantId);
   const inputs = await getInputsForVersion(version.id);
   const productCatalog = await getProductCatalogForTenant(
     version.id,
     params.tenantId,
-    0
+    params.asOfMonth
   );
   const conditions = await listCommercialConditionsForTenant(
     version.id,
@@ -1313,23 +1312,58 @@ export async function createCalculationSnapshot(params: {
   );
   const usesStructuredCommercialDomains =
     productCatalog.records.length > 0 || conditions.length > 0;
+  const providedSkuCodes = new Set(
+    productCatalog.records
+      .filter(record => record.status === "provided")
+      .map(record => record.skuCode)
+  );
+  const providedProductSkus = productCatalog.evaluation.skus.filter(sku =>
+    providedSkuCodes.has(sku.id)
+  );
+  const providedProductEvaluation = evaluateProductInventory({
+    asOfMonth: params.asOfMonth,
+    skus: providedProductSkus,
+  });
+  const providedConditions = conditions.filter(
+    item => item.record.status === "provided"
+  );
   const domainBlockers: string[] = [];
+  const domainInvalidities: string[] = [];
+  if (productCatalog.records.length === 0)
+    domainBlockers.push("product_catalog.missing");
+  if (conditions.length === 0)
+    domainBlockers.push("commercial_conditions.missing");
   if (usesStructuredCommercialDomains) {
-    if (productCatalog.records.length === 0)
-      domainBlockers.push("product_catalog.missing");
     if (productCatalog.records.some(record => record.status === "pending"))
       domainBlockers.push("product_catalog.pending_skus");
-    if (productCatalog.evaluation.status === "invalid")
-      domainBlockers.push("product_catalog.invalid");
-    if (conditions.length === 0)
-      domainBlockers.push("commercial_conditions.missing");
+    if (providedProductEvaluation.status === "invalid")
+      domainInvalidities.push("product_catalog.invalid");
     if (conditions.some(item => item.record.status === "pending"))
       domainBlockers.push("commercial_conditions.pending");
-    if (conditions.some(item => item.reconciliation.status === "invalid"))
-      domainBlockers.push("commercial_conditions.invalid");
+    if (providedConditions.some(item => item.reconciliation.status === "invalid"))
+      domainInvalidities.push("commercial_conditions.invalid");
+  }
+  const commercialModel = usesStructuredCommercialDomains
+    ? resolveAuthoritativeCommercialModel({
+        asOfMonth: params.asOfMonth,
+        skus: providedProductSkus,
+        conditions: providedConditions.map(item => ({
+          productSkuCode: item.productSkuCode,
+          condition: item.condition,
+        })),
+      })
+    : null;
+  for (const violation of commercialModel?.violations ?? []) {
+    const key = `commercial_model.${violation.code.toLowerCase()}`;
+    if (violation.code === "MISSING_COMMERCIAL_CONDITION") {
+      if (!domainBlockers.includes(key)) domainBlockers.push(key);
+    } else if (!domainInvalidities.includes(key)) {
+      domainInvalidities.push(key);
+    }
   }
   const authoritativeDomains = usesStructuredCommercialDomains
     ? {
+        asOfMonth: params.asOfMonth,
         productCatalog: {
           records: productCatalog.records.map(record => ({
             skuCode: record.skuCode,
@@ -1347,14 +1381,78 @@ export async function createCalculationSnapshot(params: {
           sourceRef: item.record.sourceRef,
           reconciliation: item.reconciliation,
         })),
+        commercialModel,
       }
     : undefined;
+  const calculationInputs =
+    commercialModel?.status === "valid" &&
+    domainBlockers.length === 0 &&
+    domainInvalidities.length === 0
+      ? {
+          ...inputs,
+          averageTicket: {
+            status: "provided" as const,
+            value: commercialModel.derived.averageTicket,
+            sourceType: "derived_analysis" as const,
+            sourceRef: "authoritative-commercial-model",
+          },
+          entryValuePerContract: {
+            status: "provided" as const,
+            value: commercialModel.derived.entryValuePerContract,
+            sourceType: "derived_analysis" as const,
+            sourceRef: "authoritative-commercial-model",
+          },
+        }
+      : undefined;
+  const calculationOptions = calculationInputs
+    ? { maxContracts: commercialModel!.derived.maxContracts }
+    : undefined;
+  return {
+    version,
+    inputs,
+    authoritativeDomains,
+    domainBlockers,
+    domainInvalidities,
+    commercialModel,
+    calculationInputs,
+    calculationOptions,
+    authoritativeInputHash: authoritativeDomains
+      ? sha256({ financialInputHash: version.inputHash, authoritativeDomains })
+      : version.inputHash,
+  };
+}
+
+export async function createCalculationSnapshot(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  horizonMonths: number;
+  asOfMonth?: number;
+}) {
+  const db = await requireDb();
+  const context = await getAuthoritativeCalculationContext({
+    tenantId: params.tenantId,
+    versionId: params.versionId,
+    asOfMonth: params.asOfMonth ?? 0,
+  });
+  const {
+    version,
+    inputs,
+    authoritativeDomains,
+    domainBlockers,
+    domainInvalidities,
+    calculationInputs,
+    calculationOptions,
+  } = context;
   const calculation = calculateAuthoritativeSnapshot({
     inputs,
     horizonMonths: params.horizonMonths,
     formulaSetVersionId: version.formulaSetVersionId,
     authoritativeDomains,
     domainBlockers,
+    domainInvalidities,
+    calculationInputs,
+    calculationOptions,
   });
   const id = nanoid();
   const isAuthoritative = calculation.status === "valid";
@@ -1364,7 +1462,7 @@ export async function createCalculationSnapshot(params: {
       projectVersionId: version.id,
       formulaSetVersionId: version.formulaSetVersionId,
       horizonMonths: params.horizonMonths,
-      inputHash: version.inputHash,
+      inputHash: context.authoritativeInputHash,
       snapshotHash: calculation.snapshotHash,
       calculationStatus: calculation.status,
       validationStatus: calculation.status === "valid" ? "valid" : "failed",
@@ -1427,6 +1525,7 @@ export async function simulateCaptadorChangeForTenant(params: {
   tenantId: number;
   versionId: string;
   horizonMonths: number;
+  asOfMonth?: number;
   captadorDelta: string;
   qualifiedCouplesPerCaptadorMonth: string;
   loadedCostPerCaptadorMonth: string;
@@ -1436,10 +1535,16 @@ export async function simulateCaptadorChangeForTenant(params: {
   variableCostMonthlyDelta?: string;
   capexInitialDelta?: string;
 }) {
-  const version = await getVersionForTenant(params.versionId, params.tenantId);
-  const inputs = await getInputsForVersion(version.id);
+  const context = await getAuthoritativeCalculationContext({
+    tenantId: params.tenantId,
+    versionId: params.versionId,
+    asOfMonth: params.asOfMonth ?? 0,
+  });
+  if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
+    throw new Error("A simulação exige produto e condição comercial válidos, sem itens pendentes.");
   return simulateCaptadorChange({
-    inputs,
+    inputs: context.calculationInputs,
+    maxContracts: context.calculationOptions?.maxContracts,
     horizonMonths: params.horizonMonths,
     captadorDelta: params.captadorDelta,
     qualifiedCouplesPerCaptadorMonth:
@@ -1465,15 +1570,66 @@ export async function createScenarioForTenant(params: {
     params.baseVersionId,
     params.tenantId
   );
-  const inputSnapshot = await getInputsForVersion(baseVersion.id);
   const versionId = nanoid();
   const branchId = nanoid();
   await db.transaction(async transaction => {
+    const currentBaseRows = await transaction
+      .select()
+      .from(projectVersions)
+      .where(eq(projectVersions.id, baseVersion.id))
+      .limit(1);
+    const currentBase = currentBaseRows[0];
+    if (!currentBase)
+      throw new Error("A versão-base deixou de existir durante a criação do cenário.");
+    const baseInputRows = await transaction
+      .select()
+      .from(inputValues)
+      .where(eq(inputValues.versionId, currentBase.id));
+    const savedInputs = Object.fromEntries(
+      baseInputRows.map(row => [
+        row.key,
+        {
+          status: row.status,
+          value: row.valueText ?? undefined,
+          sourceType: row.sourceType,
+          sourceRef: row.sourceRef ?? undefined,
+          updatedBy: String(row.updatedBy),
+        },
+      ])
+    );
+    const inputSnapshot = Object.fromEntries(
+      FINANCIAL_INPUT_KEYS.map(key => [
+        key,
+        savedInputs[key] ?? { status: "pending", sourceType: "current_decision" },
+      ])
+    ) as FinancialInputSnapshot;
+    const baseProductSkus = await transaction
+      .select()
+      .from(productSkus)
+      .where(eq(productSkus.versionId, currentBase.id));
+    const baseProductPhases = baseProductSkus.length
+      ? await transaction
+          .select()
+          .from(productPricePhases)
+          .where(
+            inArray(
+              productPricePhases.productSkuId,
+              baseProductSkus.map(sku => sku.id)
+            )
+          )
+      : [];
+    const baseCommercialConditions = await transaction
+      .select()
+      .from(commercialConditions)
+      .where(eq(commercialConditions.versionId, currentBase.id));
+    const scenarioSkuIds = new Map(
+      baseProductSkus.map(sku => [sku.id, nanoid()])
+    );
     await transaction.insert(projectVersions).values({
       id: versionId,
-      projectId: baseVersion.projectId,
-      parentVersionId: baseVersion.id,
-      formulaSetVersionId: baseVersion.formulaSetVersionId,
+      projectId: currentBase.projectId,
+      parentVersionId: currentBase.id,
+      formulaSetVersionId: currentBase.formulaSetVersionId,
       kind: "scenario",
       state: "draft",
       isImmutable: false,
@@ -1492,10 +1648,74 @@ export async function createScenarioForTenant(params: {
         updatedBy: params.actorId,
       }))
     );
+    if (baseProductSkus.length) {
+      await transaction.insert(productSkus).values(
+        baseProductSkus.map(sku => ({
+          id: scenarioSkuIds.get(sku.id)!,
+          versionId,
+          skuCode: sku.skuCode,
+          name: sku.name,
+          unitType: sku.unitType,
+          unitQuantity: sku.unitQuantity,
+          sharesPerUnit: sku.sharesPerUnit,
+          grossSoldShares: sku.grossSoldShares,
+          returnedShares: sku.returnedShares,
+          blockedShares: sku.blockedShares,
+          status: sku.status,
+          sourceType: sku.sourceType,
+          sourceRef: sku.sourceRef,
+          updatedBy: params.actorId,
+        }))
+      );
+    }
+    if (baseProductPhases.length) {
+      await transaction.insert(productPricePhases).values(
+        baseProductPhases.map(phase => ({
+          id: nanoid(),
+          productSkuId: scenarioSkuIds.get(phase.productSkuId)!,
+          phaseCode: phase.phaseCode,
+          name: phase.name,
+          startsAtMonth: phase.startsAtMonth,
+          priceText: phase.priceText,
+          promotionalPriceText: phase.promotionalPriceText,
+        }))
+      );
+    }
+    if (baseCommercialConditions.length) {
+      await transaction.insert(commercialConditions).values(
+        baseCommercialConditions.map(condition => ({
+          id: nanoid(),
+          versionId,
+          productSkuId: condition.productSkuId
+            ? (scenarioSkuIds.get(condition.productSkuId) ?? null)
+            : null,
+          conditionCode: condition.conditionCode,
+          name: condition.name,
+          listPriceText: condition.listPriceText,
+          discountText: condition.discountText,
+          entryTotalText: condition.entryTotalText,
+          entryInstallments: condition.entryInstallments,
+          entryFirstDueMonth: condition.entryFirstDueMonth,
+          balancePrincipalText: condition.balancePrincipalText,
+          balanceInstallments: condition.balanceInstallments,
+          graceMonths: condition.graceMonths,
+          balanceFirstDueMonth: condition.balanceFirstDueMonth,
+          explicitChargesText: condition.explicitChargesText,
+          correctionRateText: condition.correctionRateText,
+          interestRateText: condition.interestRateText,
+          materialityToleranceText: condition.materialityToleranceText,
+          campaign: condition.campaign,
+          status: condition.status,
+          sourceType: condition.sourceType,
+          sourceRef: condition.sourceRef,
+          updatedBy: params.actorId,
+        }))
+      );
+    }
     await transaction.insert(scenarioBranches).values({
       id: branchId,
-      projectId: baseVersion.projectId,
-      baseVersionId: baseVersion.id,
+      projectId: currentBase.projectId,
+      baseVersionId: currentBase.id,
       branchVersionId: versionId,
       name: params.name,
       reason: params.reason,
@@ -1503,7 +1723,7 @@ export async function createScenarioForTenant(params: {
     });
     await transaction.insert(workflowEvents).values({
       id: nanoid(),
-      projectId: baseVersion.projectId,
+      projectId: currentBase.projectId,
       versionId,
       toState: "draft",
       action: "scenario.created",
@@ -1517,7 +1737,7 @@ export async function createScenarioForTenant(params: {
       entityId: branchId,
       action: "scenario.created",
       actorId: params.actorId,
-      metadata: { baseVersionId: baseVersion.id, branchVersionId: versionId },
+      metadata: { baseVersionId: currentBase.id, branchVersionId: versionId },
     });
   });
   return { branchId, versionId };
@@ -1676,13 +1896,20 @@ export async function calculateCapitalEnvelopeForTenant(params: {
   tenantId: number;
   versionId: string;
   horizonMonths: number;
+  asOfMonth?: number;
   availableCapital: string;
 }) {
-  const version = await getVersionForTenant(params.versionId, params.tenantId);
-  const inputs = await getInputsForVersion(version.id);
+  const context = await getAuthoritativeCalculationContext({
+    tenantId: params.tenantId,
+    versionId: params.versionId,
+    asOfMonth: params.asOfMonth ?? 0,
+  });
+  if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
+    throw new Error("Capital Envelope exige produto e condição comercial válidos, sem itens pendentes.");
   const calculation = calculateFinancialProjection(
-    inputs,
-    params.horizonMonths
+    context.calculationInputs,
+    params.horizonMonths,
+    context.calculationOptions
   );
   if (calculation.status !== "valid")
     throw new Error(
@@ -1696,23 +1923,29 @@ export async function calculateCapitalEnvelopeForTenant(params: {
 
 export type ProjectGoalSeekVariable =
   | "qualifiedCouplesMonth1"
-  | "conversionRate"
-  | "averageTicket";
+  | "conversionRate";
 export type ProjectGoalSeekKpi = "npv" | "totalOperatingCashFlow";
 
 export async function runProjectGoalSeekForTenant(params: {
   tenantId: number;
   versionId: string;
   horizonMonths: number;
+  asOfMonth?: number;
   targetKpi: ProjectGoalSeekKpi;
   variableKey: ProjectGoalSeekVariable;
   target: string;
   lowerBound: string;
   upperBound: string;
 }) {
-  const version = await getVersionForTenant(params.versionId, params.tenantId);
-  const inputs = await getInputsForVersion(version.id);
-  const baseline = calculateFinancialProjection(inputs, params.horizonMonths);
+  const context = await getAuthoritativeCalculationContext({
+    tenantId: params.tenantId,
+    versionId: params.versionId,
+    asOfMonth: params.asOfMonth ?? 0,
+  });
+  if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
+    throw new Error("Goal Seek exige produto e condição comercial válidos, sem itens pendentes.");
+  const inputs = context.calculationInputs;
+  const baseline = calculateFinancialProjection(inputs, params.horizonMonths, context.calculationOptions);
   if (baseline.status !== "valid")
     throw new Error(
       "Goal Seek exige todas as premissas obrigatórias informadas na versão selecionada."
@@ -1734,7 +1967,8 @@ export async function runProjectGoalSeekForTenant(params: {
       } as FinancialInputSnapshot;
       const calculation = calculateFinancialProjection(
         nextInputs,
-        params.horizonMonths
+        params.horizonMonths,
+        context.calculationOptions
       );
       if (calculation.status !== "valid")
         throw new Error("A variável escolhida produziu cálculo bloqueado.");

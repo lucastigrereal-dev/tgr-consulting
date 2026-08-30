@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { exportArtifacts } from "../drizzle/schema";
+import { FinanceDecimal } from "../shared/financial/engine";
 import type { FinancialInputSnapshot } from "../shared/financial/types";
 import {
   approveSnapshotForTenant,
@@ -50,6 +51,9 @@ const ids = {
   domainBlockedProjectId: "",
   domainBlockedVersionId: "",
   domainBlockedSnapshotId: "",
+  missingDomainProjectId: "",
+  missingDomainVersionId: "",
+  missingDomainSnapshotId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -89,11 +93,63 @@ const inputs: FinancialInputSnapshot = {
   discountRateAnnual: provided("0.12"),
 };
 
+async function seedAuthoritativeCommercialDomains(
+  versionId: string,
+  listPrice: string
+) {
+  await replaceProductCatalogForTenant({
+    tenantId,
+    actorId,
+    versionId,
+    asOfMonth: 0,
+    skus: [{
+      id: "default-sku",
+      name: "Produto de integração",
+      unitType: "Cota",
+      unitQuantity: 100,
+      sharesPerUnit: 100,
+      grossSoldShares: 0,
+      returnedShares: 0,
+      blockedShares: 0,
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "db.integration.test:authoritative-product",
+      pricePhases: [{ id: "launch", startsAtMonth: 0, price: listPrice }],
+    }],
+  });
+  await upsertCommercialConditionForTenant({
+    tenantId,
+    actorId,
+    versionId,
+    productSkuCode: "default-sku",
+    status: "provided",
+    sourceType: "current_document",
+    sourceRef: "db.integration.test:authoritative-condition",
+    condition: {
+      id: "default-condition",
+      name: "Condição de integração",
+      listPrice,
+      discount: "0",
+      entry: { total: "100", installments: 1, firstDueMonth: 0 },
+      balance: {
+        principal: new FinanceDecimal(listPrice).minus(100).toFixed(8),
+        installments: 1,
+        graceMonths: 0,
+        firstDueMonth: 1,
+      },
+      explicitCharges: "0",
+      correctionRate: "0",
+      interestRate: "0",
+      materialityTolerance: "0.01",
+    },
+  });
+}
+
 afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId}, ${ids.missingDomainProjectId}, ${ids.missingDomainVersionId}, ${ids.missingDomainSnapshotId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
@@ -153,6 +209,9 @@ afterAll(async () => {
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.domainBlockedVersionId}`
   );
   await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.missingDomainVersionId}`
+  );
+  await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`
   );
   await db.execute(
@@ -172,6 +231,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.domainBlockedVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId = ${ids.missingDomainVersionId}`
   );
   await db.execute(
     sql`DELETE iv FROM input_values iv INNER JOIN project_versions pv ON iv.versionId = pv.id WHERE pv.projectId = ${ids.scenarioRollbackProjectId}`
@@ -201,6 +263,9 @@ afterAll(async () => {
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.domainBlockedProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.missingDomainProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.scenarioRollbackProjectId}`
   );
   await db.execute(
@@ -227,6 +292,9 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.domainBlockedVersionId}`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.missingDomainVersionId}`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
@@ -249,9 +317,38 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.domainBlockedProjectId}`
   );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id = ${ids.missingDomainProjectId}`
+  );
 });
 
 describe("IGR database integration", () => {
+  it("bloqueia snapshot sem produto e condição comercial estruturados", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Domínio comercial ausente",
+      inputs: { ...inputs, averageTicket: provided("1007") },
+    });
+    ids.missingDomainProjectId = created.projectId;
+    ids.missingDomainVersionId = created.versionId;
+
+    const snapshot = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    ids.missingDomainSnapshotId = snapshot.id;
+    expect(snapshot.status).toBe("blocked_by_pending_inputs");
+    expect(snapshot.domainBlockers).toEqual(expect.arrayContaining([
+      "product_catalog.missing",
+      "commercial_conditions.missing",
+    ]));
+    const context = await getProjectContextForTenant(created.projectId, tenantId);
+    expect(context.project.status).toBe("draft");
+  });
+
   it("bloqueia autoridade quando o domínio estruturado está pendente", async () => {
     const created = await createProjectForTenant({
       tenantId,
@@ -375,7 +472,7 @@ describe("IGR database integration", () => {
           firstDueMonth: 2,
         },
         explicitCharges: "0",
-        correctionRate: "0.005",
+        correctionRate: "0",
         interestRate: "0",
         materialityTolerance: "0.01",
         campaign: "Lançamento",
@@ -494,6 +591,7 @@ describe("IGR database integration", () => {
     });
     ids.exportRollbackProjectId = created.projectId;
     ids.exportRollbackVersionId = created.versionId;
+    await seedAuthoritativeCommercialDomains(created.versionId, "1003");
     const snapshot = await createCalculationSnapshot({
       tenantId,
       actorId,
@@ -549,6 +647,7 @@ describe("IGR database integration", () => {
     });
     ids.baselineRollbackProjectId = created.projectId;
     ids.baselineRollbackVersionId = created.versionId;
+    await seedAuthoritativeCommercialDomains(created.versionId, "1002");
     const snapshot = await createCalculationSnapshot({
       tenantId,
       actorId,
@@ -611,6 +710,7 @@ describe("IGR database integration", () => {
     });
     ids.snapshotRollbackProjectId = created.projectId;
     ids.snapshotRollbackVersionId = created.versionId;
+    await seedAuthoritativeCommercialDomains(created.versionId, "1001");
     const db = await getDb();
     if (!db) throw new Error("Banco de integração indisponível.");
 
@@ -655,6 +755,7 @@ describe("IGR database integration", () => {
     });
     ids.rollbackProjectId = created.projectId;
     ids.rollbackVersionId = created.versionId;
+    await seedAuthoritativeCommercialDomains(created.versionId, "1000");
     const snapshot = await createCalculationSnapshot({
       tenantId,
       actorId,
@@ -723,6 +824,7 @@ describe("IGR database integration", () => {
       inputs: updatedInputs,
     });
     expect(updated.inputHash).not.toBe(created.inputHash);
+    await seedAuthoritativeCommercialDomains(created.versionId, "1100");
     const snapshot = await createCalculationSnapshot({
       tenantId,
       actorId,
@@ -778,6 +880,12 @@ describe("IGR database integration", () => {
       reason: "Testar caixa por mês de captação, sala e sales kit.",
     });
     ids.scenarioVersionId = scenario.versionId;
+    expect(
+      (await getProductCatalogForTenant(scenario.versionId, tenantId, 0)).records
+    ).toHaveLength(1);
+    expect(
+      await listCommercialConditionsForTenant(scenario.versionId, tenantId)
+    ).toHaveLength(1);
     const scenarioInputs = await getInputsForVersion(scenario.versionId);
     const scheduledInputs: FinancialInputSnapshot = {
       ...scenarioInputs,

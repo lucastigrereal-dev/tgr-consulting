@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
-const goalVariables = { qualifiedCouplesMonth1: "Casais qualificados — mês 1", conversionRate: "Conversão", averageTicket: "Ticket médio" } as const;
+const goalVariables = { qualifiedCouplesMonth1: "Casais qualificados — mês 1", conversionRate: "Conversão" } as const;
 const goalKpis = { npv: "VPL", totalOperatingCashFlow: "Caixa operacional" } as const;
 
 export default function Scenarios() {
