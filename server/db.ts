@@ -904,63 +904,67 @@ export async function createCalculationSnapshot(params: {
   });
   const id = nanoid();
   const isAuthoritative = calculation.status === "valid";
-  await db.insert(calculationSnapshots).values({
-    id,
-    projectVersionId: version.id,
-    formulaSetVersionId: version.formulaSetVersionId,
-    horizonMonths: params.horizonMonths,
-    inputHash: version.inputHash,
-    snapshotHash: calculation.snapshotHash,
-    calculationStatus: calculation.status,
-    validationStatus: calculation.status === "valid" ? "valid" : "failed",
-    isAuthoritative,
-    payload: calculation as unknown as Record<string, unknown>,
-    createdBy: params.actorId,
-  });
-  if (calculation.status === "valid") {
-    await db.insert(kpiMemoryRecords).values(
-      calculation.memory.map(memory => ({
-        id: nanoid(),
-        snapshotId: id,
-        kpiKey: memory.kpiKey,
-        valueText: memory.value,
-        formulaId: memory.formulaId,
-        formulaVersion: memory.formulaVersion,
-        dependencyKeys: memory.dependencies,
-        explanation: memory.explanation,
-      }))
-    );
-  }
-  if (calculation.status === "valid" && version.state === "draft") {
-    await db
-      .update(projectVersions)
-      .set({ state: "in_review" })
-      .where(eq(projectVersions.id, version.id));
-    await db
-      .update(projects)
-      .set({ status: "in_review" })
-      .where(eq(projects.id, version.projectId));
-    await recordWorkflowEvent({
-      projectId: version.projectId,
-      versionId: version.id,
-      fromState: "draft",
-      toState: "in_review",
-      action: "snapshot.submitted_for_review",
-      actorId: params.actorId,
-    });
-  }
-  await recordAuditEvent({
-    tenantId: params.tenantId,
-    entityType: "calculation_snapshot",
-    entityId: id,
-    action: "snapshot.created",
-    actorId: params.actorId,
-    afterHash: calculation.snapshotHash,
-    metadata: {
-      versionId: version.id,
-      status: calculation.status,
+  await db.transaction(async transaction => {
+    await transaction.insert(calculationSnapshots).values({
+      id,
+      projectVersionId: version.id,
+      formulaSetVersionId: version.formulaSetVersionId,
       horizonMonths: params.horizonMonths,
-    },
+      inputHash: version.inputHash,
+      snapshotHash: calculation.snapshotHash,
+      calculationStatus: calculation.status,
+      validationStatus: calculation.status === "valid" ? "valid" : "failed",
+      isAuthoritative,
+      payload: calculation as unknown as Record<string, unknown>,
+      createdBy: params.actorId,
+    });
+    if (calculation.status === "valid") {
+      await transaction.insert(kpiMemoryRecords).values(
+        calculation.memory.map(memory => ({
+          id: nanoid(),
+          snapshotId: id,
+          kpiKey: memory.kpiKey,
+          valueText: memory.value,
+          formulaId: memory.formulaId,
+          formulaVersion: memory.formulaVersion,
+          dependencyKeys: memory.dependencies,
+          explanation: memory.explanation,
+        }))
+      );
+    }
+    if (calculation.status === "valid" && version.state === "draft") {
+      await transaction
+        .update(projectVersions)
+        .set({ state: "in_review" })
+        .where(eq(projectVersions.id, version.id));
+      await transaction
+        .update(projects)
+        .set({ status: "in_review" })
+        .where(eq(projects.id, version.projectId));
+      await transaction.insert(workflowEvents).values({
+        id: nanoid(),
+        projectId: version.projectId,
+        versionId: version.id,
+        fromState: "draft",
+        toState: "in_review",
+        action: "snapshot.submitted_for_review",
+        actorId: params.actorId,
+      });
+    }
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "calculation_snapshot",
+      entityId: id,
+      action: "snapshot.created",
+      actorId: params.actorId,
+      afterHash: calculation.snapshotHash,
+      metadata: {
+        versionId: version.id,
+        status: calculation.status,
+        horizonMonths: params.horizonMonths,
+      },
+    });
   });
   return { id, ...calculation };
 }

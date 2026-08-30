@@ -28,6 +28,8 @@ const ids = {
   rollbackProjectId: "",
   rollbackVersionId: "",
   rollbackSnapshotId: "",
+  snapshotRollbackProjectId: "",
+  snapshotRollbackVersionId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -71,7 +73,7 @@ afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
@@ -101,6 +103,9 @@ afterAll(async () => {
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.rollbackVersionId}`
   );
   await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.snapshotRollbackVersionId}`
+  );
+  await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`
   );
   await db.execute(
@@ -108,6 +113,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.rollbackVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId = ${ids.snapshotRollbackVersionId}`
   );
   await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`
@@ -119,18 +127,71 @@ afterAll(async () => {
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.rollbackProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.snapshotRollbackProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`
   );
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.rollbackVersionId}`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.snapshotRollbackVersionId}`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
   );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id = ${ids.snapshotRollbackProjectId}`
+  );
 });
 
 describe("IGR database integration", () => {
+  it("reverte snapshot e workflow quando a memória de KPI falha", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Rollback de snapshot",
+      inputs: { ...inputs, averageTicket: provided("1001") },
+    });
+    ids.snapshotRollbackProjectId = created.projectId;
+    ids.snapshotRollbackVersionId = created.versionId;
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+
+    await db.execute(
+      sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_kpi_memory")
+    );
+    await db.execute(
+      sql.raw(
+        "CREATE TRIGGER tgr_test_fail_kpi_memory BEFORE INSERT ON kpi_memory_records FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced KPI memory failure'"
+      )
+    );
+    try {
+      await expect(
+        createCalculationSnapshot({
+          tenantId,
+          actorId,
+          versionId: created.versionId,
+          horizonMonths: 24,
+        })
+      ).rejects.toThrow();
+    } finally {
+      await db.execute(
+        sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_kpi_memory")
+      );
+    }
+
+    const context = await getProjectContextForTenant(
+      created.projectId,
+      tenantId
+    );
+    expect(context.snapshotHistory).toHaveLength(0);
+    expect(context.project.status).toBe("draft");
+    expect(context.versions[0]?.state).toBe("draft");
+  });
+
   it("reverte toda a aprovação quando uma escrita intermediária falha", async () => {
     const created = await createProjectForTenant({
       tenantId,
