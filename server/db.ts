@@ -7,6 +7,7 @@ import {
   approvalDecisions,
   auditEvents,
   calculationSnapshots,
+  commercialConditions,
   costCatalogItems,
   decisionRecords,
   exportArtifacts,
@@ -17,6 +18,8 @@ import {
   kpiMemoryRecords,
   projects,
   projectComponentRecords,
+  productPricePhases,
+  productSkus,
   projectVersions,
   scenarioBranches,
   type InsertUser,
@@ -39,6 +42,14 @@ import {
   calculateWorkforceEconomics,
 } from "../shared/financial/operationsEconomics";
 import { summarizeCostCatalog } from "../shared/financial/costCatalog";
+import {
+  evaluateProductInventory,
+  type ProductSkuInput,
+} from "../shared/financial/productInventory";
+import {
+  reconcileCommercialCondition,
+  type CommercialConditionInput,
+} from "../shared/financial/commercialCondition";
 import { assertExportEligibility } from "./financial/exportEligibility";
 import {
   buildBoardroomPdf,
@@ -504,6 +515,400 @@ export type CostCategory =
   | "operations"
   | "other";
 
+export type PersistedProductSkuInput = ProductSkuInput & {
+  status: "provided" | "pending";
+  sourceType: ProvenanceSourceType;
+  sourceRef?: string;
+};
+
+export async function getProductCatalogForTenant(
+  versionId: string,
+  tenantId: number,
+  asOfMonth: number
+) {
+  await getVersionForTenant(versionId, tenantId);
+  const db = await requireDb();
+  const skuRows = await db
+    .select()
+    .from(productSkus)
+    .where(eq(productSkus.versionId, versionId))
+    .orderBy(productSkus.skuCode);
+  const phaseRows = skuRows.length
+    ? await db
+        .select()
+        .from(productPricePhases)
+        .where(
+          inArray(
+            productPricePhases.productSkuId,
+            skuRows.map(row => row.id)
+          )
+        )
+        .orderBy(productPricePhases.startsAtMonth)
+    : [];
+  const phasesBySku = new Map<string, typeof phaseRows>();
+  for (const phase of phaseRows) {
+    const phases = phasesBySku.get(phase.productSkuId) ?? [];
+    phases.push(phase);
+    phasesBySku.set(phase.productSkuId, phases);
+  }
+  const skus = skuRows.map(row => ({
+    id: row.skuCode,
+    name: row.name,
+    unitType: row.unitType,
+    unitQuantity: row.unitQuantity,
+    sharesPerUnit: row.sharesPerUnit,
+    grossSoldShares: row.grossSoldShares,
+    returnedShares: row.returnedShares,
+    blockedShares: row.blockedShares,
+    pricePhases: (phasesBySku.get(row.id) ?? []).map(phase => ({
+      id: phase.phaseCode,
+      startsAtMonth: phase.startsAtMonth,
+      price: phase.promotionalPriceText ?? phase.priceText,
+    })),
+  }));
+  return {
+    records: skuRows.map(row => ({
+      ...row,
+      pricePhases: phasesBySku.get(row.id) ?? [],
+    })),
+    evaluation: evaluateProductInventory({ asOfMonth, skus }),
+  };
+}
+
+export async function replaceProductCatalogForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  asOfMonth: number;
+  skus: PersistedProductSkuInput[];
+}) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  if (version.isImmutable || version.state !== "draft")
+    throw new Error(
+      "Catálogo de produto só aceita edição na versão de trabalho."
+    );
+  for (const sku of params.skus) {
+    if (sku.status === "provided" && !sku.sourceRef?.trim())
+      throw new Error(`SKU informado exige fonte ou responsável: ${sku.id}.`);
+  }
+  const evaluation = evaluateProductInventory({
+    asOfMonth: params.asOfMonth,
+    skus: params.skus,
+  });
+  if (evaluation.status === "invalid")
+    throw new Error(
+      `Catálogo de produto inválido: ${evaluation.violations
+        .map(violation => violation.code)
+        .join(", ")}.`
+    );
+
+  await db.transaction(async transaction => {
+    const beforeSkus = await transaction
+      .select()
+      .from(productSkus)
+      .where(eq(productSkus.versionId, version.id));
+    const beforeSkuCodeById = new Map(
+      beforeSkus.map(row => [row.id, row.skuCode])
+    );
+    const linkedConditions = beforeSkus.length
+      ? await transaction
+          .select({
+            id: commercialConditions.id,
+            productSkuId: commercialConditions.productSkuId,
+          })
+          .from(commercialConditions)
+          .where(
+            and(
+              eq(commercialConditions.versionId, version.id),
+              inArray(
+                commercialConditions.productSkuId,
+                beforeSkus.map(row => row.id)
+              )
+            )
+          )
+      : [];
+    const incomingSkuCodes = new Set(params.skus.map(sku => sku.id));
+    const removedLinkedSkuCodes = linkedConditions.flatMap(condition => {
+      const skuCode = condition.productSkuId
+        ? beforeSkuCodeById.get(condition.productSkuId)
+        : undefined;
+      return skuCode && !incomingSkuCodes.has(skuCode) ? [skuCode] : [];
+    });
+    if (removedLinkedSkuCodes.length) {
+      throw new Error(
+        `SKU vinculado a condição comercial não pode ser removido: ${[
+          ...Array.from(new Set(removedLinkedSkuCodes)),
+        ].join(", ")}.`
+      );
+    }
+    if (beforeSkus.length) {
+      await transaction.delete(productPricePhases).where(
+        inArray(
+          productPricePhases.productSkuId,
+          beforeSkus.map(row => row.id)
+        )
+      );
+      await transaction
+        .delete(productSkus)
+        .where(eq(productSkus.versionId, version.id));
+    }
+
+    const insertedSkus = params.skus.map(sku => ({
+      id: nanoid(),
+      versionId: version.id,
+      skuCode: sku.id,
+      name: sku.name,
+      unitType: sku.unitType,
+      unitQuantity: sku.unitQuantity,
+      sharesPerUnit: sku.sharesPerUnit,
+      grossSoldShares: sku.grossSoldShares,
+      returnedShares: sku.returnedShares,
+      blockedShares: sku.blockedShares,
+      status: sku.status,
+      sourceType: sku.sourceType,
+      sourceRef: sku.sourceRef ?? null,
+      updatedBy: params.actorId,
+    }));
+    if (insertedSkus.length) {
+      await transaction.insert(productSkus).values(insertedSkus);
+      const phases = params.skus.flatMap((sku, skuIndex) =>
+        sku.pricePhases.map(phase => ({
+          id: nanoid(),
+          productSkuId: insertedSkus[skuIndex]!.id,
+          phaseCode: phase.id,
+          name: phase.id,
+          startsAtMonth: phase.startsAtMonth,
+          priceText: phase.price,
+          promotionalPriceText: null,
+        }))
+      );
+      if (phases.length)
+        await transaction.insert(productPricePhases).values(phases);
+    }
+
+    const insertedSkuIdByCode = new Map(
+      insertedSkus.map(row => [row.skuCode, row.id])
+    );
+    for (const condition of linkedConditions) {
+      const oldCode = condition.productSkuId
+        ? beforeSkuCodeById.get(condition.productSkuId)
+        : undefined;
+      const replacementId = oldCode
+        ? insertedSkuIdByCode.get(oldCode)
+        : undefined;
+      if (replacementId)
+        await transaction
+          .update(commercialConditions)
+          .set({ productSkuId: replacementId })
+          .where(eq(commercialConditions.id, condition.id));
+    }
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "product_catalog",
+      entityId: version.id,
+      action: "product_catalog.replaced",
+      actorId: params.actorId,
+      beforeHash: beforeSkus.length ? sha256(beforeSkus) : null,
+      afterHash: sha256(params.skus),
+      metadata: {
+        versionId: version.id,
+        skuCount: insertedSkus.length,
+        asOfMonth: params.asOfMonth,
+      },
+    });
+  });
+  return getProductCatalogForTenant(
+    version.id,
+    params.tenantId,
+    params.asOfMonth
+  );
+}
+
+function commercialConditionFromRow(
+  row: typeof commercialConditions.$inferSelect
+) {
+  return {
+    id: row.conditionCode,
+    name: row.name,
+    listPrice: row.listPriceText,
+    discount: row.discountText,
+    entry: {
+      total: row.entryTotalText,
+      installments: row.entryInstallments,
+      firstDueMonth: row.entryFirstDueMonth,
+    },
+    balance: {
+      principal: row.balancePrincipalText,
+      installments: row.balanceInstallments,
+      graceMonths: row.graceMonths,
+      firstDueMonth: row.balanceFirstDueMonth,
+    },
+    explicitCharges: row.explicitChargesText,
+    correctionRate: row.correctionRateText ?? undefined,
+    interestRate: row.interestRateText ?? undefined,
+    materialityTolerance: row.materialityToleranceText,
+    campaign: row.campaign ?? undefined,
+  } satisfies CommercialConditionInput;
+}
+
+export async function listCommercialConditionsForTenant(
+  versionId: string,
+  tenantId: number
+) {
+  await getVersionForTenant(versionId, tenantId);
+  const db = await requireDb();
+  const rows = await db
+    .select()
+    .from(commercialConditions)
+    .where(eq(commercialConditions.versionId, versionId))
+    .orderBy(commercialConditions.conditionCode);
+  const skuRows = await db
+    .select({ id: productSkus.id, skuCode: productSkus.skuCode })
+    .from(productSkus)
+    .where(eq(productSkus.versionId, versionId));
+  const skuCodeById = new Map(skuRows.map(row => [row.id, row.skuCode]));
+  return rows.map(row => {
+    const condition = commercialConditionFromRow(row);
+    return {
+      record: row,
+      condition,
+      productSkuCode: row.productSkuId
+        ? (skuCodeById.get(row.productSkuId) ?? null)
+        : null,
+      reconciliation: reconcileCommercialCondition(condition),
+    };
+  });
+}
+
+export async function upsertCommercialConditionForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  productSkuCode?: string;
+  status: "provided" | "pending";
+  sourceType: ProvenanceSourceType;
+  sourceRef?: string;
+  condition: CommercialConditionInput;
+}) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  if (version.isImmutable || version.state !== "draft")
+    throw new Error(
+      "Condição comercial só aceita edição na versão de trabalho."
+    );
+  if (params.status === "provided" && !params.sourceRef?.trim())
+    throw new Error("Condição comercial informada exige fonte ou responsável.");
+  const reconciliation = reconcileCommercialCondition(params.condition);
+  if (params.status === "provided" && reconciliation.status === "invalid")
+    throw new Error(
+      `Condição comercial inválida: ${reconciliation.violations
+        .map(violation => violation.code)
+        .join(", ")}.`
+    );
+  const productSku = params.productSkuCode
+    ? await db
+        .select({ id: productSkus.id })
+        .from(productSkus)
+        .where(
+          and(
+            eq(productSkus.versionId, version.id),
+            eq(productSkus.skuCode, params.productSkuCode)
+          )
+        )
+        .limit(1)
+    : [];
+  if (params.productSkuCode && !productSku[0])
+    throw new Error("SKU da condição comercial não encontrado nesta versão.");
+  const before = await db
+    .select()
+    .from(commercialConditions)
+    .where(
+      and(
+        eq(commercialConditions.versionId, version.id),
+        eq(commercialConditions.conditionCode, params.condition.id)
+      )
+    )
+    .limit(1);
+  const record = {
+    id: before[0]?.id ?? nanoid(),
+    versionId: version.id,
+    productSkuId: productSku[0]?.id ?? null,
+    conditionCode: params.condition.id,
+    name: params.condition.name,
+    listPriceText: params.condition.listPrice,
+    discountText: params.condition.discount,
+    entryTotalText: params.condition.entry.total,
+    entryInstallments: params.condition.entry.installments,
+    entryFirstDueMonth: params.condition.entry.firstDueMonth,
+    balancePrincipalText: params.condition.balance.principal,
+    balanceInstallments: params.condition.balance.installments,
+    graceMonths: params.condition.balance.graceMonths,
+    balanceFirstDueMonth: params.condition.balance.firstDueMonth,
+    explicitChargesText: params.condition.explicitCharges,
+    correctionRateText: params.condition.correctionRate ?? null,
+    interestRateText: params.condition.interestRate ?? null,
+    materialityToleranceText: params.condition.materialityTolerance,
+    campaign: params.condition.campaign ?? null,
+    status: params.status,
+    sourceType: params.sourceType,
+    sourceRef: params.sourceRef ?? null,
+    updatedBy: params.actorId,
+  };
+  await db.transaction(async transaction => {
+    await transaction
+      .insert(commercialConditions)
+      .values(record)
+      .onDuplicateKeyUpdate({
+        set: {
+          productSkuId: record.productSkuId,
+          name: record.name,
+          listPriceText: record.listPriceText,
+          discountText: record.discountText,
+          entryTotalText: record.entryTotalText,
+          entryInstallments: record.entryInstallments,
+          entryFirstDueMonth: record.entryFirstDueMonth,
+          balancePrincipalText: record.balancePrincipalText,
+          balanceInstallments: record.balanceInstallments,
+          graceMonths: record.graceMonths,
+          balanceFirstDueMonth: record.balanceFirstDueMonth,
+          explicitChargesText: record.explicitChargesText,
+          correctionRateText: record.correctionRateText,
+          interestRateText: record.interestRateText,
+          materialityToleranceText: record.materialityToleranceText,
+          campaign: record.campaign,
+          status: record.status,
+          sourceType: record.sourceType,
+          sourceRef: record.sourceRef,
+          updatedBy: record.updatedBy,
+        },
+      });
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "commercial_condition",
+      entityId: record.id,
+      action: "commercial_condition.upserted",
+      actorId: params.actorId,
+      beforeHash: before[0] ? sha256(before[0]) : null,
+      afterHash: sha256(record),
+      metadata: {
+        versionId: version.id,
+        conditionCode: record.conditionCode,
+        productSkuCode: params.productSkuCode ?? null,
+        reconciliationStatus: reconciliation.status,
+      },
+    });
+  });
+  return {
+    record,
+    condition: params.condition,
+    productSkuCode: params.productSkuCode ?? null,
+    reconciliation,
+  };
+}
+
 export async function listDecisionRecordsForTenant(
   versionId: string,
   tenantId: number
@@ -897,10 +1302,59 @@ export async function createCalculationSnapshot(params: {
   const db = await requireDb();
   const version = await getVersionForTenant(params.versionId, params.tenantId);
   const inputs = await getInputsForVersion(version.id);
+  const productCatalog = await getProductCatalogForTenant(
+    version.id,
+    params.tenantId,
+    0
+  );
+  const conditions = await listCommercialConditionsForTenant(
+    version.id,
+    params.tenantId
+  );
+  const usesStructuredCommercialDomains =
+    productCatalog.records.length > 0 || conditions.length > 0;
+  const domainBlockers: string[] = [];
+  if (usesStructuredCommercialDomains) {
+    if (productCatalog.records.length === 0)
+      domainBlockers.push("product_catalog.missing");
+    if (productCatalog.records.some(record => record.status === "pending"))
+      domainBlockers.push("product_catalog.pending_skus");
+    if (productCatalog.evaluation.status === "invalid")
+      domainBlockers.push("product_catalog.invalid");
+    if (conditions.length === 0)
+      domainBlockers.push("commercial_conditions.missing");
+    if (conditions.some(item => item.record.status === "pending"))
+      domainBlockers.push("commercial_conditions.pending");
+    if (conditions.some(item => item.reconciliation.status === "invalid"))
+      domainBlockers.push("commercial_conditions.invalid");
+  }
+  const authoritativeDomains = usesStructuredCommercialDomains
+    ? {
+        productCatalog: {
+          records: productCatalog.records.map(record => ({
+            skuCode: record.skuCode,
+            status: record.status,
+            sourceType: record.sourceType,
+            sourceRef: record.sourceRef,
+          })),
+          evaluation: productCatalog.evaluation,
+        },
+        commercialConditions: conditions.map(item => ({
+          condition: item.condition,
+          productSkuCode: item.productSkuCode,
+          status: item.record.status,
+          sourceType: item.record.sourceType,
+          sourceRef: item.record.sourceRef,
+          reconciliation: item.reconciliation,
+        })),
+      }
+    : undefined;
   const calculation = calculateAuthoritativeSnapshot({
     inputs,
     horizonMonths: params.horizonMonths,
     formulaSetVersionId: version.formulaSetVersionId,
+    authoritativeDomains,
+    domainBlockers,
   });
   const id = nanoid();
   const isAuthoritative = calculation.status === "valid";

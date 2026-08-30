@@ -14,20 +14,24 @@ import {
   createProjectForTenant,
   createScenarioForTenant,
   getExportEligibilityForTenant,
+  getProductCatalogForTenant,
   getProjectContextForTenant,
   getProjectForTenant,
   getScenarioComparisonForTenant,
   getInputsForVersion,
   listBuilderComponentsForTenant,
   listCostCatalogForTenant,
+  listCommercialConditionsForTenant,
   listDecisionRecordsForTenant,
   listHistoricalBenchmarksForTenant,
   getVersionForTenant,
   listProjectsForTenant,
   generateAuthorizedExportForTenant,
   freezeBaselineForTenant,
+  replaceProductCatalogForTenant,
   updateInputsForTenant,
   upsertBuilderComponentForTenant,
+  upsertCommercialConditionForTenant,
 } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 
@@ -35,6 +39,57 @@ const tenantIdFromUser = (userId: number) => userId;
 const provenanceSourceSchema = z.enum(["current_decision", "current_document", "historical_primary", "derived_analysis", "external_benchmark", "assumption"]);
 const builderComponentSchema = z.enum(["project_assembly", "product_stock", "pricing_payments", "acquisition_capacity", "costs_workforce", "commissions_partners", "receivables_losses", "capex_opex"]);
 const costCategorySchema = z.enum(["payroll", "occupancy", "technology", "marketing", "partner", "legal", "operations", "other"]);
+
+const nonNegativeDecimalSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
+const productSkuSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    name: z.string().trim().min(2).max(255),
+    unitType: z.string().trim().min(1).max(255),
+    unitQuantity: z.number().int().min(0),
+    sharesPerUnit: z.number().int().min(1),
+    grossSoldShares: z.number().int().min(0),
+    returnedShares: z.number().int().min(0),
+    blockedShares: z.number().int().min(0),
+    status: z.enum(["provided", "pending"]),
+    sourceType: provenanceSourceSchema,
+    sourceRef: z.string().trim().max(500).optional(),
+    pricePhases: z
+      .array(
+        z.object({
+          id: z.string().trim().min(1).max(120),
+          startsAtMonth: z.number().int().min(0),
+          price: nonNegativeDecimalSchema,
+        })
+      )
+      .min(1),
+  })
+  .refine(data => data.status === "pending" || Boolean(data.sourceRef?.trim()), {
+    message: "SKU informado exige fonte ou responsável.",
+    path: ["sourceRef"],
+  });
+const commercialConditionSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(2).max(255),
+  listPrice: nonNegativeDecimalSchema,
+  discount: nonNegativeDecimalSchema,
+  entry: z.object({
+    total: nonNegativeDecimalSchema,
+    installments: z.number().int().min(1),
+    firstDueMonth: z.number().int().min(0),
+  }),
+  balance: z.object({
+    principal: nonNegativeDecimalSchema,
+    installments: z.number().int().min(1),
+    graceMonths: z.number().int().min(0),
+    firstDueMonth: z.number().int().min(0),
+  }),
+  explicitCharges: nonNegativeDecimalSchema,
+  correctionRate: nonNegativeDecimalSchema.optional(),
+  interestRate: nonNegativeDecimalSchema.optional(),
+  materialityTolerance: nonNegativeDecimalSchema,
+  campaign: z.string().trim().max(255).optional(),
+});
 
 export const igrRouter = router({
   projects: protectedProcedure.query(({ ctx }) => listProjectsForTenant(tenantIdFromUser(ctx.user.id))),
@@ -61,6 +116,53 @@ export const igrRouter = router({
   builderComponents: protectedProcedure.input(z.object({ versionId: z.string().min(1) })).query(({ ctx, input }) =>
     listBuilderComponentsForTenant(input.versionId, tenantIdFromUser(ctx.user.id)),
   ),
+  productCatalog: protectedProcedure
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        asOfMonth: z.number().int().min(0).max(1200),
+      })
+    )
+    .query(({ ctx, input }) => getProductCatalogForTenant(input.versionId, tenantIdFromUser(ctx.user.id), input.asOfMonth)),
+  replaceProductCatalog: protectedProcedure
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        asOfMonth: z.number().int().min(0).max(1200),
+        skus: z.array(productSkuSchema),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      replaceProductCatalogForTenant({
+        tenantId: tenantIdFromUser(ctx.user.id),
+        actorId: ctx.user.id,
+        ...input,
+      })
+    ),
+  commercialConditions: protectedProcedure.input(z.object({ versionId: z.string().min(1) })).query(({ ctx, input }) => listCommercialConditionsForTenant(input.versionId, tenantIdFromUser(ctx.user.id))),
+  upsertCommercialCondition: protectedProcedure
+    .input(
+      z
+        .object({
+          versionId: z.string().min(1),
+          productSkuCode: z.string().trim().min(1).max(120).optional(),
+          status: z.enum(["provided", "pending"]),
+          sourceType: provenanceSourceSchema,
+          sourceRef: z.string().trim().max(500).optional(),
+          condition: commercialConditionSchema,
+        })
+        .refine(data => data.status === "pending" || Boolean(data.sourceRef?.trim()), {
+          message: "Condição comercial informada exige fonte ou responsável.",
+          path: ["sourceRef"],
+        })
+    )
+    .mutation(({ ctx, input }) =>
+      upsertCommercialConditionForTenant({
+        tenantId: tenantIdFromUser(ctx.user.id),
+        actorId: ctx.user.id,
+        ...input,
+      })
+    ),
   costCatalog: protectedProcedure.input(z.object({ versionId: z.string().min(1) })).query(({ ctx, input }) =>
     listCostCatalogForTenant(input.versionId, tenantIdFromUser(ctx.user.id)),
   ),

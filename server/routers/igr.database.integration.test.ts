@@ -7,7 +7,7 @@ import { igrRouter } from "./igr";
 
 const ownerId = 1;
 const outsiderId = 991_001;
-const ids = { projectId: "", versionId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "" };
+const ids = { projectId: "", versionId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "", commercialConditionId: "" };
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const, sourceRef: "igr.database.integration.test" });
 const inputs: FinancialInputSnapshot = {
   qualifiedCouplesMonth1: provided("100"), qualifiedCouplesGrowthRate: provided("0"), conversionRate: provided("0.1"), averageTicket: provided("1000"),
@@ -27,7 +27,7 @@ function contextFor(userId: number, role: "user" | "admin" = "admin"): TrpcConte
 afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
-  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId})`);
+  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId}, ${ids.commercialConditionId})`);
   await db.execute(sql`DELETE FROM historical_benchmarks WHERE tenantId = ${ownerId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`);
   await db.execute(sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.snapshotId}`);
   await db.execute(sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.snapshotId}`);
@@ -61,6 +61,61 @@ describe("igrRouter + banco", () => {
     ids.decisionId = decision.id;
     const cost = await owner.createCostCatalogItem({ versionId: created.versionId, category: "operations", name: "Custo validado", frequency: "monthly", amountText: "1200", status: "provided", sourceType: "current_document", sourceRef: "Contrato operacional" });
     ids.costId = cost.id;
+
+    await owner.replaceProductCatalog({
+      versionId: created.versionId,
+      asOfMonth: 0,
+      skus: [
+        {
+          id: "pipa-2q",
+          name: "Pipa 2 Quartos",
+          unitType: "2Q",
+          unitQuantity: 20,
+          sharesPerUnit: 4,
+          grossSoldShares: 3,
+          returnedShares: 0,
+          blockedShares: 1,
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "Memorial de incorporação",
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "110000" }],
+        },
+      ],
+    });
+    const catalog = await owner.productCatalog({
+      versionId: created.versionId,
+      asOfMonth: 0,
+    });
+    expect(catalog.evaluation.totals).toMatchObject({
+      initialShares: 80,
+      netSoldShares: 3,
+      availableShares: 76,
+    });
+    await expect(outsider.productCatalog({ versionId: created.versionId, asOfMonth: 0 })).rejects.toThrow("não autorizado");
+    const commercial = await owner.upsertCommercialCondition({
+      versionId: created.versionId,
+      productSkuCode: "pipa-2q",
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "Tabela comercial",
+      condition: {
+        id: "standard",
+        name: "Condição padrão",
+        listPrice: "440000",
+        discount: "0",
+        entry: { total: "80000", installments: 4, firstDueMonth: 0 },
+        balance: {
+          principal: "360000",
+          installments: 48,
+          graceMonths: 1,
+          firstDueMonth: 2,
+        },
+        explicitCharges: "0",
+        materialityTolerance: "0.01",
+      },
+    });
+    ids.commercialConditionId = commercial.record.id;
+    expect((await owner.commercialConditions({ versionId: created.versionId }))[0]?.reconciliation.status).toBe("valid");
 
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });
     ids.snapshotId = snapshot.id; ids.snapshotHash = snapshot.snapshotHash;

@@ -57,6 +57,13 @@
       "when": 1788059726760,
       "tag": "0007_lowly_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1788107994184,
+      "tag": "0008_product_inventory_commercial_condition",
+      "breakpoints": true
     }
   ]
 }

@@ -32,10 +32,67 @@ export type ProductInventoryViolation = {
 
 const ZERO = new FinanceDecimal(0);
 const decimalText = (value: Decimal) => value.toFixed(8);
+const nonNegativeDecimal = (value: string) => {
+  try {
+    const decimal = new FinanceDecimal(value);
+    return decimal.isFinite() && decimal.gte(ZERO) ? decimal : null;
+  } catch {
+    return null;
+  }
+};
 
 export function evaluateProductInventory(input: ProductInventoryInput) {
   const violations: ProductInventoryViolation[] = [];
+  if (!Number.isInteger(input.asOfMonth) || input.asOfMonth < 0) {
+    violations.push({
+      code: "INVALID_AS_OF_MONTH",
+      path: "asOfMonth",
+      message: "O mês de referência do estoque deve ser um inteiro não negativo.",
+    });
+  }
   const skus = input.skus.map(sku => {
+    for (const [field, value, minimum] of [
+      ["unitQuantity", sku.unitQuantity, 0],
+      ["sharesPerUnit", sku.sharesPerUnit, 1],
+      ["grossSoldShares", sku.grossSoldShares, 0],
+      ["returnedShares", sku.returnedShares, 0],
+      ["blockedShares", sku.blockedShares, 0],
+    ] as const) {
+      if (!Number.isInteger(value) || value < minimum) {
+        violations.push({
+          code: "INVALID_PRODUCT_COUNT",
+          path: `skus.${sku.id}.${field}`,
+          message: "Contagens de produto devem ser inteiras e respeitar o mínimo permitido.",
+        });
+      }
+    }
+    if (sku.pricePhases.length === 0) {
+      violations.push({
+        code: "MISSING_PRICE_PHASE",
+        path: `skus.${sku.id}.pricePhases`,
+        message: "Todo SKU precisa de ao menos uma fase de preço.",
+      });
+    }
+    const validPhases = sku.pricePhases.flatMap(phase => {
+      if (!Number.isInteger(phase.startsAtMonth) || phase.startsAtMonth < 0) {
+        violations.push({
+          code: "INVALID_PRICE_PHASE_MONTH",
+          path: `skus.${sku.id}.pricePhases.${phase.id}.startsAtMonth`,
+          message: "O início da fase de preço deve ser um mês inteiro não negativo.",
+        });
+      }
+      const price = nonNegativeDecimal(phase.price);
+      if (!price) {
+        violations.push({
+          code: "INVALID_PRODUCT_PRICE",
+          path: `skus.${sku.id}.pricePhases.${phase.id}.price`,
+          message: "O preço da fase deve ser um decimal não negativo.",
+        });
+      }
+      return price && Number.isInteger(phase.startsAtMonth) && phase.startsAtMonth >= 0
+        ? [{ phase, price }]
+        : [];
+    });
     const initialShares = sku.unitQuantity * sku.sharesPerUnit;
     const netSoldShares = sku.grossSoldShares - sku.returnedShares;
     const availableShares = initialShares - netSoldShares - sku.blockedShares;
@@ -53,12 +110,20 @@ export function evaluateProductInventory(input: ProductInventoryInput) {
         message: "Vendas líquidas e bloqueios excedem o estoque inicial.",
       });
     }
-    const activePhase = [...sku.pricePhases]
-      .filter(phase => phase.startsAtMonth <= input.asOfMonth)
-      .sort((left, right) => right.startsAtMonth - left.startsAtMonth)[0];
-    const activePrice = activePhase
-      ? new FinanceDecimal(activePhase.price)
-      : ZERO;
+    const activePhase = [...validPhases]
+      .filter(candidate => candidate.phase.startsAtMonth <= input.asOfMonth)
+      .sort(
+        (left, right) =>
+          right.phase.startsAtMonth - left.phase.startsAtMonth
+      )[0];
+    if (!activePhase && sku.pricePhases.length > 0) {
+      violations.push({
+        code: "MISSING_ACTIVE_PRICE_PHASE",
+        path: `skus.${sku.id}.pricePhases`,
+        message: "Nenhuma fase de preço válida está ativa no mês de referência.",
+      });
+    }
+    const activePrice = activePhase?.price ?? ZERO;
 
     return {
       ...sku,

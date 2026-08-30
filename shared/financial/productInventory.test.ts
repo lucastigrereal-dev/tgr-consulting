@@ -105,4 +105,70 @@ describe("evaluateProductInventory", () => {
       message: "Retornos não podem exceder as vendas brutas registradas.",
     });
   });
+
+  it("bloqueia catálogo sem fase e fases com preço ou mês inválidos", () => {
+    const result = evaluateProductInventory({
+      asOfMonth: 1,
+      skus: [
+        {
+          id: "missing-phase",
+          name: "Sem fase",
+          unitType: "UH",
+          unitQuantity: 1,
+          sharesPerUnit: 4,
+          grossSoldShares: 0,
+          returnedShares: 0,
+          blockedShares: 0,
+          pricePhases: [],
+        },
+        {
+          id: "invalid-phase",
+          name: "Fase inválida",
+          unitType: "UH",
+          unitQuantity: 1,
+          sharesPerUnit: 4,
+          grossSoldShares: 0,
+          returnedShares: 0,
+          blockedShares: 0,
+          pricePhases: [{ id: "launch", startsAtMonth: -1, price: "-100" }],
+        },
+      ],
+    });
+
+    expect(result.status).toBe("invalid");
+    expect(result.violations.map(violation => violation.code)).toEqual(
+      expect.arrayContaining([
+        "MISSING_PRICE_PHASE",
+        "INVALID_PRICE_PHASE_MONTH",
+        "INVALID_PRODUCT_PRICE",
+      ])
+    );
+  });
+
+  it("bloqueia mês de referência e contagens de estoque inválidos", () => {
+    const result = evaluateProductInventory({
+      asOfMonth: -1,
+      skus: [
+        {
+          id: "invalid-counts",
+          name: "Contagens inválidas",
+          unitType: "UH",
+          unitQuantity: -1,
+          sharesPerUnit: 0,
+          grossSoldShares: -1,
+          returnedShares: -1,
+          blockedShares: -1,
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "100" }],
+        },
+      ],
+    });
+
+    expect(result.status).toBe("invalid");
+    expect(result.violations.map(violation => violation.code)).toEqual(
+      expect.arrayContaining([
+        "INVALID_AS_OF_MONTH",
+        "INVALID_PRODUCT_COUNT",
+      ])
+    );
+  });
 });

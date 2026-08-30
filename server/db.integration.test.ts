@@ -12,9 +12,13 @@ import {
   getDb,
   getExportEligibilityForTenant,
   getInputsForVersion,
+  getProductCatalogForTenant,
   getProjectContextForTenant,
   getProjectForTenant,
+  listCommercialConditionsForTenant,
   listHistoricalBenchmarksForTenant,
+  replaceProductCatalogForTenant,
+  upsertCommercialConditionForTenant,
   updateInputsForTenant,
 } from "./db";
 
@@ -41,6 +45,11 @@ const ids = {
   exportRollbackSnapshotId: "",
   scenarioRollbackProjectId: "",
   scenarioRollbackVersionId: "",
+  productProjectId: "",
+  productVersionId: "",
+  domainBlockedProjectId: "",
+  domainBlockedVersionId: "",
+  domainBlockedSnapshotId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -84,7 +93,7 @@ afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
@@ -141,6 +150,9 @@ afterAll(async () => {
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.exportRollbackVersionId}`
   );
   await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.domainBlockedVersionId}`
+  );
+  await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`
   );
   await db.execute(
@@ -157,6 +169,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.exportRollbackVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId = ${ids.domainBlockedVersionId}`
   );
   await db.execute(
     sql`DELETE iv FROM input_values iv INNER JOIN project_versions pv ON iv.versionId = pv.id WHERE pv.projectId = ${ids.scenarioRollbackProjectId}`
@@ -183,6 +198,9 @@ afterAll(async () => {
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.scenarioRollbackProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.domainBlockedProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.scenarioRollbackProjectId}`
   );
   await db.execute(
@@ -203,6 +221,12 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM project_versions WHERE projectId = ${ids.scenarioRollbackProjectId}`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.productVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.domainBlockedVersionId}`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
@@ -219,9 +243,204 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.scenarioRollbackProjectId}`
   );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id = ${ids.productProjectId}`
+  );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id = ${ids.domainBlockedProjectId}`
+  );
 });
 
 describe("IGR database integration", () => {
+  it("bloqueia autoridade quando o domínio estruturado está pendente", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Autoridade de domínio pendente",
+      inputs: { ...inputs, averageTicket: provided("1006") },
+    });
+    ids.domainBlockedProjectId = created.projectId;
+    ids.domainBlockedVersionId = created.versionId;
+    await replaceProductCatalogForTenant({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      asOfMonth: 0,
+      skus: [
+        {
+          id: "pending-sku",
+          name: "Produto pendente",
+          unitType: "1Q",
+          unitQuantity: 10,
+          sharesPerUnit: 4,
+          grossSoldShares: 0,
+          returnedShares: 0,
+          blockedShares: 0,
+          status: "pending",
+          sourceType: "current_decision",
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "100000" }],
+        },
+      ],
+    });
+
+    const snapshot = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    ids.domainBlockedSnapshotId = snapshot.id;
+    expect(snapshot.status).toBe("blocked_by_pending_inputs");
+    expect(snapshot.domainBlockers).toEqual(expect.arrayContaining(["product_catalog.pending_skus", "commercial_conditions.missing"]));
+    const context = await getProjectContextForTenant(created.projectId, tenantId);
+    expect(context.project.status).toBe("draft");
+    expect(context.versions[0]?.state).toBe("draft");
+  });
+
+  it("persiste catálogo multi-SKU e condição comercial reconciliada", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Produto e condição comercial",
+      inputs: { ...inputs, averageTicket: provided("1005") },
+    });
+    ids.productProjectId = created.projectId;
+    ids.productVersionId = created.versionId;
+
+    await replaceProductCatalogForTenant({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      asOfMonth: 3,
+      skus: [
+        {
+          id: "beach-2q",
+          name: "Beach 2 Quartos",
+          unitType: "2Q",
+          unitQuantity: 10,
+          sharesPerUnit: 4,
+          grossSoldShares: 6,
+          returnedShares: 1,
+          blockedShares: 2,
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "db.integration.test:product",
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "100000" }],
+        },
+        {
+          id: "garden-3q",
+          name: "Garden 3 Quartos",
+          unitType: "3Q",
+          unitQuantity: 5,
+          sharesPerUnit: 8,
+          grossSoldShares: 4,
+          returnedShares: 0,
+          blockedShares: 0,
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "db.integration.test:product",
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "125000" }],
+        },
+      ],
+    });
+
+    const catalog = await getProductCatalogForTenant(created.versionId, tenantId, 3);
+    expect(catalog.evaluation.status).toBe("valid");
+    expect(catalog.evaluation.totals).toMatchObject({
+      initialShares: 80,
+      netSoldShares: 9,
+      blockedShares: 2,
+      availableShares: 69,
+      potentialVgv: "9000000.00000000",
+    });
+
+    const commercial = await upsertCommercialConditionForTenant({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      productSkuCode: "beach-2q",
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "db.integration.test:commercial",
+      condition: {
+        id: "standard",
+        name: "Condição padrão",
+        listPrice: "500000",
+        discount: "20000",
+        entry: { total: "100000", installments: 4, firstDueMonth: 0 },
+        balance: {
+          principal: "380000",
+          installments: 48,
+          graceMonths: 1,
+          firstDueMonth: 2,
+        },
+        explicitCharges: "0",
+        correctionRate: "0.005",
+        interestRate: "0",
+        materialityTolerance: "0.01",
+        campaign: "Lançamento",
+      },
+    });
+    expect(commercial.reconciliation.status).toBe("valid");
+    const conditions = await listCommercialConditionsForTenant(created.versionId, tenantId);
+    expect(conditions).toHaveLength(1);
+    expect(conditions[0]).toMatchObject({
+      condition: { id: "standard", name: "Condição padrão" },
+      productSkuCode: "beach-2q",
+      reconciliation: { status: "valid", difference: "0.00000000" },
+    });
+
+    await expect(
+      replaceProductCatalogForTenant({
+        tenantId,
+        actorId,
+        versionId: created.versionId,
+        asOfMonth: 3,
+        skus: [{
+          id: "invalid-price",
+          name: "Preço inválido",
+          unitType: "1Q",
+          unitQuantity: 1,
+          sharesPerUnit: 4,
+          grossSoldShares: 0,
+          returnedShares: 0,
+          blockedShares: 0,
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "db.integration.test:invalid-product",
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "-100" }],
+        }],
+      })
+    ).rejects.toThrow("INVALID_PRODUCT_PRICE");
+
+    await expect(
+      replaceProductCatalogForTenant({
+        tenantId,
+        actorId,
+        versionId: created.versionId,
+        asOfMonth: 3,
+        skus: [{
+          id: "garden-3q",
+          name: "Garden 3 Quartos",
+          unitType: "3Q",
+          unitQuantity: 5,
+          sharesPerUnit: 8,
+          grossSoldShares: 4,
+          returnedShares: 0,
+          blockedShares: 0,
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "db.integration.test:product",
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "125000" }],
+        }],
+      })
+    ).rejects.toThrow("SKU vinculado");
+    expect(
+      (await getProductCatalogForTenant(created.versionId, tenantId, 3))
+        .evaluation.totals.potentialVgv
+    ).toBe("9000000.00000000");
+  });
+
   it("não deixa versão órfã quando a criação do cenário falha", async () => {
     const created = await createProjectForTenant({
       tenantId,

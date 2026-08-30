@@ -143,6 +143,88 @@ export const projectComponentRecords = mysqlTable(
   (table) => [index("project_component_records_version_idx").on(table.versionId, table.componentType)],
 );
 
+export const productSkus = mysqlTable(
+  "product_skus",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    versionId: varchar("versionId", { length: 64 })
+      .notNull()
+      .references(() => projectVersions.id, { onDelete: "cascade" }),
+    skuCode: varchar("skuCode", { length: 120 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    unitType: varchar("unitType", { length: 255 }).notNull(),
+    unitQuantity: int("unitQuantity").notNull(),
+    sharesPerUnit: int("sharesPerUnit").notNull(),
+    grossSoldShares: int("grossSoldShares").default(0).notNull(),
+    returnedShares: int("returnedShares").default(0).notNull(),
+    blockedShares: int("blockedShares").default(0).notNull(),
+    status: mysqlEnum("status", ["provided", "pending"]).notNull(),
+    sourceType: mysqlEnum("sourceType", ["current_decision", "current_document", "historical_primary", "derived_analysis", "external_benchmark", "assumption"]).notNull(),
+    sourceRef: varchar("sourceRef", { length: 500 }),
+    updatedBy: int("updatedBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [uniqueIndex("product_skus_version_code_unique").on(table.versionId, table.skuCode), index("product_skus_version_idx").on(table.versionId)]
+);
+
+export const productPricePhases = mysqlTable(
+  "product_price_phases",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    productSkuId: varchar("productSkuId", { length: 64 })
+      .notNull()
+      .references(() => productSkus.id, { onDelete: "cascade" }),
+    phaseCode: varchar("phaseCode", { length: 120 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    startsAtMonth: int("startsAtMonth").notNull(),
+    priceText: varchar("priceText", { length: 255 }).notNull(),
+    promotionalPriceText: varchar("promotionalPriceText", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [uniqueIndex("product_price_phases_sku_code_unique").on(table.productSkuId, table.phaseCode), uniqueIndex("product_price_phases_sku_month_unique").on(table.productSkuId, table.startsAtMonth), index("product_price_phases_sku_idx").on(table.productSkuId)]
+);
+
+export const commercialConditions = mysqlTable(
+  "commercial_conditions",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    versionId: varchar("versionId", { length: 64 })
+      .notNull()
+      .references(() => projectVersions.id, { onDelete: "cascade" }),
+    productSkuId: varchar("productSkuId", { length: 64 }).references(() => productSkus.id, { onDelete: "set null" }),
+    conditionCode: varchar("conditionCode", { length: 120 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    listPriceText: varchar("listPriceText", { length: 255 }).notNull(),
+    discountText: varchar("discountText", { length: 255 }).default("0").notNull(),
+    entryTotalText: varchar("entryTotalText", { length: 255 }).notNull(),
+    entryInstallments: int("entryInstallments").notNull(),
+    entryFirstDueMonth: int("entryFirstDueMonth").notNull(),
+    balancePrincipalText: varchar("balancePrincipalText", {
+      length: 255,
+    }).notNull(),
+    balanceInstallments: int("balanceInstallments").notNull(),
+    graceMonths: int("graceMonths").default(0).notNull(),
+    balanceFirstDueMonth: int("balanceFirstDueMonth").notNull(),
+    explicitChargesText: varchar("explicitChargesText", { length: 255 }).default("0").notNull(),
+    correctionRateText: varchar("correctionRateText", { length: 255 }),
+    interestRateText: varchar("interestRateText", { length: 255 }),
+    materialityToleranceText: varchar("materialityToleranceText", {
+      length: 255,
+    })
+      .default("0.01")
+      .notNull(),
+    campaign: varchar("campaign", { length: 255 }),
+    status: mysqlEnum("status", ["provided", "pending"]).notNull(),
+    sourceType: mysqlEnum("sourceType", ["current_decision", "current_document", "historical_primary", "derived_analysis", "external_benchmark", "assumption"]).notNull(),
+    sourceRef: varchar("sourceRef", { length: 500 }),
+    updatedBy: int("updatedBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [uniqueIndex("commercial_conditions_version_code_unique").on(table.versionId, table.conditionCode), index("commercial_conditions_version_idx").on(table.versionId), index("commercial_conditions_sku_idx").on(table.productSkuId)]
+);
+
 export const historicalBenchmarks = mysqlTable(
   "historical_benchmarks",
   {
