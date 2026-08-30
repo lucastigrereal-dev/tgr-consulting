@@ -1,0 +1,1 @@
+ALTER TABLE `export_artifacts` MODIFY COLUMN `format` enum('pdf','pptx','xlsx') NOT NULL;
