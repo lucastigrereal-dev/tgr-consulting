@@ -30,7 +30,7 @@ try {
   Invoke-Checked { docker compose -f $composeFile up -d --wait --wait-timeout 120 } "Integration database startup"
   Invoke-Checked { pnpm exec drizzle-kit migrate } "Database migrations"
   Invoke-Checked {
-    pnpm exec vitest run server/db.integration.test.ts server/routers/igr.database.integration.test.ts
+    pnpm exec vitest run server/db.integration.test.ts server/routers/igr.database.integration.test.ts server/routers/igr.goalseek.database.integration.test.ts
   } "Database integration tests"
 }
 finally {

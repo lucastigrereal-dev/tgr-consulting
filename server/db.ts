@@ -2752,6 +2752,178 @@ export type ProjectGoalSeekVariable =
   | "conversionRate";
 export type ProjectGoalSeekKpi = "npv" | "totalOperatingCashFlow" | "healthyD90";
 
+export async function applyGoalSeekToScenarioForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  targetVersionId: string;
+  sourceVersionId: string;
+  variableKey: ProjectGoalSeekVariable;
+  value: string;
+  targetKpi: ProjectGoalSeekKpi;
+  target: string;
+  objectiveValue: string;
+  residual: string;
+  iterations: number;
+}) {
+  const db = await requireDb();
+  const targetVersion = await getVersionForTenant(params.targetVersionId, params.tenantId);
+  const sourceVersion = await getVersionForTenant(params.sourceVersionId, params.tenantId);
+  if (targetVersion.projectId !== sourceVersion.projectId)
+    throw new Error("Goal Seek só pode ser aplicado em branch do mesmo projeto da análise.");
+  if (targetVersion.kind !== "scenario")
+    throw new Error("Goal Seek só pode ser aplicado em branch de cenário.");
+  if (targetVersion.isImmutable || targetVersion.state !== "draft")
+    throw new Error("Goal Seek só pode alterar branch de cenário em rascunho.");
+  if (!Number.isInteger(params.iterations) || params.iterations < 1)
+    throw new Error("Goal Seek aplicado exige número positivo de iterações.");
+
+  const value = new FinanceDecimal(params.value);
+  const target = new FinanceDecimal(params.target);
+  const objective = new FinanceDecimal(params.objectiveValue);
+  const residual = new FinanceDecimal(params.residual);
+  if (![value, target, objective, residual].every(decimal => decimal.isFinite()))
+    throw new Error("Goal Seek aplicado exige valores decimais finitos.");
+  if (value.isNegative())
+    throw new Error("O valor aplicado pelo Goal Seek deve ser decimal não negativo.");
+  if (params.variableKey === "conversionRate" && value.gt(1))
+    throw new Error("A conversão aplicada pelo Goal Seek deve ficar entre 0 e 1.");
+
+  const normalizedValue = value.toFixed(8);
+  const normalizedTarget = target.toFixed(8);
+  const normalizedObjective = objective.toFixed(8);
+  const normalizedResidual = residual.toFixed(8);
+  const operationHash = sha256({
+    targetVersionId: targetVersion.id,
+    sourceVersionId: sourceVersion.id,
+    variableKey: params.variableKey,
+    value: normalizedValue,
+    targetKpi: params.targetKpi,
+    target: normalizedTarget,
+    objectiveValue: normalizedObjective,
+    residual: normalizedResidual,
+    iterations: params.iterations,
+  });
+  const decisionId = `goal_${operationHash.slice(0, 48)}`;
+  const sourceRef = `goal_seek:${operationHash}`;
+  const existingDecision = await db.select({ id: decisionRecords.id }).from(decisionRecords).where(eq(decisionRecords.id, decisionId)).limit(1);
+  if (existingDecision[0]) {
+    return {
+      applied: false as const,
+      idempotent: true as const,
+      versionId: targetVersion.id,
+      decisionId,
+      inputHash: targetVersion.inputHash,
+    };
+  }
+
+  const previousInputs = await getInputsForVersion(targetVersion.id);
+  const nextInputs: FinancialInputSnapshot = {
+    ...previousInputs,
+    [params.variableKey]: {
+      status: "provided",
+      value: normalizedValue,
+      sourceType: "derived_analysis",
+      sourceRef,
+      updatedBy: String(params.actorId),
+    },
+  };
+  const inputHash = sha256(nextInputs);
+  const rationale = [
+    `Goal Seek ${params.targetKpi} = ${normalizedTarget}.`,
+    `Objetivo calculado ${normalizedObjective}; resíduo ${normalizedResidual}.`,
+    `${params.iterations} iterações.`,
+  ].join(" ");
+  const decision = {
+    id: decisionId,
+    projectId: targetVersion.projectId,
+    versionId: targetVersion.id,
+    inputKey: params.variableKey,
+    title: `Goal Seek aplicado · ${params.variableKey}`,
+    decisionValue: normalizedValue,
+    rationale,
+    responsible: "Goal Seek determinístico",
+    sourceRef,
+    status: "accepted" as const,
+    createdBy: params.actorId,
+  };
+
+  await db.transaction(async transaction => {
+    await transaction.insert(decisionRecords).values(decision);
+    await transaction.insert(inputValues).values({
+      id: nanoid(),
+      versionId: targetVersion.id,
+      key: params.variableKey,
+      status: "provided",
+      valueText: normalizedValue,
+      sourceType: "derived_analysis",
+      sourceRef,
+      updatedBy: params.actorId,
+    }).onDuplicateKeyUpdate({ set: {
+      status: "provided",
+      valueText: normalizedValue,
+      sourceType: "derived_analysis",
+      sourceRef,
+      updatedBy: params.actorId,
+    } });
+    await transaction.update(projectVersions).set({ inputHash }).where(and(
+      eq(projectVersions.id, targetVersion.id),
+      eq(projectVersions.state, "draft"),
+      eq(projectVersions.isImmutable, false),
+    ));
+    await transaction.insert(workflowEvents).values({
+      id: `gwf_${operationHash.slice(0, 48)}`,
+      projectId: targetVersion.projectId,
+      versionId: targetVersion.id,
+      fromState: "draft",
+      toState: "draft",
+      action: "goal_seek.applied",
+      rationale,
+      actorId: params.actorId,
+    });
+    await transaction.insert(auditEvents).values([
+      {
+        id: `gad_${operationHash.slice(0, 48)}`,
+        tenantId: params.tenantId,
+        entityType: "decision_record",
+        entityId: decisionId,
+        action: "goal_seek.applied",
+        actorId: params.actorId,
+        afterHash: sha256(decision),
+        metadata: {
+          sourceVersionId: sourceVersion.id,
+          targetVersionId: targetVersion.id,
+          variableKey: params.variableKey,
+          targetKpi: params.targetKpi,
+        },
+      },
+      {
+        id: `gai_${operationHash.slice(0, 48)}`,
+        tenantId: params.tenantId,
+        entityType: "project_version",
+        entityId: targetVersion.id,
+        action: "inputs.updated",
+        actorId: params.actorId,
+        beforeHash: targetVersion.inputHash,
+        afterHash: inputHash,
+        metadata: {
+          changedInputKeys: [params.variableKey],
+          source: "goal_seek",
+          sourceVersionId: sourceVersion.id,
+          decisionId,
+        },
+      },
+    ]);
+  });
+
+  return {
+    applied: true as const,
+    idempotent: false as const,
+    versionId: targetVersion.id,
+    decisionId,
+    inputHash,
+  };
+}
+
 export async function runProjectGoalSeekForTenant(params: {
   tenantId: number;
   versionId: string;

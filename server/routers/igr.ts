@@ -4,6 +4,7 @@ import { IGR_CORE_FORMULA_SET_V1 } from "../../shared/financial/formulas";
 import { FinancialInputSnapshotSchema } from "../../shared/financial/inputSchema";
 import {
   approveSnapshotForTenant,
+  applyGoalSeekToScenarioForTenant,
   calculateCapitalEnvelopeForTenant,
   runProjectGoalSeekForTenant,
   simulateCaptadorChangeForTenant,
@@ -564,6 +565,23 @@ export const igrRouter = router({
   goalSeek: protectedProcedure
     .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: z.enum(["npv", "totalOperatingCashFlow", "healthyD90"]), variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate"]), target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
     .mutation(({ ctx, input }) => runProjectGoalSeekForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
+  applyGoalSeek: protectedProcedure
+    .input(z.object({
+      targetVersionId: z.string().min(1),
+      sourceVersionId: z.string().min(1),
+      variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate"]),
+      value: nonNegativeDecimalSchema,
+      targetKpi: z.enum(["npv", "totalOperatingCashFlow", "healthyD90"]),
+      target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/),
+      objectiveValue: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/),
+      residual: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/),
+      iterations: z.number().int().min(1).max(1000),
+    }))
+    .mutation(({ ctx, input }) => applyGoalSeekToScenarioForTenant({
+      tenantId: tenantIdFromUser(ctx.user.id),
+      actorId: ctx.user.id,
+      ...input,
+    })),
   lineage: protectedProcedure.input(z.object({ formulaId: z.string().min(1) })).query(({ input }) => {
     const registry = new FormulaRegistry([IGR_CORE_FORMULA_SET_V1], IGR_CORE_FORMULA_SET_V1.id);
     return registry.getLineage(input.formulaId);
