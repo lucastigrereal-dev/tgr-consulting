@@ -1363,11 +1363,12 @@ export async function generateAuthorizedExportForTenant(params: {
     status: "queued",
     generatedBy: params.actorId,
   });
+  const snapshot = createExportableSnapshot(
+    snapshotRows[0].payload as unknown as import("../shared/financial/types").FinancialCalculation,
+    snapshotRows[0].snapshotHash,
+  );
+  let stored: Awaited<ReturnType<typeof storagePut>>;
   try {
-    const snapshot = createExportableSnapshot(
-      snapshotRows[0].payload as unknown as import("../shared/financial/types").FinancialCalculation,
-      snapshotRows[0].snapshotHash,
-    );
     const data = params.format === "pdf"
       ? await buildBoardroomPdf(snapshot)
       : params.format === "pptx"
@@ -1379,16 +1380,36 @@ export async function generateAuthorizedExportForTenant(params: {
       : params.format === "pptx"
         ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    const stored = await storagePut(
+    stored = await storagePut(
       `igr/${params.tenantId}/exports/${params.snapshotId}_${snapshot.snapshotHash.slice(0, 12)}.${extension}`,
       data,
       mimeType
     );
-    await db
+  } catch (error) {
+    await db.transaction(async transaction => {
+      await transaction
+        .update(exportArtifacts)
+        .set({ status: "failed" })
+        .where(eq(exportArtifacts.id, artifactId));
+      await transaction.insert(auditEvents).values({
+        id: nanoid(),
+        tenantId: params.tenantId,
+        entityType: "export_artifact",
+        entityId: artifactId,
+        action: "export.failed",
+        actorId: params.actorId,
+        metadata: { snapshotId: params.snapshotId, format: params.format },
+      });
+    });
+    throw error;
+  }
+  await db.transaction(async transaction => {
+    await transaction
       .update(exportArtifacts)
       .set({ status: "generated", storageKey: stored.key })
       .where(eq(exportArtifacts.id, artifactId));
-    await recordAuditEvent({
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
       tenantId: params.tenantId,
       entityType: "export_artifact",
       entityId: artifactId,
@@ -1401,20 +1422,6 @@ export async function generateAuthorizedExportForTenant(params: {
         storageKey: stored.key,
       },
     });
-    return { artifactId, snapshotHash: snapshot.snapshotHash, url: stored.url };
-  } catch (error) {
-    await db
-      .update(exportArtifacts)
-      .set({ status: "failed" })
-      .where(eq(exportArtifacts.id, artifactId));
-    await recordAuditEvent({
-      tenantId: params.tenantId,
-      entityType: "export_artifact",
-      entityId: artifactId,
-      action: "export.failed",
-      actorId: params.actorId,
-      metadata: { snapshotId: params.snapshotId, format: params.format },
-    });
-    throw error;
-  }
+  });
+  return { artifactId, snapshotHash: snapshot.snapshotHash, url: stored.url };
 }

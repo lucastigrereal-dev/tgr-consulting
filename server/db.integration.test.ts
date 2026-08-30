@@ -1,5 +1,6 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
+import { exportArtifacts } from "../drizzle/schema";
 import type { FinancialInputSnapshot } from "../shared/financial/types";
 import {
   approveSnapshotForTenant,
@@ -7,6 +8,7 @@ import {
   createProjectForTenant,
   createScenarioForTenant,
   freezeBaselineForTenant,
+  generateAuthorizedExportForTenant,
   getDb,
   getExportEligibilityForTenant,
   getInputsForVersion,
@@ -34,6 +36,9 @@ const ids = {
   baselineRollbackVersionId: "",
   baselineRollbackSnapshotId: "",
   baselineRollbackSnapshotHash: "",
+  exportRollbackProjectId: "",
+  exportRollbackVersionId: "",
+  exportRollbackSnapshotId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -77,7 +82,7 @@ afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
@@ -95,6 +100,9 @@ afterAll(async () => {
     sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.baselineRollbackSnapshotId}`
   );
   await db.execute(
+    sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.exportRollbackSnapshotId}`
+  );
+  await db.execute(
     sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.snapshotId}`
   );
   await db.execute(
@@ -105,6 +113,12 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.baselineRollbackSnapshotId}`
+  );
+  await db.execute(
+    sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.exportRollbackSnapshotId}`
+  );
+  await db.execute(
+    sql`DELETE FROM export_artifacts WHERE snapshotId = ${ids.exportRollbackSnapshotId}`
   );
   await db.execute(
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.versionId}`
@@ -122,6 +136,9 @@ afterAll(async () => {
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.baselineRollbackVersionId}`
   );
   await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.exportRollbackVersionId}`
+  );
+  await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`
   );
   await db.execute(
@@ -135,6 +152,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.baselineRollbackVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId = ${ids.exportRollbackVersionId}`
   );
   await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`
@@ -152,6 +172,9 @@ afterAll(async () => {
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.baselineRollbackProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.exportRollbackProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`
   );
   await db.execute(
@@ -163,6 +186,9 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.baselineRollbackVersionId}`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.exportRollbackVersionId}`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
@@ -173,9 +199,67 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.baselineRollbackProjectId}`
   );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id = ${ids.exportRollbackProjectId}`
+  );
 });
 
 describe("IGR database integration", () => {
+  it("mantém export queued quando a transição de falha não pode ser auditada", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Atomicidade de export",
+      inputs: { ...inputs, averageTicket: provided("1003") },
+    });
+    ids.exportRollbackProjectId = created.projectId;
+    ids.exportRollbackVersionId = created.versionId;
+    const snapshot = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    ids.exportRollbackSnapshotId = snapshot.id;
+    await approveSnapshotForTenant({
+      tenantId,
+      actorId,
+      snapshotId: snapshot.id,
+      rationale: "Aprovação anterior ao teste de atomicidade do export.",
+    });
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+
+    await db.execute(
+      sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_export_audit")
+    );
+    await db.execute(
+      sql.raw(
+        "CREATE TRIGGER tgr_test_fail_export_audit BEFORE INSERT ON audit_events FOR EACH ROW BEGIN IF NEW.action = 'export.failed' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced export audit failure'; END IF; END"
+      )
+    );
+    try {
+      await expect(
+        generateAuthorizedExportForTenant({
+          tenantId,
+          actorId,
+          snapshotId: snapshot.id,
+          format: "pdf",
+        })
+      ).rejects.toThrow();
+    } finally {
+      await db.execute(
+        sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_export_audit")
+      );
+    }
+
+    const artifacts = await db
+      .select({ status: exportArtifacts.status })
+      .from(exportArtifacts)
+      .where(eq(exportArtifacts.snapshotId, snapshot.id));
+    expect(artifacts).toEqual([{ status: "queued" }]);
+  });
+
   it("reverte toda a baseline quando o benchmark intermediário falha", async () => {
     const created = await createProjectForTenant({
       tenantId,
