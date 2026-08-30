@@ -1086,38 +1086,42 @@ export async function approveSnapshotForTenant(params: {
       "Somente snapshot autoritativo e validado pode ser aprovado."
     );
   }
-  await db.insert(approvalDecisions).values({
-    id: nanoid(),
-    snapshotId: snapshot[0].id,
-    decision: "approved",
-    rationale: params.rationale,
-    decidedBy: params.actorId,
-  });
-  await recordWorkflowEvent({
-    projectId: version.projectId,
-    versionId: version.id,
-    fromState: version.state,
-    toState: "approved",
-    action: "snapshot.approved",
-    rationale: params.rationale,
-    actorId: params.actorId,
-  });
-  await db
-    .update(projectVersions)
-    .set({ state: "approved" })
-    .where(eq(projectVersions.id, version.id));
-  await db
-    .update(projects)
-    .set({ status: "approved" })
-    .where(eq(projects.id, version.projectId));
-  await recordAuditEvent({
-    tenantId: params.tenantId,
-    entityType: "calculation_snapshot",
-    entityId: snapshot[0].id,
-    action: "snapshot.approved",
-    actorId: params.actorId,
-    afterHash: snapshot[0].snapshotHash,
-    metadata: { rationale: params.rationale },
+  await db.transaction(async transaction => {
+    await transaction.insert(approvalDecisions).values({
+      id: nanoid(),
+      snapshotId: snapshot[0].id,
+      decision: "approved",
+      rationale: params.rationale,
+      decidedBy: params.actorId,
+    });
+    await transaction.insert(workflowEvents).values({
+      id: nanoid(),
+      projectId: version.projectId,
+      versionId: version.id,
+      fromState: version.state,
+      toState: "approved",
+      action: "snapshot.approved",
+      rationale: params.rationale,
+      actorId: params.actorId,
+    });
+    await transaction
+      .update(projectVersions)
+      .set({ state: "approved" })
+      .where(eq(projectVersions.id, version.id));
+    await transaction
+      .update(projects)
+      .set({ status: "approved" })
+      .where(eq(projects.id, version.projectId));
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "calculation_snapshot",
+      entityId: snapshot[0].id,
+      action: "snapshot.approved",
+      actorId: params.actorId,
+      afterHash: snapshot[0].snapshotHash,
+      metadata: { rationale: params.rationale },
+    });
   });
   return { approved: true as const, snapshotId: snapshot[0].id };
 }
