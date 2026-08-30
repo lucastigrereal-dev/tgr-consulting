@@ -1,3 +1,5 @@
+import type { ReceivablesPortfolio } from "./receivablesPortfolio";
+
 export const FINANCIAL_INPUT_KEYS = [
   "qualifiedCouplesMonth1",
   "qualifiedCouplesGrowthRate",
@@ -111,6 +113,11 @@ export type MonthlyProjection = {
   grossReceivablesGenerated: DecimalText;
   grossReceivablesSettled: DecimalText;
   installmentCollections: DecimalText;
+  canceledReceivables: DecimalText;
+  delinquentBalance: DecimalText;
+  curedCollections: DecimalText;
+  writtenOffBalance: DecimalText;
+  healthyD90: DecimalText;
   paymentFees: DecimalText;
   netCollections: DecimalText;
   operatingCashFlow: DecimalText;
@@ -133,6 +140,11 @@ export type FinancialCalculation = {
     grossReceivablesGenerated: DecimalText | null;
     grossReceivablesSettled: DecimalText | null;
     installmentCollections: DecimalText | null;
+    canceledReceivables: DecimalText | null;
+    delinquentBalance: DecimalText | null;
+    curedCollections: DecimalText | null;
+    writtenOffBalance: DecimalText | null;
+    healthyD90: DecimalText | null;
     recognizedRevenue: DecimalText | null;
     paymentFees: DecimalText | null;
     preOperationalInvestment: DecimalText | null;
@@ -142,6 +154,7 @@ export type FinancialCalculation = {
     paybackMonths: DecimalText | null;
   };
   memory: CalculationMemory[];
+  receivablesPortfolio?: ReceivablesPortfolio;
 };
 
 export type ProjectLifecycleState = "draft" | "in_review" | "approved" | "baseline";

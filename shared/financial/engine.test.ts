@@ -34,9 +34,9 @@ describe("motor financeiro determinístico", () => {
     expect(first.status).toBe("valid");
     expect(first.projections).toHaveLength(120);
     expect(first.kpis.grossSales).toBe("1200000.00000000");
-    expect(first.memory).toHaveLength(13);
+    expect(first.memory).toHaveLength(18);
     expect(first.memory.map((memory) => memory.kpiKey)).toEqual([
-      "grossSales", "grossEntryGenerated", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "recognizedRevenue", "paymentTermsNetSettlement", "commercialTeamMonthlyCost", "preOperationalInvestment", "operatingCashFlow", "npv", "irrAnnual", "paybackMonths",
+      "grossSales", "grossEntryGenerated", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "canceledReceivables", "delinquentBalance", "curedCollections", "writtenOffBalance", "healthyD90", "recognizedRevenue", "paymentTermsNetSettlement", "commercialTeamMonthlyCost", "preOperationalInvestment", "operatingCashFlow", "npv", "irrAnnual", "paybackMonths",
     ]);
   });
 
@@ -108,6 +108,45 @@ describe("motor financeiro determinístico", () => {
       "1000.00000000",
     ]);
     expect(result.kpis.recognizedRevenue).toBe("3650.00000000");
+  });
+
+  it("substitui taxas agregadas por política de carteira com cura, perda e Healthy D90", () => {
+    const result = calculateFinancialProjection({
+      ...completeInputs,
+      qualifiedCouplesMonth1: provided("10"),
+      conversionRate: provided("0.1"),
+      collectionRate: { status: "pending", sourceType: "current_decision" },
+      cancellationRate: { status: "pending", sourceType: "current_decision" },
+      fixedCostMonthly: provided("0"), payrollMonthly: provided("0"),
+      variableCostRate: provided("0"), partnerShareRate: provided("0"),
+      capexInitial: provided("0"), discountRateAnnual: provided("0"),
+    }, 4, {
+      paymentSchedulePerContract: [
+        { component: "entry", dueMonthOffset: 0, grossAmount: "100" },
+      ],
+      receivablesPolicy: {
+        cancellationCurve: { d7: "0", d30: "0", d60: "0", d90: "0", d180: "0", lifetime: "0" },
+        delinquencyRate: "1",
+        cureRates: { days1To30: "0.5", days31To60: "0", days61To90: "0", days90Plus: "0" },
+        writeOffAfterDays: 90,
+        policyVersion: "portfolio-test-v1",
+        sourceRef: "engine-test",
+      },
+    });
+
+    expect(result.receivablesPortfolio?.ledger).toHaveLength(4);
+    expect(result.projections.map(row => row.curedCollections)).toEqual([
+      "0.00000000", "50.00000000", "50.00000000", "50.00000000",
+    ]);
+    expect(result.projections[3]).toMatchObject({
+      writtenOffBalance: "50.00000000",
+      healthyD90: "0.50000000",
+    });
+    expect(result.kpis).toMatchObject({
+      curedCollections: "150.00000000",
+      writtenOffBalance: "50.00000000",
+      healthyD90: "0.50000000",
+    });
   });
 
   it("aloca captação, sala e sales kit nos meses específicos quando o cronograma está completo", () => {

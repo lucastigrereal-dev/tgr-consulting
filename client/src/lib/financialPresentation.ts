@@ -24,7 +24,7 @@ export function formatPercent(value: string | number | null | undefined) {
 }
 
 export function formatKpi(key: string, value: string | number | null | undefined) {
-  if (["npv", "totalOperatingCashFlow", "grossEntryGenerated", "grossEntrySettled", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "paymentFees", "netCollections", "preOperationalInvestment"].includes(key)) return formatCurrency(value);
+  if (["npv", "totalOperatingCashFlow", "grossEntryGenerated", "grossEntrySettled", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "canceledReceivables", "delinquentBalance", "curedCollections", "writtenOffBalance", "paymentFees", "netCollections", "preOperationalInvestment"].includes(key)) return formatCurrency(value);
   if (key === "irrAnnual" || key.endsWith("Rate")) return formatPercent(value);
   if (key === "paybackMonths") return value === null || value === undefined ? "—" : `${Math.round(Number(value))} meses`;
   return value === null || value === undefined || value === "" ? "—" : String(value);

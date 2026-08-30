@@ -202,6 +202,10 @@ function validatePolicy(policy: ReceivablesPolicy) {
   };
 }
 
+export function assertReceivablesPolicy(policy: ReceivablesPolicy): void {
+  validatePolicy(policy);
+}
+
 function cancellationRateAtDue(
   dueMonthOffset: number,
   rates: ReturnType<typeof validatePolicy>["cancellationRates"],

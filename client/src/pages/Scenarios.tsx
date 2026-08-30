@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { Link } from "wouter";
 
 const goalVariables = { qualifiedCouplesMonth1: "Casais qualificados — mês 1", conversionRate: "Conversão" } as const;
-const goalKpis = { npv: "VPL", totalOperatingCashFlow: "Caixa operacional" } as const;
+const goalKpis = { npv: "VPL", totalOperatingCashFlow: "Caixa operacional", healthyD90: "Healthy D90" } as const;
 
 export default function Scenarios() {
   const projectsQuery = trpc.igr.projects.useQuery(undefined, { retry: false });

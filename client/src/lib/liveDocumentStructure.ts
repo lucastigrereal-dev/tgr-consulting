@@ -3,7 +3,7 @@ export const LIVE_DOCUMENT_CHAPTERS = [
   { number: "02", title: "Premissas", href: "#study-assumptions", formulaIds: [] },
   { number: "03", title: "Produto", href: "#study-product", formulaIds: [] },
   { number: "04", title: "Vendas", href: "#study-sales", formulaIds: ["gross-sales"] },
-  { number: "05", title: "Receita", href: "#study-revenue", formulaIds: ["gross-entry-generated", "net-entry-collections", "payment-terms-net-settlement"] },
+  { number: "05", title: "Receita", href: "#study-revenue", formulaIds: ["gross-entry-generated", "gross-receivables-generated", "canceled-receivables", "delinquent-balance", "cured-collections", "written-off-balance", "healthy-d90", "net-entry-collections", "payment-terms-net-settlement"] },
   { number: "06", title: "Custos", href: "#study-costs", formulaIds: ["commercial-team-monthly-cost", "operating-cash-flow"] },
   { number: "07", title: "Operação", href: "#study-operation", formulaIds: ["pre-operational-investment", "commercial-team-monthly-cost", "operating-cash-flow"] },
   { number: "08", title: "Caixa", href: "#study-cashflow", formulaIds: ["net-entry-collections", "payment-terms-net-settlement", "pre-operational-investment", "commercial-team-monthly-cost", "operating-cash-flow"] },

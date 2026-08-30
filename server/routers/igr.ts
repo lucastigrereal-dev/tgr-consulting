@@ -15,6 +15,7 @@ import {
   createScenarioForTenant,
   getExportEligibilityForTenant,
   getProductCatalogForTenant,
+  getReceivablesPolicyForTenant,
   getProjectContextForTenant,
   getProjectForTenant,
   getScenarioComparisonForTenant,
@@ -33,6 +34,7 @@ import {
   updateInputsForTenant,
   upsertBuilderComponentForTenant,
   upsertCommercialConditionForTenant,
+  upsertReceivablesPolicyForTenant,
 } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 
@@ -104,6 +106,26 @@ const persistedCommercialConditionSchema = z
     message: "Condição comercial informada exige fonte ou responsável.",
     path: ["sourceRef"],
   });
+const receivablesPolicySchema = z.object({
+  cancellationCurve: z.object({
+    d7: nonNegativeDecimalSchema,
+    d30: nonNegativeDecimalSchema,
+    d60: nonNegativeDecimalSchema,
+    d90: nonNegativeDecimalSchema,
+    d180: nonNegativeDecimalSchema,
+    lifetime: nonNegativeDecimalSchema,
+  }),
+  delinquencyRate: nonNegativeDecimalSchema,
+  cureRates: z.object({
+    days1To30: nonNegativeDecimalSchema,
+    days31To60: nonNegativeDecimalSchema,
+    days61To90: nonNegativeDecimalSchema,
+    days90Plus: nonNegativeDecimalSchema,
+  }),
+  writeOffAfterDays: z.number().int().min(90),
+  policyVersion: z.string().trim().min(1).max(120),
+  sourceRef: z.string().trim().max(500),
+});
 
 export const igrRouter = router({
   projects: protectedProcedure.query(({ ctx }) => listProjectsForTenant(tenantIdFromUser(ctx.user.id))),
@@ -154,6 +176,33 @@ export const igrRouter = router({
       })
     ),
   commercialConditions: protectedProcedure.input(z.object({ versionId: z.string().min(1) })).query(({ ctx, input }) => listCommercialConditionsForTenant(input.versionId, tenantIdFromUser(ctx.user.id))),
+  receivablesPolicy: protectedProcedure
+    .input(z.object({ versionId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      getReceivablesPolicyForTenant(input.versionId, tenantIdFromUser(ctx.user.id))
+    ),
+  upsertReceivablesPolicy: protectedProcedure
+    .input(
+      z
+        .object({
+          versionId: z.string().min(1),
+          status: z.enum(["provided", "pending"]),
+          sourceType: provenanceSourceSchema,
+          sourceRef: z.string().trim().max(500).optional(),
+          policy: receivablesPolicySchema,
+        })
+        .refine(data => data.status === "pending" || Boolean(data.sourceRef?.trim()), {
+          message: "Política de carteira informada exige fonte ou responsável.",
+          path: ["sourceRef"],
+        })
+    )
+    .mutation(({ ctx, input }) =>
+      upsertReceivablesPolicyForTenant({
+        tenantId: tenantIdFromUser(ctx.user.id),
+        actorId: ctx.user.id,
+        ...input,
+      })
+    ),
   upsertCommercialCondition: protectedProcedure
     .input(
       z
@@ -234,7 +283,7 @@ export const igrRouter = router({
     .input(z.object({ snapshotId: z.string().min(1), format: z.enum(["pdf", "pptx", "xlsx"]) }))
     .mutation(({ ctx, input }) => generateAuthorizedExportForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   goalSeek: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: z.enum(["npv", "totalOperatingCashFlow"]), variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate"]), target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: z.enum(["npv", "totalOperatingCashFlow", "healthyD90"]), variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate"]), target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
     .mutation(({ ctx, input }) => runProjectGoalSeekForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
   lineage: protectedProcedure.input(z.object({ formulaId: z.string().min(1) })).query(({ input }) => {
     const registry = new FormulaRegistry([IGR_CORE_FORMULA_SET_V1], IGR_CORE_FORMULA_SET_V1.id);

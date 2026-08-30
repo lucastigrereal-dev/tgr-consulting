@@ -21,6 +21,7 @@ import {
   productPricePhases,
   productSkus,
   projectVersions,
+  receivablesPolicies,
   scenarioBranches,
   type InsertUser,
   users,
@@ -51,6 +52,10 @@ import {
   type CommercialConditionInput,
 } from "../shared/financial/commercialCondition";
 import { resolveAuthoritativeCommercialModel } from "../shared/financial/authoritativeCommercialModel";
+import {
+  assertReceivablesPolicy,
+  type ReceivablesPolicy,
+} from "../shared/financial/receivablesPortfolio";
 import { assertExportEligibility } from "./financial/exportEligibility";
 import {
   buildBoardroomPdf,
@@ -314,14 +319,26 @@ export async function getProjectContextForTenant(
     .where(eq(projectVersions.projectId, projectId))
     .orderBy(desc(projectVersions.createdAt));
   const versionIds = versions.map(version => version.id);
-  const snapshots =
+  const snapshotOrder =
     versionIds.length === 0
       ? []
       : await db
-          .select()
+          .select({ id: calculationSnapshots.id })
           .from(calculationSnapshots)
           .where(inArray(calculationSnapshots.projectVersionId, versionIds))
-          .orderBy(desc(calculationSnapshots.createdAt));
+          .orderBy(desc(calculationSnapshots.createdAt))
+          .limit(8);
+  const snapshotRows = snapshotOrder.length
+    ? await db
+        .select()
+        .from(calculationSnapshots)
+        .where(inArray(calculationSnapshots.id, snapshotOrder.map(row => row.id)))
+    : [];
+  const snapshotsById = new Map(snapshotRows.map(snapshot => [snapshot.id, snapshot]));
+  const snapshots = snapshotOrder.flatMap(row => {
+    const snapshot = snapshotsById.get(row.id);
+    return snapshot ? [snapshot] : [];
+  });
   const latestSnapshot = snapshots[0] ?? null;
   const latestApproval = latestSnapshot
     ? ((
@@ -794,6 +811,140 @@ export async function listCommercialConditionsForTenant(
       reconciliation: reconcileCommercialCondition(condition),
     };
   });
+}
+
+function receivablesPolicyFromRow(
+  row: typeof receivablesPolicies.$inferSelect
+): ReceivablesPolicy {
+  return {
+    cancellationCurve: {
+      d7: row.cancellationD7Text,
+      d30: row.cancellationD30Text,
+      d60: row.cancellationD60Text,
+      d90: row.cancellationD90Text,
+      d180: row.cancellationD180Text,
+      lifetime: row.cancellationLifetimeText,
+    },
+    delinquencyRate: row.delinquencyRateText,
+    cureRates: {
+      days1To30: row.cureDays1To30Text,
+      days31To60: row.cureDays31To60Text,
+      days61To90: row.cureDays61To90Text,
+      days90Plus: row.cureDays90PlusText,
+    },
+    writeOffAfterDays: row.writeOffAfterDays,
+    policyVersion: row.policyVersion,
+    sourceRef: row.sourceRef ?? "",
+  };
+}
+
+export async function getReceivablesPolicyForTenant(
+  versionId: string,
+  tenantId: number
+) {
+  await getVersionForTenant(versionId, tenantId);
+  const db = await requireDb();
+  const rows = await db
+    .select()
+    .from(receivablesPolicies)
+    .where(eq(receivablesPolicies.versionId, versionId))
+    .limit(1);
+  if (!rows[0]) return null;
+  return { record: rows[0], policy: receivablesPolicyFromRow(rows[0]) };
+}
+
+export async function upsertReceivablesPolicyForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  status: "provided" | "pending";
+  sourceType: ProvenanceSourceType;
+  sourceRef?: string;
+  policy: ReceivablesPolicy;
+}) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  if (version.isImmutable || version.state !== "draft") {
+    throw new Error(
+      "A política de carteira só aceita edição na versão de trabalho."
+    );
+  }
+  if (params.status === "provided" && !params.sourceRef?.trim()) {
+    throw new Error("Política de carteira informada exige fonte ou responsável.");
+  }
+  assertReceivablesPolicy({
+    ...params.policy,
+    sourceRef: params.sourceRef?.trim() || params.policy.sourceRef.trim() || "pending",
+  });
+
+  const before = await db
+    .select()
+    .from(receivablesPolicies)
+    .where(eq(receivablesPolicies.versionId, version.id))
+    .limit(1);
+  const record = {
+    id: before[0]?.id ?? nanoid(),
+    versionId: version.id,
+    cancellationD7Text: params.policy.cancellationCurve.d7,
+    cancellationD30Text: params.policy.cancellationCurve.d30,
+    cancellationD60Text: params.policy.cancellationCurve.d60,
+    cancellationD90Text: params.policy.cancellationCurve.d90,
+    cancellationD180Text: params.policy.cancellationCurve.d180,
+    cancellationLifetimeText: params.policy.cancellationCurve.lifetime,
+    delinquencyRateText: params.policy.delinquencyRate,
+    cureDays1To30Text: params.policy.cureRates.days1To30,
+    cureDays31To60Text: params.policy.cureRates.days31To60,
+    cureDays61To90Text: params.policy.cureRates.days61To90,
+    cureDays90PlusText: params.policy.cureRates.days90Plus,
+    writeOffAfterDays: params.policy.writeOffAfterDays,
+    policyVersion: params.policy.policyVersion,
+    status: params.status,
+    sourceType: params.sourceType,
+    sourceRef: params.sourceRef?.trim() || null,
+    updatedBy: params.actorId,
+  };
+  await db.transaction(async transaction => {
+    await transaction
+      .insert(receivablesPolicies)
+      .values(record)
+      .onDuplicateKeyUpdate({
+        set: {
+          cancellationD7Text: record.cancellationD7Text,
+          cancellationD30Text: record.cancellationD30Text,
+          cancellationD60Text: record.cancellationD60Text,
+          cancellationD90Text: record.cancellationD90Text,
+          cancellationD180Text: record.cancellationD180Text,
+          cancellationLifetimeText: record.cancellationLifetimeText,
+          delinquencyRateText: record.delinquencyRateText,
+          cureDays1To30Text: record.cureDays1To30Text,
+          cureDays31To60Text: record.cureDays31To60Text,
+          cureDays61To90Text: record.cureDays61To90Text,
+          cureDays90PlusText: record.cureDays90PlusText,
+          writeOffAfterDays: record.writeOffAfterDays,
+          policyVersion: record.policyVersion,
+          status: record.status,
+          sourceType: record.sourceType,
+          sourceRef: record.sourceRef,
+          updatedBy: record.updatedBy,
+        },
+      });
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "receivables_policy",
+      entityId: record.id,
+      action: "receivables_policy.upserted",
+      actorId: params.actorId,
+      beforeHash: before[0] ? sha256(before[0]) : null,
+      afterHash: sha256(record),
+      metadata: {
+        versionId: version.id,
+        status: record.status,
+        policyVersion: record.policyVersion,
+      },
+    });
+  });
+  return getReceivablesPolicyForTenant(version.id, params.tenantId);
 }
 
 export async function upsertCommercialConditionForTenant(params: {
@@ -1511,6 +1662,10 @@ async function getAuthoritativeCalculationContext(params: {
     version.id,
     params.tenantId
   );
+  const persistedReceivablesPolicy = await getReceivablesPolicyForTenant(
+    version.id,
+    params.tenantId
+  );
   const usesStructuredCommercialDomains =
     productCatalog.records.length > 0 || conditions.length > 0;
   const providedSkuCodes = new Set(
@@ -1534,6 +1689,25 @@ async function getAuthoritativeCalculationContext(params: {
     domainBlockers.push("product_catalog.missing");
   if (conditions.length === 0)
     domainBlockers.push("commercial_conditions.missing");
+  if (!persistedReceivablesPolicy)
+    domainBlockers.push("receivables_policy.missing");
+  else if (persistedReceivablesPolicy.record.status === "pending")
+    domainBlockers.push("receivables_policy.pending");
+  let authoritativeReceivablesPolicy: ReceivablesPolicy | undefined;
+  if (persistedReceivablesPolicy) {
+    try {
+      assertReceivablesPolicy(
+        persistedReceivablesPolicy.record.status === "pending" &&
+          !persistedReceivablesPolicy.policy.sourceRef
+          ? { ...persistedReceivablesPolicy.policy, sourceRef: "pending" }
+          : persistedReceivablesPolicy.policy
+      );
+      if (persistedReceivablesPolicy.record.status === "provided")
+        authoritativeReceivablesPolicy = persistedReceivablesPolicy.policy;
+    } catch {
+      domainInvalidities.push("receivables_policy.invalid");
+    }
+  }
   if (usesStructuredCommercialDomains) {
     if (productCatalog.records.some(record => record.status === "pending"))
       domainBlockers.push("product_catalog.pending_skus");
@@ -1562,7 +1736,7 @@ async function getAuthoritativeCalculationContext(params: {
       domainInvalidities.push(key);
     }
   }
-  const authoritativeDomains = usesStructuredCommercialDomains
+  const authoritativeDomains = usesStructuredCommercialDomains || persistedReceivablesPolicy
     ? {
         asOfMonth: params.asOfMonth,
         productCatalog: {
@@ -1583,6 +1757,14 @@ async function getAuthoritativeCalculationContext(params: {
           reconciliation: item.reconciliation,
         })),
         commercialModel,
+        receivablesPolicy: persistedReceivablesPolicy
+          ? {
+              status: persistedReceivablesPolicy.record.status,
+              sourceType: persistedReceivablesPolicy.record.sourceType,
+              sourceRef: persistedReceivablesPolicy.record.sourceRef,
+              policy: persistedReceivablesPolicy.policy,
+            }
+          : null,
       }
     : undefined;
   const calculationInputs =
@@ -1610,6 +1792,7 @@ async function getAuthoritativeCalculationContext(params: {
         maxContracts: commercialModel!.derived.maxContracts,
         paymentSchedulePerContract:
           commercialModel!.derived.paymentSchedulePerContract,
+        receivablesPolicy: authoritativeReceivablesPolicy!,
       }
     : undefined;
   return {
@@ -1828,6 +2011,11 @@ export async function createScenarioForTenant(params: {
       .select()
       .from(commercialConditions)
       .where(eq(commercialConditions.versionId, currentBase.id));
+    const baseReceivablesPolicy = await transaction
+      .select()
+      .from(receivablesPolicies)
+      .where(eq(receivablesPolicies.versionId, currentBase.id))
+      .limit(1);
     const scenarioSkuIds = new Map(
       baseProductSkus.map(sku => [sku.id, nanoid()])
     );
@@ -1918,6 +2106,30 @@ export async function createScenarioForTenant(params: {
           updatedBy: params.actorId,
         }))
       );
+    }
+    if (baseReceivablesPolicy[0]) {
+      const policy = baseReceivablesPolicy[0];
+      await transaction.insert(receivablesPolicies).values({
+        id: nanoid(),
+        versionId,
+        cancellationD7Text: policy.cancellationD7Text,
+        cancellationD30Text: policy.cancellationD30Text,
+        cancellationD60Text: policy.cancellationD60Text,
+        cancellationD90Text: policy.cancellationD90Text,
+        cancellationD180Text: policy.cancellationD180Text,
+        cancellationLifetimeText: policy.cancellationLifetimeText,
+        delinquencyRateText: policy.delinquencyRateText,
+        cureDays1To30Text: policy.cureDays1To30Text,
+        cureDays31To60Text: policy.cureDays31To60Text,
+        cureDays61To90Text: policy.cureDays61To90Text,
+        cureDays90PlusText: policy.cureDays90PlusText,
+        writeOffAfterDays: policy.writeOffAfterDays,
+        policyVersion: policy.policyVersion,
+        status: policy.status,
+        sourceType: policy.sourceType,
+        sourceRef: policy.sourceRef,
+        updatedBy: params.actorId,
+      });
     }
     await transaction.insert(scenarioBranches).values({
       id: branchId,
@@ -2112,7 +2324,7 @@ export async function calculateCapitalEnvelopeForTenant(params: {
     asOfMonth: params.asOfMonth ?? 0,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("Capital Envelope exige produto e condição comercial válidos, sem itens pendentes.");
+    throw new Error("Capital Envelope exige produto, condição comercial e política de carteira válidos, sem itens pendentes.");
   const calculation = calculateFinancialProjection(
     context.calculationInputs,
     params.horizonMonths,
@@ -2131,7 +2343,7 @@ export async function calculateCapitalEnvelopeForTenant(params: {
 export type ProjectGoalSeekVariable =
   | "qualifiedCouplesMonth1"
   | "conversionRate";
-export type ProjectGoalSeekKpi = "npv" | "totalOperatingCashFlow";
+export type ProjectGoalSeekKpi = "npv" | "totalOperatingCashFlow" | "healthyD90";
 
 export async function runProjectGoalSeekForTenant(params: {
   tenantId: number;
@@ -2159,7 +2371,7 @@ export async function runProjectGoalSeekForTenant(params: {
     asOfMonth: params.asOfMonth ?? 0,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("Goal Seek exige produto e condição comercial válidos, sem itens pendentes.");
+    throw new Error("Goal Seek exige produto, condição comercial e política de carteira válidos, sem itens pendentes.");
   const inputs = context.calculationInputs;
   const baseline = calculateFinancialProjection(inputs, params.horizonMonths, context.calculationOptions);
   if (baseline.status !== "valid")

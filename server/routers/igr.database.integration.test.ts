@@ -7,7 +7,7 @@ import { igrRouter } from "./igr";
 
 const ownerId = 1;
 const outsiderId = 991_001;
-const ids = { projectId: "", versionId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "", commercialConditionId: "" };
+const ids = { projectId: "", versionId: "", pendingSnapshotId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "", commercialConditionId: "", receivablesPolicyId: "", scenarioBranchId: "", scenarioVersionId: "" };
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const, sourceRef: "igr.database.integration.test" });
 const inputs: FinancialInputSnapshot = {
   qualifiedCouplesMonth1: provided("100"), qualifiedCouplesGrowthRate: provided("0"), conversionRate: provided("0.1"), averageTicket: provided("1000"),
@@ -27,16 +27,18 @@ function contextFor(userId: number, role: "user" | "admin" = "admin"): TrpcConte
 afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
-  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId}, ${ids.commercialConditionId})`);
+  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.pendingSnapshotId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId}, ${ids.commercialConditionId}, ${ids.receivablesPolicyId}, ${ids.scenarioBranchId}, ${ids.scenarioVersionId})`);
   await db.execute(sql`DELETE FROM historical_benchmarks WHERE tenantId = ${ownerId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`);
   await db.execute(sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.snapshotId}`);
   await db.execute(sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.snapshotId}`);
-  await db.execute(sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.versionId}`);
+  await db.execute(sql`DELETE FROM calculation_snapshots WHERE projectVersionId IN (${ids.versionId}, ${ids.scenarioVersionId})`);
   await db.execute(sql`DELETE FROM decision_records WHERE versionId = ${ids.versionId}`);
   await db.execute(sql`DELETE FROM cost_catalog_items WHERE versionId = ${ids.versionId}`);
   await db.execute(sql`DELETE FROM project_component_records WHERE versionId = ${ids.versionId}`);
-  await db.execute(sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`);
+  await db.execute(sql`DELETE FROM input_values WHERE versionId IN (${ids.versionId}, ${ids.scenarioVersionId})`);
   await db.execute(sql`DELETE FROM workflow_events WHERE projectId = ${ids.projectId}`);
+  await db.execute(sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`);
+  await db.execute(sql`DELETE FROM project_versions WHERE id = ${ids.scenarioVersionId}`);
   await db.execute(sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
 });
@@ -124,6 +126,85 @@ describe("igrRouter + banco", () => {
       explicitChargesDueMonth: 7,
     });
 
+    const policy = {
+      cancellationCurve: {
+        d7: "0.01",
+        d30: "0.02",
+        d60: "0.03",
+        d90: "0.04",
+        d180: "0.05",
+        lifetime: "0.06",
+      },
+      delinquencyRate: "0.08",
+      cureRates: {
+        days1To30: "0.40",
+        days31To60: "0.30",
+        days61To90: "0.20",
+        days90Plus: "0.10",
+      },
+      writeOffAfterDays: 180,
+      policyVersion: "portfolio-v1",
+      sourceRef: "Ata de política de carteira",
+    };
+    const pendingPolicy = await owner.upsertReceivablesPolicy({
+      versionId: created.versionId,
+      status: "pending",
+      sourceType: "current_decision",
+      policy,
+    });
+    ids.receivablesPolicyId = pendingPolicy.record.id;
+    expect(pendingPolicy).toMatchObject({
+      record: { status: "pending", sourceRef: null },
+      policy: { policyVersion: "portfolio-v1" },
+    });
+    expect(await owner.receivablesPolicy({ versionId: created.versionId })).toMatchObject({
+      record: { id: pendingPolicy.record.id, status: "pending" },
+    });
+    await expect(
+      outsider.receivablesPolicy({ versionId: created.versionId }),
+    ).rejects.toThrow("não autorizado");
+    const pendingSnapshot = await owner.calculate({
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    ids.pendingSnapshotId = pendingSnapshot.id;
+    expect(pendingSnapshot.status).toBe("blocked_by_pending_inputs");
+    expect(pendingSnapshot.domainBlockers).toContain("receivables_policy.pending");
+    expect(pendingSnapshot.domainInvalidities).not.toContain("receivables_policy.invalid");
+
+    const providedPolicy = await owner.upsertReceivablesPolicy({
+      versionId: created.versionId,
+      status: "provided",
+      sourceType: "current_decision",
+      sourceRef: "Ata de política de carteira",
+      policy,
+    });
+    expect(providedPolicy).toMatchObject({
+      record: { id: pendingPolicy.record.id, status: "provided", sourceRef: "Ata de política de carteira" },
+      policy,
+    });
+    await expect(
+      outsider.upsertReceivablesPolicy({
+        versionId: created.versionId,
+        status: "provided",
+        sourceType: "current_decision",
+        sourceRef: "Ata de política de carteira",
+        policy,
+      }),
+    ).rejects.toThrow("não autorizado");
+
+    const scenario = await owner.createScenario({
+      baseVersionId: created.versionId,
+      name: "Política herdada",
+      reason: "Provar cópia autoritativa da política de carteira.",
+    });
+    ids.scenarioBranchId = scenario.branchId;
+    ids.scenarioVersionId = scenario.versionId;
+    expect(await owner.receivablesPolicy({ versionId: scenario.versionId })).toMatchObject({
+      record: { versionId: scenario.versionId, status: "provided", sourceRef: "Ata de política de carteira" },
+      policy,
+    });
+
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });
     ids.snapshotId = snapshot.id; ids.snapshotHash = snapshot.snapshotHash;
     expect(snapshot.kpis.grossSales).toBe("8360000.00000000");
@@ -138,10 +219,15 @@ describe("igrRouter + banco", () => {
       dueMonthOffset: 7,
       grossAmount: "1000.00000000",
     });
+    expect(snapshot.authoritativeDomains?.receivablesPolicy).toMatchObject({
+      status: "provided",
+      policy,
+    });
     expect(Number(snapshot.projections[7]?.grossReceivablesSettled)).toBeGreaterThan(0);
     const contextWithSnapshot = await owner.projectContext({ projectId: created.projectId });
-    expect(contextWithSnapshot.snapshotHistory[0]).toMatchObject({ id: snapshot.id, snapshotHash: snapshot.snapshotHash, calculationStatus: "valid" });
-    expect(contextWithSnapshot.snapshotHistory[0]?.kpis).toHaveProperty("npv");
+    const validSnapshotHistory = contextWithSnapshot.snapshotHistory.find(item => item.id === snapshot.id);
+    expect(validSnapshotHistory).toMatchObject({ id: snapshot.id, snapshotHash: snapshot.snapshotHash, calculationStatus: "valid" });
+    expect(validSnapshotHistory?.kpis).toHaveProperty("npv");
     expect(contextWithSnapshot.latestImpact.changedInputKeys).toContain("averageTicket");
     const simulation = await owner.simulateCaptadores({ versionId: created.versionId, horizonMonths: 24, captadorDelta: "-2", qualifiedCouplesPerCaptadorMonth: "12", loadedCostPerCaptadorMonth: "3500", payrollMonthlyDelta: "750", variableCostMonthlyDelta: "300", capexInitialDelta: "2500" });
     expect(simulation.mode).toBe("non_persistent");
@@ -182,5 +268,14 @@ describe("igrRouter + banco", () => {
     await owner.freezeBaseline({ snapshotId: snapshot.id });
     expect((await owner.exportEligibility({ snapshotId: snapshot.id })).eligible).toBe(true);
     await expect(owner.updateInputs({ versionId: created.versionId, inputs: updatedInputs })).rejects.toThrow("Apenas versão de trabalho");
-  });
+    await expect(
+      owner.upsertReceivablesPolicy({
+        versionId: created.versionId,
+        status: "provided",
+        sourceType: "current_decision",
+        sourceRef: "Ata revisada",
+        policy: { ...policy, sourceRef: "Ata revisada" },
+      }),
+    ).rejects.toThrow("política de carteira");
+  }, 30_000);
 });

@@ -21,6 +21,7 @@ import {
   replaceProductCatalogForTenant,
   saveCommercialModelForTenant,
   upsertCommercialConditionForTenant,
+  upsertReceivablesPolicyForTenant,
   updateInputsForTenant,
 } from "./db";
 
@@ -142,6 +143,34 @@ async function seedAuthoritativeCommercialDomains(
       correctionRate: "0",
       interestRate: "0",
       materialityTolerance: "0.01",
+    },
+  });
+  await upsertReceivablesPolicyForTenant({
+    tenantId,
+    actorId,
+    versionId,
+    status: "provided",
+    sourceType: "current_document",
+    sourceRef: "db.integration.test:receivables-policy",
+    policy: {
+      cancellationCurve: {
+        d7: "0.01",
+        d30: "0.02",
+        d60: "0.03",
+        d90: "0.04",
+        d180: "0.05",
+        lifetime: "0.06",
+      },
+      delinquencyRate: "0.08",
+      cureRates: {
+        days1To30: "0.40",
+        days31To60: "0.30",
+        days61To90: "0.20",
+        days90Plus: "0.10",
+      },
+      writeOffAfterDays: 180,
+      policyVersion: "db-integration-v1",
+      sourceRef: "db.integration.test:receivables-policy",
     },
   });
 }

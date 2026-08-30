@@ -226,6 +226,36 @@ export const commercialConditions = mysqlTable(
   table => [uniqueIndex("commercial_conditions_version_code_unique").on(table.versionId, table.conditionCode), index("commercial_conditions_version_idx").on(table.versionId), index("commercial_conditions_sku_idx").on(table.productSkuId)]
 );
 
+export const receivablesPolicies = mysqlTable(
+  "receivables_policies",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    versionId: varchar("versionId", { length: 64 })
+      .notNull()
+      .references(() => projectVersions.id, { onDelete: "cascade" }),
+    cancellationD7Text: varchar("cancellationD7Text", { length: 255 }).notNull(),
+    cancellationD30Text: varchar("cancellationD30Text", { length: 255 }).notNull(),
+    cancellationD60Text: varchar("cancellationD60Text", { length: 255 }).notNull(),
+    cancellationD90Text: varchar("cancellationD90Text", { length: 255 }).notNull(),
+    cancellationD180Text: varchar("cancellationD180Text", { length: 255 }).notNull(),
+    cancellationLifetimeText: varchar("cancellationLifetimeText", { length: 255 }).notNull(),
+    delinquencyRateText: varchar("delinquencyRateText", { length: 255 }).notNull(),
+    cureDays1To30Text: varchar("cureDays1To30Text", { length: 255 }).notNull(),
+    cureDays31To60Text: varchar("cureDays31To60Text", { length: 255 }).notNull(),
+    cureDays61To90Text: varchar("cureDays61To90Text", { length: 255 }).notNull(),
+    cureDays90PlusText: varchar("cureDays90PlusText", { length: 255 }).notNull(),
+    writeOffAfterDays: int("writeOffAfterDays").notNull(),
+    policyVersion: varchar("policyVersion", { length: 120 }).notNull(),
+    status: mysqlEnum("status", ["provided", "pending"]).notNull(),
+    sourceType: mysqlEnum("sourceType", ["current_decision", "current_document", "historical_primary", "derived_analysis", "external_benchmark", "assumption"]).notNull(),
+    sourceRef: varchar("sourceRef", { length: 500 }),
+    updatedBy: int("updatedBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [uniqueIndex("receivables_policies_version_unique").on(table.versionId)]
+);
+
 export const historicalBenchmarks = mysqlTable(
   "historical_benchmarks",
   {

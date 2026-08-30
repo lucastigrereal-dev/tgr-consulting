@@ -10,6 +10,12 @@ import type {
   MonthlyProjection,
 } from "./types";
 import type { PaymentCalendarComponent } from "./paymentCalendar";
+import {
+  buildReceivablesPortfolio,
+  type ReceivablesPolicy,
+  type ReceivablesPortfolio,
+  type ReceivablesSalesCohort,
+} from "./receivablesPortfolio";
 
 export const FinanceDecimal = Decimal.clone({
   precision: 32,
@@ -39,6 +45,7 @@ export type PaymentSchedulePerContractItem = {
 export type FinancialProjectionOptions = {
   maxContracts?: string;
   paymentSchedulePerContract?: PaymentSchedulePerContractItem[];
+  receivablesPolicy?: ReceivablesPolicy;
 };
 
 function decimalText(value: Decimal): DecimalText {
@@ -179,7 +186,11 @@ export function calculateFinancialProjection(
     throw new Error("O horizonte deve estar entre 1 e 120 meses.");
   }
 
-  const missingInputKeys = getPendingInputKeys(inputs);
+  const missingInputKeys = getPendingInputKeys(inputs).filter(
+    key =>
+      !options?.receivablesPolicy ||
+      (key !== "collectionRate" && key !== "cancellationRate")
+  );
   if (missingInputKeys.length > 0) {
     return {
       status: "blocked_by_pending_inputs",
@@ -194,6 +205,11 @@ export function calculateFinancialProjection(
         grossReceivablesGenerated: null,
         grossReceivablesSettled: null,
         installmentCollections: null,
+        canceledReceivables: null,
+        delinquentBalance: null,
+        curedCollections: null,
+        writtenOffBalance: null,
+        healthyD90: null,
         recognizedRevenue: null,
         paymentFees: null,
         preOperationalInvestment: null,
@@ -210,8 +226,12 @@ export function calculateFinancialProjection(
   const qualifiedCouplesGrowthRate = readInput(inputs, "qualifiedCouplesGrowthRate");
   const conversionRate = readInput(inputs, "conversionRate");
   const averageTicket = readInput(inputs, "averageTicket");
-  const collectionRate = readInput(inputs, "collectionRate");
-  const cancellationRate = readInput(inputs, "cancellationRate");
+  const collectionRate = options?.receivablesPolicy
+    ? ONE
+    : readInput(inputs, "collectionRate");
+  const cancellationRate = options?.receivablesPolicy
+    ? ZERO
+    : readInput(inputs, "cancellationRate");
   const variableCostRate = readInput(inputs, "variableCostRate");
   const partnerShareRate = readInput(inputs, "partnerShareRate");
   const fixedCostMonthly = readInput(inputs, "fixedCostMonthly");
@@ -286,12 +306,74 @@ export function calculateFinancialProjection(
   }
 
   const monthlyDiscountRate = ONE.plus(discountRateAnnual).pow(ONE.div(MONTHS_PER_YEAR)).minus(ONE);
+  let remainingContracts = options?.maxContracts === undefined
+    ? null
+    : new FinanceDecimal(options.maxContracts);
+  if (remainingContracts && remainingContracts.isNegative()) {
+    throw new Error("O limite de contratos não pode ser negativo.");
+  }
+  const salesPlan = Array.from({ length: horizonMonths }, (_, index) => {
+    const month = index + 1;
+    const operationMonth = month - preOperationMonthsNumber;
+    const isOperating = operationMonth > 0;
+    const qualifiedCouples = isOperating
+      ? qualifiedCouplesMonth1.times(
+          ONE.plus(qualifiedCouplesGrowthRate).pow(operationMonth - 1)
+        )
+      : ZERO;
+    const demandedContracts = isOperating
+      ? qualifiedCouples.times(conversionRate)
+      : ZERO;
+    const contracts = remainingContracts === null
+      ? demandedContracts
+      : demandedContracts.lte(remainingContracts)
+        ? demandedContracts
+        : remainingContracts;
+    if (remainingContracts !== null)
+      remainingContracts = remainingContracts.minus(contracts);
+    return { month, operationMonth, isOperating, qualifiedCouples, contracts };
+  });
+  const receivablesPortfolio: ReceivablesPortfolio | undefined =
+    options?.receivablesPolicy
+      ? buildReceivablesPortfolio({
+          cohorts: salesPlan
+            .filter(row => row.contracts.gt(ZERO))
+            .map((row): ReceivablesSalesCohort => ({
+              cohortId: `sales-cohort-${row.month}`,
+              saleMonth: row.month,
+              contracts: decimalText(row.contracts),
+              paymentSchedulePerContract: paymentSchedulePerContract.map(item => ({
+                component: item.component,
+                dueMonthOffset: item.dueMonthOffset,
+                grossAmount: decimalText(item.grossAmount),
+              })),
+            })),
+          policy: options.receivablesPolicy,
+          asOfMonth: horizonMonths,
+        })
+      : undefined;
+  const portfolioMonthly = new Map(
+    receivablesPortfolio?.monthlySummaries.map(summary => [summary.month, summary]) ?? []
+  );
+  const healthyD90ByMonth = new Map<number, Decimal>();
+  for (const cohort of receivablesPortfolio?.cohortSummaries ?? []) {
+    const recognitionMonth = cohort.saleMonth + 3;
+    if (recognitionMonth <= horizonMonths)
+      healthyD90ByMonth.set(
+        recognitionMonth,
+        (healthyD90ByMonth.get(recognitionMonth) ?? ZERO).plus(cohort.healthyD90)
+      );
+  }
   let cumulativeCashFlow = ZERO;
   let grossSalesTotal = ZERO;
   let grossEntryGeneratedTotal = ZERO;
   let grossReceivablesGeneratedTotal = ZERO;
   let grossReceivablesSettledTotal = ZERO;
   let installmentCollectionsTotal = ZERO;
+  let canceledReceivablesTotal = ZERO;
+  let curedCollectionsTotal = ZERO;
+  let writtenOffBalanceTotal = ZERO;
+  let healthyD90Total = ZERO;
   let recognizedRevenueTotal = ZERO;
   let paymentFeesTotal = ZERO;
   let preOperationalInvestmentTotal = ZERO;
@@ -312,47 +394,22 @@ export function calculateFinancialProjection(
     () => ZERO
   );
   const paymentFeeSchedule = Array.from({ length: horizonMonths + 121 }, () => ZERO);
-  let remainingContracts = options?.maxContracts === undefined
-    ? null
-    : new FinanceDecimal(options.maxContracts);
-  if (remainingContracts && remainingContracts.isNegative()) {
-    throw new Error("O limite de contratos não pode ser negativo.");
-  }
 
-  for (let month = 1; month <= horizonMonths; month += 1) {
-    const operationMonth = month - preOperationMonthsNumber;
-    const isOperating = operationMonth > 0;
-    const qualifiedCouples = isOperating
-      ? qualifiedCouplesMonth1.times(ONE.plus(qualifiedCouplesGrowthRate).pow(operationMonth - 1))
-      : ZERO;
-    const demandedContracts = isOperating
-      ? qualifiedCouples.times(conversionRate)
-      : ZERO;
-    const contracts = remainingContracts === null
-      ? demandedContracts
-      : demandedContracts.lte(remainingContracts)
-        ? demandedContracts
-        : remainingContracts;
-    if (remainingContracts !== null) {
-      remainingContracts = remainingContracts.minus(contracts);
-    }
-    const grossSales = contracts.times(averageTicket);
-    const grossEntryGenerated = contracts.times(entryScheduleValuePerContract);
-    const grossReceivablesGenerated = contracts.times(
-      receivableValuePerContract
-    );
-    const collectibleReceivables = paymentSchedulePerContract.map(item => ({
-      component: item.component,
-      dueMonth: month + item.dueMonthOffset,
-      grossAmount: contracts
-        .times(item.grossAmount)
-        .times(collectionRate)
-        .times(ONE.minus(cancellationRate)),
-    }));
-    for (const receivable of collectibleReceivables) {
+  if (receivablesPortfolio) {
+    const portfolioCollectionEvents = receivablesPortfolio.ledger.flatMap(line => [
+      ...(new FinanceDecimal(line.currentCollected).gt(ZERO)
+        ? [{ component: line.component, collectionMonth: line.dueMonth, grossAmount: new FinanceDecimal(line.currentCollected) }]
+        : []),
+      ...line.curedCollections.map(collection => ({
+        component: line.component,
+        collectionMonth: collection.collectionMonth,
+        grossAmount: new FinanceDecimal(collection.amount),
+      })),
+    ]);
+    for (const receivable of portfolioCollectionEvents) {
       for (const method of paymentMethods) {
         const settlementMonth =
-          receivable.dueMonth +
+          receivable.collectionMonth +
           Math.floor(method.settlementDays.div(30).toNumber());
         if (settlementMonth <= horizonMonths) {
           const settledByMethod = receivable.grossAmount.times(method.mix);
@@ -373,6 +430,64 @@ export function calculateFinancialProjection(
         }
       }
     }
+  }
+
+  for (let month = 1; month <= horizonMonths; month += 1) {
+    const { operationMonth, isOperating, qualifiedCouples, contracts } =
+      salesPlan[month - 1]!;
+    const grossSales = contracts.times(averageTicket);
+    const grossEntryGenerated = contracts.times(entryScheduleValuePerContract);
+    const grossReceivablesGenerated = contracts.times(
+      receivableValuePerContract
+    );
+    if (!receivablesPortfolio) {
+      const collectibleReceivables = paymentSchedulePerContract.map(item => ({
+        component: item.component,
+        dueMonth: month + item.dueMonthOffset,
+        grossAmount: contracts
+          .times(item.grossAmount)
+          .times(collectionRate)
+          .times(ONE.minus(cancellationRate)),
+      }));
+      for (const receivable of collectibleReceivables) {
+        for (const method of paymentMethods) {
+          const settlementMonth =
+            receivable.dueMonth +
+            Math.floor(method.settlementDays.div(30).toNumber());
+          if (settlementMonth <= horizonMonths) {
+            const settledByMethod = receivable.grossAmount.times(method.mix);
+            settlementGrossSchedule[settlementMonth] =
+              settlementGrossSchedule[settlementMonth].plus(settledByMethod);
+            const fee = settledByMethod.times(method.mdr);
+            paymentFeeSchedule[settlementMonth] =
+              paymentFeeSchedule[settlementMonth].plus(fee);
+            if (receivable.component === "entry")
+              entrySettlementGrossSchedule[settlementMonth] =
+                entrySettlementGrossSchedule[settlementMonth].plus(settledByMethod);
+            if (receivable.component === "balance") {
+              balanceSettlementGrossSchedule[settlementMonth] =
+                balanceSettlementGrossSchedule[settlementMonth].plus(settledByMethod);
+              balanceFeeSchedule[settlementMonth] =
+                balanceFeeSchedule[settlementMonth].plus(fee);
+            }
+          }
+        }
+      }
+    }
+    const portfolioSummary = portfolioMonthly.get(month);
+    const canceledReceivables = new FinanceDecimal(
+      portfolioSummary?.canceledBeforeDue ?? "0"
+    );
+    const delinquentBalance = new FinanceDecimal(
+      portfolioSummary?.openDelinquent ?? "0"
+    );
+    const curedCollections = new FinanceDecimal(
+      portfolioSummary?.curedCollections ?? "0"
+    );
+    const writtenOffBalance = new FinanceDecimal(
+      portfolioSummary?.writtenOff ?? "0"
+    );
+    const healthyD90 = healthyD90ByMonth.get(month) ?? ZERO;
     const grossEntrySettled = entrySettlementGrossSchedule[month];
     const grossReceivablesSettled = settlementGrossSchedule[month];
     const paymentFees = paymentFeeSchedule[month];
@@ -420,6 +535,11 @@ export function calculateFinancialProjection(
       grossReceivablesGenerated: decimalText(grossReceivablesGenerated),
       grossReceivablesSettled: decimalText(grossReceivablesSettled),
       installmentCollections: decimalText(installmentCollections),
+      canceledReceivables: decimalText(canceledReceivables),
+      delinquentBalance: decimalText(delinquentBalance),
+      curedCollections: decimalText(curedCollections),
+      writtenOffBalance: decimalText(writtenOffBalance),
+      healthyD90: decimalText(healthyD90),
       paymentFees: decimalText(paymentFees),
       netCollections: decimalText(netCollections),
       operatingCashFlow: decimalText(operatingCashFlow),
@@ -438,6 +558,12 @@ export function calculateFinancialProjection(
     installmentCollectionsTotal = installmentCollectionsTotal.plus(
       installmentCollections
     );
+    canceledReceivablesTotal = canceledReceivablesTotal.plus(
+      canceledReceivables
+    );
+    curedCollectionsTotal = curedCollectionsTotal.plus(curedCollections);
+    writtenOffBalanceTotal = writtenOffBalanceTotal.plus(writtenOffBalance);
+    healthyD90Total = healthyD90Total.plus(healthyD90);
     recognizedRevenueTotal = recognizedRevenueTotal.plus(recognizedRevenue);
     paymentFeesTotal = paymentFeesTotal.plus(paymentFees);
     preOperationalInvestmentTotal = preOperationalInvestmentTotal.plus(preOperationalInvestment);
@@ -452,6 +578,9 @@ export function calculateFinancialProjection(
   const irrMonthly = calculateIrrMonthly(cashFlows);
   const irrAnnual = irrMonthly ? ONE.plus(irrMonthly).pow(MONTHS_PER_YEAR).minus(ONE) : null;
   const paybackMonths = calculatePaybackMonths(projections);
+  const delinquentBalanceClosing = projections.length
+    ? new FinanceDecimal(projections[projections.length - 1]!.delinquentBalance)
+    : ZERO;
 
   return {
     status: "valid",
@@ -466,6 +595,11 @@ export function calculateFinancialProjection(
       grossReceivablesGenerated: decimalText(grossReceivablesGeneratedTotal),
       grossReceivablesSettled: decimalText(grossReceivablesSettledTotal),
       installmentCollections: decimalText(installmentCollectionsTotal),
+      canceledReceivables: decimalText(canceledReceivablesTotal),
+      delinquentBalance: decimalText(delinquentBalanceClosing),
+      curedCollections: decimalText(curedCollectionsTotal),
+      writtenOffBalance: decimalText(writtenOffBalanceTotal),
+      healthyD90: decimalText(healthyD90Total),
       recognizedRevenue: decimalText(recognizedRevenueTotal),
       paymentFees: decimalText(paymentFeesTotal),
       preOperationalInvestment: decimalText(preOperationalInvestmentTotal),
@@ -478,8 +612,13 @@ export function calculateFinancialProjection(
       createMemory("grossSales", grossSalesTotal, "gross-sales", "Venda assinada acumulada no horizonte selecionado."),
       createMemory("grossEntryGenerated", grossEntryGeneratedTotal, "gross-entry-generated", "Entrada contratada antes de perdas, taxas e prazo de liquidação."),
       createMemory("grossReceivablesGenerated", grossReceivablesGeneratedTotal, "gross-receivables-generated", "Recebíveis contratuais gerados pela entrada, encargos e saldo parcelado das coortes."),
-      createMemory("grossReceivablesSettled", grossReceivablesSettledTotal, "gross-receivables-settled", "Recebíveis esperados liquidados antes do MDR, após cancelamento e perda agregados enquanto a carteira por aging não está concluída."),
-      createMemory("installmentCollections", installmentCollectionsTotal, "installment-collections", "Parcelas de saldo liquidadas depois de perda, MDR e prazo por método de pagamento."),
+      createMemory("grossReceivablesSettled", grossReceivablesSettledTotal, "gross-receivables-settled", receivablesPortfolio ? "Recebimentos correntes e curados liquidados antes do MDR segundo a política temporal da carteira." : "Recebíveis esperados liquidados antes do MDR no modo legado agregado."),
+      createMemory("installmentCollections", installmentCollectionsTotal, "installment-collections", receivablesPortfolio ? "Parcelas correntes e curadas liquidadas depois de cancelamento, inadimplência, MDR e prazo." : "Parcelas de saldo liquidadas depois de perda agregada, MDR e prazo."),
+      createMemory("canceledReceivables", canceledReceivablesTotal, "canceled-receivables", receivablesPortfolio ? "Recebíveis revertidos por curva temporal de cancelamento da coorte antes do vencimento." : "Modo legado agregado: política de carteira estruturada não fornecida."),
+      createMemory("delinquentBalance", delinquentBalanceClosing, "delinquent-balance", receivablesPortfolio ? "Saldo vencido aberto no fechamento após arrecadação corrente, curas e write-off." : "Modo legado agregado: aging de carteira indisponível."),
+      createMemory("curedCollections", curedCollectionsTotal, "cured-collections", receivablesPortfolio ? "Recebimentos recuperados por curvas condicionais de cura e bucket de aging." : "Modo legado agregado: curas não são separadas."),
+      createMemory("writtenOffBalance", writtenOffBalanceTotal, "written-off-balance", receivablesPortfolio ? "Saldo remanescente baixado após a janela configurada de cobrança." : "Modo legado agregado: write-off não é separado."),
+      createMemory("healthyD90", healthyD90Total, "healthy-d90", receivablesPortfolio ? "Contratos esperados ativos e sem inadimplência não curada aos 90 dias." : "Modo legado agregado: Healthy D90 indisponível."),
       createMemory("recognizedRevenue", recognizedRevenueTotal, "net-entry-collections", "Recebimentos líquidos de entrada, encargos e parcelas depois de perda, MDR e prazo."),
       createMemory("paymentTermsNetSettlement", recognizedRevenueTotal, "payment-terms-net-settlement", "Calendário comercial aplicado ao recebimento líquido: mix, MDR e prazo de liquidação."),
       createMemory("commercialTeamMonthlyCost", payrollMonthly, "commercial-team-monthly-cost", "Folha mensal agregada da estrutura comercial informada na Página 1."),
@@ -489,5 +628,6 @@ export function calculateFinancialProjection(
       createMemory("irrAnnual", irrAnnual, "irr", "Taxa anual equivalente ao retorno interno dos fluxos mensais; fica indisponível quando não há mudança de sinal nos fluxos."),
       createMemory("paybackMonths", paybackMonths, "payback", "Mês de recuperação do caixa acumulado, com interpolação quando o ponto de equilíbrio ocorre entre dois meses."),
     ],
+    ...(receivablesPortfolio ? { receivablesPortfolio } : {}),
   };
 }

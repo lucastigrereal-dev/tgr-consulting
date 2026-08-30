@@ -2,16 +2,16 @@
 
 ## P0 — release blockers
 
-1. **The BRD master journey is not implemented end to end.** Product/inventory and commercial-condition reconciliation are now authoritative and operable in the Builder, but capture-point economics, sales cohorts, receivables, delinquency/cure and Healthy D90 are not yet authoritative domain modules.
-2. **Indexed payment schedules and portfolio accounting remain release blockers.** Entry, explicit charges and balance installments now generate an authoritative Payment Calendar, but positive correction/interest still require an explicit periodicity/index contract; cancellation, delinquency, cure and Healthy D90 remain aggregate rates rather than cohort/ledger events.
-3. **Production credentials and infrastructure are absent from this checkout.** OAuth, database and object storage behavior cannot be called production-ready without an authorized environment.
-4. **Production credentials and infrastructure remain an external release gate.** Local MySQL integration is proven, but OAuth, object storage, backup and deployment behavior still require an authorized production-like environment.
+1. **The BRD master journey is not implemented end to end.** Product/inventory, commercial conditions, Payment Calendar and an aggregate monthly sales-cohort/receivables ledger are authoritative. Capture-point economics, room capacity, workforce/training cohorts and commission policy are still not authoritative domain modules.
+2. **Portfolio accounting is not yet contract-complete.** Cancellation, delinquency, conditional cure, write-off, aging and Healthy D90 are separated and feed cash, scenarios and Goal Seek, but cohorts do not yet carry product/channel/capture-point dimensions. Refunds, commission reversal and inventory return after cancellation are not modeled.
+3. **Positive correction and interest remain blocked.** Entry, explicit charges and balance installments generate an authoritative Payment Calendar, but indexed correction/interest require an explicit index, periodicity and capitalization contract before they may enter an official snapshot.
+4. **Production credentials and infrastructure remain an external release gate.** Local MySQL integration is proven, but OAuth, object storage, backup/restore, deployment and the complete authenticated browser journey require an authorized production-like environment.
 
 ## P1 — material product gaps
 
 1. XLSX now exports snapshot KPIs, formula memory and monthly projections, but inputs/status/source provenance are not embedded in the snapshot payload and therefore cannot yet be reconciled into the workbook.
 2. PDF and PPTX are valid artifacts but still represent an executive summary, not the multi-chapter investor pack required by the BRD.
-3. Goal Seek remains V0: two target KPIs and two economically free levers. Bounds are validated, but non-monotonic objective detection and multi-objective constraints are not implemented.
+3. Goal Seek remains V0: three target KPIs (including Healthy D90) and two economically free levers. Bounds are validated, but non-monotonic objective detection and multi-objective constraints are not implemented.
 4. Boardroom exists and is tested at component level, but fullscreen 1920×1080, keyboard navigation, 200% zoom and visual-regression evidence are not proven.
 5. Backup, retention, RPO/RTO and restore drill are not implemented or proven.
 6. Structured observability, security headers, rate limiting and production error-redaction evidence remain incomplete.
@@ -31,3 +31,5 @@
 10. MySQL 8.4 integration tests now exercise authority, tenant isolation, rollback, baseline, scenarios, exports, product and commercial conditions locally through the repository test harness.
 11. Builder saves the complete product catalog and its commercial conditions through one backend transaction; a forced condition-write failure proves full rollback of both domains.
 12. Reconciled commercial conditions now generate a weighted Payment Calendar per contract. Snapshots separate entry, gross receivables, settled receivables, installment collections and payment fees without floating-point arithmetic.
+13. A normalized, tenant-protected receivables policy now controls cumulative cancellation, delinquency, conditional cure and write-off by version; missing or pending policy blocks the authoritative snapshot.
+14. The financial engine now materializes monthly sales cohorts, receivables ledger, aging, cures, write-off and Healthy D90; the Boardroom, XLSX and Goal Seek consume the same formula-set `1.5.0` outputs.
