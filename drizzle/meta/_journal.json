@@ -85,6 +85,13 @@
       "when": 1788120217314,
       "tag": "0011_project_component_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1788120407135,
+      "tag": "0012_commercial_operations_component",
+      "breakpoints": true
     }
   ]
 }

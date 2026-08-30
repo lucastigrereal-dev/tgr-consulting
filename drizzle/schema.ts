@@ -127,7 +127,7 @@ export const projectComponentRecords = mysqlTable(
     versionId: varchar("versionId", { length: 64 }).notNull(),
     componentType: mysqlEnum("componentType", [
       "project_assembly", "product_stock", "pricing_payments", "acquisition_capacity", "costs_workforce",
-      "commissions_partners", "receivables_losses", "capex_opex",
+      "commissions_partners", "receivables_losses", "capex_opex", "commercial_operations",
     ]).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     status: mysqlEnum("status", ["provided", "pending"]).notNull(),
