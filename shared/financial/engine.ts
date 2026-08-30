@@ -398,6 +398,15 @@ export function calculateFinancialProjection(
     receivablesPortfolio?.monthlySummaries.map(summary => [summary.month, summary]) ?? []
   );
   const healthyD90ByMonth = new Map<number, Decimal>();
+  const healthyD30Rate = options?.receivablesPolicy
+    ? ONE.minus(options.receivablesPolicy.cancellationCurve.d30).times(
+        ONE.minus(
+          new FinanceDecimal(options.receivablesPolicy.delinquencyRate).times(
+            ONE.minus(options.receivablesPolicy.cureRates.days1To30),
+          ),
+        ),
+      )
+    : null;
   for (const cohort of receivablesPortfolio?.cohortSummaries ?? []) {
     const recognitionMonth = cohort.saleMonth + 3;
     if (recognitionMonth <= horizonMonths)
@@ -551,19 +560,20 @@ export function calculateFinancialProjection(
       options?.commercialOperations?.months[month - 1]?.incrementalOperatingCost ?? "0"
     );
     for (const policy of options?.commercialOperations?.commissions.policies ?? []) {
-      const eligibleAmount = policy.eligibleBase === "gross_sales"
-        ? grossSales
-        : policy.eligibleBase === "contracted_entry"
-          ? grossEntryGenerated
-          : policy.eligibleBase === "collected_entry"
-            ? grossEntrySettled
-            : policy.eligibleBase === "validated_sale"
-              ? contracts
-              : policy.eligibleBase === "d90"
-                ? healthyD90
-                : policy.eligibleBase === "fixed"
-                  ? ONE
-                  : contracts;
+      let eligibleAmount: Decimal;
+      switch (policy.eligibleBase) {
+        case "gross_sales": eligibleAmount = grossSales; break;
+        case "contracted_entry": eligibleAmount = grossEntryGenerated; break;
+        case "collected_entry": eligibleAmount = grossEntrySettled; break;
+        case "validated_sale": eligibleAmount = contracts; break;
+        case "d30":
+          if (healthyD30Rate === null)
+            throw new Error("Comissão D30 exige política de carteira estruturada.");
+          eligibleAmount = contracts.times(healthyD30Rate);
+          break;
+        case "d90": eligibleAmount = healthyD90; break;
+        case "fixed": eligibleAmount = ONE; break;
+      }
       const accrualMonth = policy.eligibleBase === "d30" ? month + 1 : month;
       const record: CommissionBaseRecord = {
         recordId: `${policy.policyId}-${month}`,

@@ -232,7 +232,10 @@ describe("motor financeiro determinístico", () => {
           { cohortId: "closers", role: "closer", capacityUnit: "sales", headcount: "1", hireMonth: 0, trainingMonths: 0, certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }], matureProductivity: "8", absenteeismRate: "0", monthlyTurnoverRate: "0", fixedCompensation: "200", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0" },
         ] },
         training: { cashflowTreatment: "incremental", plans: [{ trainingId: "academy", role: "closer", startMonth: 0, candidates: "2", classes: "1", durationMonths: 1, trainers: "1", trainerMonthlyCost: "50", candidateMonthlySalary: "25", monthlySupportCost: "0", approvalRate: "1", certificationRate: "1", timeToProductiveMonths: 0, targetProductivePeople: "2" }] },
-        commissions: { cashflowTreatment: "incremental", policies: [{ policyId: "closer-fixed", role: "closer", eligibleBase: "fixed", mode: "fixed", fixedAmount: "10", percentageRate: "0", tiers: [], guarantee: "0", cutoffDay: 15, paymentLagMonths: 0, qualityMultiplier: "1", holdbackRate: "0", reversalEnabled: false }] },
+        commissions: { cashflowTreatment: "incremental", policies: [
+          { policyId: "closer-fixed", role: "closer", eligibleBase: "fixed", mode: "fixed", fixedAmount: "10", percentageRate: "0", tiers: [], guarantee: "0", cutoffDay: 15, paymentLagMonths: 0, qualityMultiplier: "1", holdbackRate: "0", reversalEnabled: false },
+          { policyId: "closer-d30", role: "closer", eligibleBase: "d30", mode: "percentage", fixedAmount: "0", percentageRate: "1", tiers: [], guarantee: "0", cutoffDay: 15, paymentLagMonths: 0, qualityMultiplier: "1", holdbackRate: "0", reversalEnabled: false },
+        ] },
       },
     });
     const result = calculateFinancialProjection({
@@ -241,21 +244,38 @@ describe("motor financeiro determinístico", () => {
       variableCostRate: provided("0"), partnerShareRate: provided("0"),
       capexInitial: provided("0"), collectionRate: provided("1"),
       cancellationRate: provided("0"), discountRateAnnual: provided("0"),
-    }, 2, { pointEconomics, commercialOperations });
+    }, 2, {
+      pointEconomics,
+      commercialOperations,
+      receivablesPolicy: {
+        cancellationCurve: { d7: "0", d30: "0.25", d60: "0.25", d90: "0.25", d180: "0.25", lifetime: "0.25" },
+        delinquencyRate: "0.2",
+        cureRates: { days1To30: "0.5", days31To60: "0", days61To90: "0", days90Plus: "0" },
+        writeOffAfterDays: 90,
+        policyVersion: "commission-d30-test-v1",
+        sourceRef: "engine-test",
+      },
+    });
 
     expect(result.projections[0]).toMatchObject({
       contracts: "8.00000000",
       commercialOperationsCosts: "400.00000000",
       commissionPayments: "10.00000000",
-      operatingCashFlow: "390.00000000",
+      operatingCashFlow: "230.00000000",
     });
     expect(result.projections[1]).toMatchObject({
       contracts: "8.00000000",
       commercialOperationsCosts: "300.00000000",
-      commissionPayments: "10.00000000",
-      operatingCashFlow: "490.00000000",
+      commissionPayments: "15.40000000",
+      operatingCashFlow: "404.60000000",
     });
-    expect(result.commissionLedger?.totals.payable).toBe("20.00000000");
+    expect(result.commissionLedger?.totals.payable).toBe("30.80000000");
+    expect(result.commissionLedger?.accruals.find(record => record.policyId === "closer-d30")).toMatchObject({
+      accrualMonth: 2,
+      paymentMonth: 2,
+      eligibleAmount: "5.40000000",
+      payableCommission: "5.40000000",
+    });
   });
 
   it("aloca captação, sala e sales kit nos meses específicos quando o cronograma está completo", () => {
