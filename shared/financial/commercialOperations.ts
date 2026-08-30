@@ -433,6 +433,83 @@ export type CommissionBaseRecord = {
   isReversal: boolean;
 };
 
+export type CommercialOperationsCashflowTreatment =
+  | "incremental"
+  | "included_in_project_totals";
+
+export type CommercialOperationsDefinition = {
+  room: Omit<
+    RoomCapacityInput,
+    "plannedToursMonthly" | "plannedSalesMonthly" | "saleRate"
+  >;
+  workforce: {
+    cashflowTreatment: CommercialOperationsCashflowTreatment;
+    cohorts: WorkforceCohortInput[];
+  };
+  training: {
+    cashflowTreatment: CommercialOperationsCashflowTreatment;
+    plans: Array<Omit<TrainingEconomicsInput, "horizonMonths">>;
+  };
+  commissions: {
+    cashflowTreatment: CommercialOperationsCashflowTreatment;
+    policies: CommissionPolicy[];
+  };
+};
+
+export function calculateCommercialOperations(input: {
+  definition: CommercialOperationsDefinition;
+  horizonMonths: number;
+  pointDemand: { toursMonthly: string; salesMonthly: string };
+}) {
+  integer(input.horizonMonths, "horizonMonths", 1);
+  const pointTours = decimal(input.pointDemand.toursMonthly, "pointDemand.toursMonthly");
+  const pointSales = decimal(input.pointDemand.salesMonthly, "pointDemand.salesMonthly");
+  const room = calculateRoomCapacity({
+    ...input.definition.room,
+    plannedToursMonthly: text(pointTours),
+    plannedSalesMonthly: text(pointSales),
+    saleRate: pointTours.eq(ZERO) ? text(ZERO) : text(pointSales.div(pointTours)),
+  });
+  const workforce = projectWorkforceCohorts({
+    cohorts: input.definition.workforce.cohorts,
+    horizonMonths: input.horizonMonths,
+  });
+  if (!input.definition.workforce.cohorts.some(cohort => cohort.capacityUnit === "tours")) {
+    throw new Error("workforce exige ao menos uma coorte com capacityUnit tours.");
+  }
+  if (!input.definition.workforce.cohorts.some(cohort => cohort.capacityUnit === "sales")) {
+    throw new Error("workforce exige ao menos uma coorte com capacityUnit sales.");
+  }
+  const training = input.definition.training.plans.map(plan =>
+    calculateTrainingEconomics({ ...plan, horizonMonths: input.horizonMonths })
+  );
+  const roomTourCapacity = new OperationsDecimal(room.capacity.limitedToursMonthly);
+  const roomSalesCapacity = new OperationsDecimal(room.capacity.limitedSalesMonthly);
+  const months = workforce.months.map(month => {
+    const workforceTourCapacity = sum(month.cohorts
+      .filter(cohort => cohort.capacityUnit === "tours")
+      .map(cohort => new OperationsDecimal(cohort.capacity)));
+    const workforceSalesCapacity = sum(month.cohorts
+      .filter(cohort => cohort.capacityUnit === "sales")
+      .map(cohort => new OperationsDecimal(cohort.capacity)));
+    const workforceCost = input.definition.workforce.cashflowTreatment === "incremental"
+      ? new OperationsDecimal(month.totalCost)
+      : ZERO;
+    const trainingCost = input.definition.training.cashflowTreatment === "incremental"
+      ? sum(training.map(plan => new OperationsDecimal(plan.months[month.month]?.cost ?? "0")))
+      : ZERO;
+    return {
+      month: month.month,
+      tourCapacity: text(OperationsDecimal.min(roomTourCapacity, workforceTourCapacity)),
+      salesCapacity: text(OperationsDecimal.min(roomSalesCapacity, workforceSalesCapacity)),
+      incrementalWorkforceCost: text(workforceCost),
+      incrementalTrainingCost: text(trainingCost),
+      incrementalOperatingCost: text(workforceCost.plus(trainingCost)),
+    };
+  });
+  return { room, workforce, training, months };
+}
+
 function percentageCommission(base: D, baseRate: D, tiers: Array<{ threshold: D; rate: D }>) {
   let cursor = ZERO;
   let currentRate = baseRate;
