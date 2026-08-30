@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
@@ -2593,7 +2593,43 @@ export async function approveSnapshotForTenant(params: {
       "Somente snapshot autoritativo e validado pode ser aprovado."
     );
   }
-  await db.transaction(async transaction => {
+  return db.transaction(async transaction => {
+    await transaction.execute(
+      sql`SELECT id FROM project_versions WHERE id = ${version.id} FOR UPDATE`
+    );
+    const currentVersion = (
+      await transaction
+        .select()
+        .from(projectVersions)
+        .where(eq(projectVersions.id, version.id))
+        .limit(1)
+    )[0];
+    if (!currentVersion)
+      throw new Error("A versão do snapshot deixou de existir.");
+    const existingApproval = (
+      await transaction
+        .select({ id: approvalDecisions.id })
+        .from(approvalDecisions)
+        .where(
+          and(
+            eq(approvalDecisions.snapshotId, snapshot[0].id),
+            eq(approvalDecisions.decision, "approved")
+          )
+        )
+        .limit(1)
+    )[0];
+    if (existingApproval) {
+      return {
+        approved: true as const,
+        snapshotId: snapshot[0].id,
+        idempotent: true as const,
+      };
+    }
+    if (currentVersion.state !== "in_review") {
+      throw new Error(
+        "A aprovação só pode nascer de uma versão em revisão."
+      );
+    }
     await transaction.insert(approvalDecisions).values({
       id: nanoid(),
       snapshotId: snapshot[0].id,
@@ -2605,7 +2641,7 @@ export async function approveSnapshotForTenant(params: {
       id: nanoid(),
       projectId: version.projectId,
       versionId: version.id,
-      fromState: version.state,
+      fromState: "in_review",
       toState: "approved",
       action: "snapshot.approved",
       rationale: params.rationale,
@@ -2629,8 +2665,12 @@ export async function approveSnapshotForTenant(params: {
       afterHash: snapshot[0].snapshotHash,
       metadata: { rationale: params.rationale },
     });
+    return {
+      approved: true as const,
+      snapshotId: snapshot[0].id,
+      idempotent: false as const,
+    };
   });
-  return { approved: true as const, snapshotId: snapshot[0].id };
 }
 
 export async function freezeBaselineForTenant(params: {
@@ -2651,34 +2691,73 @@ export async function freezeBaselineForTenant(params: {
     snapshot.projectVersionId,
     params.tenantId
   );
-  const approval = (
-    await db
-      .select()
-      .from(approvalDecisions)
-      .where(
-        and(
-          eq(approvalDecisions.snapshotId, params.snapshotId),
-          eq(approvalDecisions.decision, "approved")
-        )
-      )
-      .limit(1)
-  )[0];
-  assertExportEligibility({
-    isAuthoritative: snapshot.isAuthoritative,
-    validationStatus: snapshot.validationStatus,
-    approved: Boolean(approval),
-  });
-  if (version.state !== "approved")
-    throw new Error(
-      "A versão precisa estar aprovada antes de congelar baseline."
-    );
   const calculation =
     snapshot.payload as unknown as import("../shared/financial/types").FinancialCalculation;
-  await db.transaction(async transaction => {
+  return db.transaction(async transaction => {
+    await transaction.execute(
+      sql`SELECT id FROM project_versions WHERE id = ${version.id} FOR UPDATE`
+    );
+    const currentVersion = (
+      await transaction
+        .select()
+        .from(projectVersions)
+        .where(eq(projectVersions.id, version.id))
+        .limit(1)
+    )[0];
+    if (!currentVersion)
+      throw new Error("A versão do snapshot deixou de existir.");
+    const approval = (
+      await transaction
+        .select()
+        .from(approvalDecisions)
+        .where(
+          and(
+            eq(approvalDecisions.snapshotId, params.snapshotId),
+            eq(approvalDecisions.decision, "approved")
+          )
+        )
+        .limit(1)
+    )[0];
+    assertExportEligibility({
+      isAuthoritative: snapshot.isAuthoritative,
+      validationStatus: snapshot.validationStatus,
+      approved: Boolean(approval),
+    });
+    if (currentVersion.state === "baseline") {
+      const existingBenchmark = (
+        await transaction
+          .select({ id: historicalBenchmarks.id })
+          .from(historicalBenchmarks)
+          .where(
+            and(
+              eq(historicalBenchmarks.tenantId, params.tenantId),
+              eq(
+                historicalBenchmarks.sourceRef,
+                `snapshot:${snapshot.snapshotHash}`
+              )
+            )
+          )
+          .limit(1)
+      )[0];
+      if (!existingBenchmark) {
+        throw new Error(
+          "A versão já é baseline de outro lifecycle; congelamento recusado."
+        );
+      }
+      return {
+        versionId: currentVersion.id,
+        baseline: true as const,
+        idempotent: true as const,
+      };
+    }
+    if (currentVersion.state !== "approved")
+      throw new Error(
+        "A versão precisa estar aprovada antes de congelar baseline."
+      );
     await transaction.insert(workflowEvents).values({
       id: nanoid(),
-      projectId: version.projectId,
-      versionId: version.id,
+      projectId: currentVersion.projectId,
+      versionId: currentVersion.id,
       fromState: "approved",
       toState: "baseline",
       action: "baseline.frozen",
@@ -2687,15 +2766,15 @@ export async function freezeBaselineForTenant(params: {
     await transaction
       .update(projectVersions)
       .set({ state: "baseline", kind: "baseline", isImmutable: true })
-      .where(eq(projectVersions.id, version.id));
+      .where(eq(projectVersions.id, currentVersion.id));
     await transaction
       .update(projects)
       .set({ status: "baseline" })
-      .where(eq(projects.id, version.projectId));
+      .where(eq(projects.id, currentVersion.projectId));
     await transaction.insert(historicalBenchmarks).values({
       id: nanoid(),
       tenantId: params.tenantId,
-      name: `Baseline interno ${version.projectId.slice(0, 8)}`,
+      name: `Baseline interno ${currentVersion.projectId.slice(0, 8)}`,
       vertical: "internal_decision",
       periodLabel: new Date().toISOString().slice(0, 10),
       status: "provided",
@@ -2708,13 +2787,17 @@ export async function freezeBaselineForTenant(params: {
       id: nanoid(),
       tenantId: params.tenantId,
       entityType: "project_version",
-      entityId: version.id,
+      entityId: currentVersion.id,
       action: "baseline.frozen",
       actorId: params.actorId,
       afterHash: snapshot.snapshotHash,
     });
+    return {
+      versionId: currentVersion.id,
+      baseline: true as const,
+      idempotent: false as const,
+    };
   });
-  return { versionId: version.id, baseline: true as const };
 }
 
 export async function calculateCapitalEnvelopeForTenant(params: {

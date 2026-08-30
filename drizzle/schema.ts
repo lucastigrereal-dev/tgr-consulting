@@ -387,7 +387,13 @@ export const approvalDecisions = mysqlTable(
     decidedBy: int("decidedBy").notNull(),
     decidedAt: timestamp("decidedAt").defaultNow().notNull(),
   },
-  (table) => [index("approval_decisions_snapshot_idx").on(table.snapshotId)],
+  (table) => [
+    uniqueIndex("approval_decisions_snapshot_decision_unique").on(
+      table.snapshotId,
+      table.decision,
+    ),
+    index("approval_decisions_snapshot_idx").on(table.snapshotId),
+  ],
 );
 
 export const workflowEvents = mysqlTable(

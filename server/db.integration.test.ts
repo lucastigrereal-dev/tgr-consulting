@@ -1,6 +1,12 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
-import { exportArtifacts } from "../drizzle/schema";
+import {
+  approvalDecisions,
+  auditEvents,
+  exportArtifacts,
+  historicalBenchmarks,
+  workflowEvents,
+} from "../drizzle/schema";
 import { FinanceDecimal } from "../shared/financial/engine";
 import type { CommercialOperationsDefinition } from "../shared/financial/commercialOperations";
 import type { FinancialInputSnapshot } from "../shared/financial/types";
@@ -1091,17 +1097,127 @@ describe("IGR database integration", () => {
       (await getExportEligibilityForTenant(snapshot.id, tenantId)).eligible
     ).toBe(false);
 
-    await approveSnapshotForTenant({
-      tenantId,
-      actorId,
-      snapshotId: snapshot.id,
-      rationale: "Integração valida o ciclo de governança.",
-    });
-    await freezeBaselineForTenant({
-      tenantId,
-      actorId,
-      snapshotId: snapshot.id,
-    });
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+    const approvalResults = await Promise.all([
+      approveSnapshotForTenant({
+        tenantId,
+        actorId,
+        snapshotId: snapshot.id,
+        rationale: "Integração valida o ciclo de governança.",
+      }),
+      approveSnapshotForTenant({
+        tenantId,
+        actorId,
+        snapshotId: snapshot.id,
+        rationale: "Repetição concorrente deve ser idempotente.",
+      }),
+    ]);
+    expect(approvalResults.map(result => result.idempotent).sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(
+      await approveSnapshotForTenant({
+        tenantId,
+        actorId,
+        snapshotId: snapshot.id,
+        rationale: "Repetição sequencial deve ser idempotente.",
+      })
+    ).toMatchObject({ approved: true, idempotent: true });
+    expect(
+      await db
+        .select({ id: approvalDecisions.id })
+        .from(approvalDecisions)
+        .where(
+          and(
+            eq(approvalDecisions.snapshotId, snapshot.id),
+            eq(approvalDecisions.decision, "approved")
+          )
+        )
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: workflowEvents.id })
+        .from(workflowEvents)
+        .where(
+          and(
+            eq(workflowEvents.versionId, created.versionId),
+            eq(workflowEvents.action, "snapshot.approved")
+          )
+        )
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: auditEvents.id })
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.entityId, snapshot.id),
+            eq(auditEvents.action, "snapshot.approved")
+          )
+        )
+    ).toHaveLength(1);
+
+    const baselineResults = await Promise.all([
+      freezeBaselineForTenant({
+        tenantId,
+        actorId,
+        snapshotId: snapshot.id,
+      }),
+      freezeBaselineForTenant({
+        tenantId,
+        actorId,
+        snapshotId: snapshot.id,
+      }),
+    ]);
+    expect(baselineResults.map(result => result.idempotent).sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(
+      await freezeBaselineForTenant({
+        tenantId,
+        actorId,
+        snapshotId: snapshot.id,
+      })
+    ).toMatchObject({ baseline: true, idempotent: true });
+    expect(
+      await db
+        .select({ id: workflowEvents.id })
+        .from(workflowEvents)
+        .where(
+          and(
+            eq(workflowEvents.versionId, created.versionId),
+            eq(workflowEvents.action, "baseline.frozen")
+          )
+        )
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: auditEvents.id })
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.entityId, created.versionId),
+            eq(auditEvents.action, "baseline.frozen")
+          )
+        )
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: historicalBenchmarks.id })
+        .from(historicalBenchmarks)
+        .where(
+          and(
+            eq(historicalBenchmarks.tenantId, tenantId),
+            eq(
+              historicalBenchmarks.sourceRef,
+              `snapshot:${snapshot.snapshotHash}`
+            )
+          )
+        )
+    ).toHaveLength(1);
     const context = await getProjectContextForTenant(
       created.projectId,
       tenantId

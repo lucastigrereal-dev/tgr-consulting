@@ -92,6 +92,13 @@
       "when": 1788120407135,
       "tag": "0012_commercial_operations_component",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1788123381044,
+      "tag": "0013_lifecycle_idempotency",
+      "breakpoints": true
     }
   ]
 }
