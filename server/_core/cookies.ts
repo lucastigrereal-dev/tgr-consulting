@@ -1,6 +1,8 @@
 import type { CookieOptions, Request } from "express";
+import { OAUTH_STATE_COOKIE } from "@shared/const";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+export const DEV_OAUTH_STATE_COOKIE = "oauth_state";
 
 function isIpAddress(host: string) {
   // Basic IPv4 check and IPv6 presence detection.
@@ -8,7 +10,7 @@ function isIpAddress(host: string) {
   return host.includes(":");
 }
 
-function isSecureRequest(req: Request) {
+export function isSecureRequest(req: Request) {
   if (req.protocol === "https") return true;
 
   const forwardedProto = req.headers["x-forwarded-proto"];
@@ -39,10 +41,26 @@ export function getSessionCookieOptions(
   //       ? hostname
   //       : undefined;
 
+  const secure = isSecureRequest(req);
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
-    secure: isSecureRequest(req),
+    sameSite: secure ? "none" : "lax",
+    secure,
+  };
+}
+
+export function getOAuthStateCookieName(req: Request) {
+  return isSecureRequest(req) ? OAUTH_STATE_COOKIE : DEV_OAUTH_STATE_COOKIE;
+}
+
+export function getOAuthStateCookieOptions(
+  req: Request
+): Pick<CookieOptions, "path" | "sameSite" | "secure"> {
+  const secure = isSecureRequest(req);
+  return {
+    path: "/",
+    sameSite: secure ? "none" : "lax",
+    secure,
   };
 }

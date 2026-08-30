@@ -18,6 +18,37 @@ import type {
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 
+const SECRET_TEXT_PATTERNS = [
+  /Bearer\s+[A-Za-z0-9._~+/=-]+/gi,
+  /\b(accessToken|jwtToken|token|code|authorization)=([^&\s]+)/gi,
+] as const;
+
+function redactText(value: string) {
+  return SECRET_TEXT_PATTERNS.reduce(
+    (current, pattern) => current.replace(pattern, "$1=[REDACTED]"),
+    value
+  );
+}
+
+export function redactErrorForLog(error: unknown) {
+  if (axios.isAxiosError(error)) {
+    return {
+      name: error.name,
+      message: redactText(error.message),
+      code: error.code,
+      status: error.response?.status,
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: redactText(error.message),
+    };
+  }
+  if (typeof error === "string") return { message: redactText(error) };
+  return { message: "Unknown error" };
+}
+
 export type SessionPayload = {
   openId: string;
   appId: string;
@@ -302,7 +333,10 @@ class SDKServer {
         });
         user = await db.getUserByOpenId(userInfo.openId);
       } catch (error) {
-        console.error("[Auth] Failed to sync user from OAuth:", error);
+        console.error(
+          "[Auth] Failed to sync user from OAuth:",
+          redactErrorForLog(error)
+        );
         throw ForbiddenError("Failed to sync user info");
       }
     }

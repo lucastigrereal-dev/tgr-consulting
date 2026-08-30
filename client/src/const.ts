@@ -2,6 +2,22 @@ import { OAUTH_STATE_COOKIE, encodeOAuthState } from "@shared/const";
 
 export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 
+export const DEV_OAUTH_STATE_COOKIE = "oauth_state";
+
+export function getOAuthStateCookieForProtocol(protocol: string) {
+  const isSecure = protocol === "https:";
+  return {
+    name: isSecure ? OAUTH_STATE_COOKIE : DEV_OAUTH_STATE_COOKIE,
+    attributes: isSecure
+      ? "Path=/; Max-Age=600; SameSite=None; Secure"
+      : "Path=/; Max-Age=600; SameSite=Lax",
+  };
+}
+
+function getOAuthStateCookieForCurrentOrigin() {
+  return getOAuthStateCookieForProtocol(window.location.protocol);
+}
+
 // Start the Manus OAuth login. Call this from an event handler or effect at the
 // moment you want to navigate, e.g. `onClick={() => startLogin()}`.
 //
@@ -18,7 +34,8 @@ export const startLogin = () => {
   const redirectUri = `${window.location.origin}/api/oauth/callback`;
 
   const nonce = crypto.randomUUID();
-  document.cookie = `${OAUTH_STATE_COOKIE}=${nonce}; Path=/; Max-Age=600; SameSite=None; Secure`;
+  const stateCookie = getOAuthStateCookieForCurrentOrigin();
+  document.cookie = `${stateCookie.name}=${nonce}; ${stateCookie.attributes}`;
   const state = encodeOAuthState({ redirectUri, nonce });
 
   const url = new URL(`${oauthPortalUrl}/app-auth`);

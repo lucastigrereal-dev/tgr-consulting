@@ -1,11 +1,38 @@
 import type { Express } from "express";
 import { ENV } from "./env";
+import { redactErrorForLog, sdk } from "./sdk";
+
+function getStorageKey(params: { key?: string | string[] }) {
+  return Array.isArray(params.key) ? params.key.join("/") : params.key;
+}
+
+function isAuthorizedExportKey(key: string, tenantId: number) {
+  const normalized = key.replace(/^\/+/, "");
+  return (
+    normalized === key &&
+    !normalized.includes("..") &&
+    normalized.startsWith(`igr/${tenantId}/exports/`)
+  );
+}
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*key", async (req, res) => {
-    const key = Array.isArray(req.params.key) ? req.params.key.join("/") : req.params.key;
+    const key = getStorageKey(req.params);
     if (!key) {
       res.status(400).send("Missing storage key");
+      return;
+    }
+
+    let user: Awaited<ReturnType<typeof sdk.authenticateRequest>>;
+    try {
+      user = await sdk.authenticateRequest(req);
+    } catch {
+      res.status(401).send("Authentication required");
+      return;
+    }
+
+    if (!isAuthorizedExportKey(key, user.id)) {
+      res.status(403).send("Storage key not authorized");
       return;
     }
 
@@ -26,8 +53,10 @@ export function registerStorageProxy(app: Express) {
       });
 
       if (!forgeResp.ok) {
-        const body = await forgeResp.text().catch(() => "");
-        console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
+        console.error("[StorageProxy] forge error", {
+          status: forgeResp.status,
+          keyPrefix: `igr/${user.id}/exports/`,
+        });
         res.status(502).send("Storage backend error");
         return;
       }
@@ -41,7 +70,7 @@ export function registerStorageProxy(app: Express) {
       res.set("Cache-Control", "no-store");
       res.redirect(307, url);
     } catch (err) {
-      console.error("[StorageProxy] failed:", err);
+      console.error("[StorageProxy] failed:", redactErrorForLog(err));
       res.status(502).send("Storage proxy error");
     }
   });
