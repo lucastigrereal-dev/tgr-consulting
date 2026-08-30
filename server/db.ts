@@ -158,31 +158,43 @@ async function ensureCoreFormulaSet(actorId: number): Promise<string> {
     .where(eq(formulaSetVersions.id, IGR_CORE_FORMULA_SET_V1.id))
     .limit(1);
   if (existing[0]) return IGR_CORE_FORMULA_SET_V1.id;
-  await db.insert(formulaSetVersions).values({
-    id: IGR_CORE_FORMULA_SET_V1.id,
-    semanticVersion: IGR_CORE_FORMULA_SET_V1.semanticVersion,
-    engineVersion: IGR_CORE_FORMULA_SET_V1.engineVersion,
-    status: "published",
-    definitions: IGR_CORE_FORMULA_SET_V1.definitions as unknown as Record<
-      string,
-      unknown
-    >,
-    publishedBy: actorId,
-    publishedAt: new Date(),
+  await db.transaction(async transaction => {
+    await transaction
+      .insert(formulaSetVersions)
+      .values({
+        id: IGR_CORE_FORMULA_SET_V1.id,
+        semanticVersion: IGR_CORE_FORMULA_SET_V1.semanticVersion,
+        engineVersion: IGR_CORE_FORMULA_SET_V1.engineVersion,
+        status: "published",
+        definitions: IGR_CORE_FORMULA_SET_V1.definitions as unknown as Record<
+          string,
+          unknown
+        >,
+        publishedBy: actorId,
+        publishedAt: new Date(),
+      })
+      .onDuplicateKeyUpdate({
+        set: { id: IGR_CORE_FORMULA_SET_V1.id },
+      });
+    await transaction
+      .insert(formulaDefinitionProvenance)
+      .values(
+        IGR_CORE_FORMULA_SET_V1.definitions.map(definition => ({
+          id: nanoid(),
+          formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id,
+          formulaId: definition.id,
+          formulaVersion: definition.version,
+          expression: definition.expression,
+          dependencyKeys: definition.dependencies,
+          description: definition.description,
+          sourceRef: "IGR_CORE_FORMULA_SET_V1",
+          publishedBy: actorId,
+        }))
+      )
+      .onDuplicateKeyUpdate({
+        set: { formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id },
+      });
   });
-  await db.insert(formulaDefinitionProvenance).values(
-    IGR_CORE_FORMULA_SET_V1.definitions.map(definition => ({
-      id: nanoid(),
-      formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id,
-      formulaId: definition.id,
-      formulaVersion: definition.version,
-      expression: definition.expression,
-      dependencyKeys: definition.dependencies,
-      description: definition.description,
-      sourceRef: "IGR_CORE_FORMULA_SET_V1",
-      publishedBy: actorId,
-    }))
-  );
   return IGR_CORE_FORMULA_SET_V1.id;
 }
 

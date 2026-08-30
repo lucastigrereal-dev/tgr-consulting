@@ -14,6 +14,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Database integration files share one explicitly ephemeral schema. Running
+    // files concurrently lets one suite clean rows while another is writing.
+    fileParallelism: false,
     include: ["server/**/*.test.ts", "server/**/*.spec.ts", "shared/**/*.test.ts", "shared/**/*.spec.ts", "client/src/*.test.ts", "client/src/lib/**/*.test.ts", "client/src/lib/**/*.spec.ts", "client/src/components/**/*.test.tsx", "client/src/components/**/*.spec.tsx", "client/src/pages/**/*.test.tsx", "client/src/pages/**/*.spec.tsx"],
   },
 });
