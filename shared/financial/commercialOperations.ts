@@ -196,6 +196,7 @@ export function calculateRoomCapacity(input: RoomCapacityInput) {
 export type WorkforceCohortInput = {
   cohortId: string;
   role: string;
+  capacityUnit: "tours" | "sales" | "support";
   headcount: string;
   hireMonth: number;
   trainingMonths: number;
@@ -285,6 +286,7 @@ export function projectWorkforceCohorts(input: {
       return {
         cohortId: cohort.source.cohortId,
         role: cohort.source.role,
+        capacityUnit: cohort.source.capacityUnit,
         activeHeadcount: text(active),
         effectiveFte: text(effectiveFte),
         capacity: text(capacity),
@@ -321,6 +323,8 @@ export function projectWorkforceCohorts(input: {
 
 export type TrainingEconomicsInput = {
   trainingId: string;
+  role: string;
+  startMonth: number;
   candidates: string;
   classes: string;
   durationMonths: number;
@@ -337,6 +341,8 @@ export type TrainingEconomicsInput = {
 
 export function calculateTrainingEconomics(input: TrainingEconomicsInput) {
   required(input.trainingId, "trainingId");
+  required(input.role, "role");
+  integer(input.startMonth, "startMonth");
   integer(input.durationMonths, "durationMonths", 1);
   integer(input.timeToProductiveMonths, "timeToProductiveMonths");
   integer(input.horizonMonths, "horizonMonths", 1);
@@ -350,10 +356,11 @@ export function calculateTrainingEconomics(input: TrainingEconomicsInput) {
   const approved = candidates.times(rate(input.approvalRate, "approvalRate"));
   const certified = approved.times(rate(input.certificationRate, "certificationRate"));
   const target = decimal(input.targetProductivePeople, "targetProductivePeople");
-  const productiveMonth = input.durationMonths + input.timeToProductiveMonths;
+  const trainingEndMonth = input.startMonth + input.durationMonths;
+  const productiveMonth = trainingEndMonth + input.timeToProductiveMonths;
   const months = Array.from({ length: input.horizonMonths }, (_, month) => {
-    const inTraining = month < input.durationMonths;
-    const inProductiveRamp = month >= input.durationMonths && month < productiveMonth;
+    const inTraining = month >= input.startMonth && month < trainingEndMonth;
+    const inProductiveRamp = month >= trainingEndMonth && month < productiveMonth;
     const productivePeople = month >= productiveMonth ? certified : ZERO;
     const trainerAndSupport = inTraining ? trainers.times(trainerCost).plus(supportCost) : ZERO;
     const salaryPopulation = inTraining ? candidates : inProductiveRamp ? certified : ZERO;
@@ -374,6 +381,7 @@ export function calculateTrainingEconomics(input: TrainingEconomicsInput) {
     .map(month => new OperationsDecimal(month.cost)));
   return {
     trainingId: input.trainingId,
+    role: input.role,
     summary: {
       candidatesPerClass: text(candidates.div(classes)),
       approvedPeople: text(approved),

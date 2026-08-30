@@ -57,6 +57,7 @@ describe("projectWorkforceCohorts", () => {
       cohorts: [{
         cohortId: "closers-jan",
         role: "closer",
+        capacityUnit: "sales",
         headcount: "10",
         hireMonth: 0,
         trainingMonths: 1,
@@ -95,6 +96,8 @@ describe("calculateTrainingEconomics", () => {
   it("calcula certificação, meta produtiva, calendário e custo até produtividade", () => {
     const result = calculateTrainingEconomics({
       trainingId: "closer-academy",
+      role: "closer",
+      startMonth: 0,
       candidates: "100",
       classes: "4",
       durationMonths: 2,
@@ -201,6 +204,8 @@ describe("commercial operations validation", () => {
 
     expect(() => calculateTrainingEconomics({
       trainingId: "invalid",
+      role: "closer",
+      startMonth: 0,
       candidates: "10",
       classes: "1",
       durationMonths: 1,
