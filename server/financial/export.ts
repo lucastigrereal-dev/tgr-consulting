@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import JSZip from "jszip";
+import Decimal from "decimal.js";
 import type { FinancialCalculation } from "../../shared/financial/types";
 
 const NAVY = "0B1220";
@@ -27,6 +28,15 @@ function shortHash(hash: string) {
 }
 function display(value: string | null): string {
   return value ?? "N/D";
+}
+function decimalSum(values: Array<string | null | undefined>): string {
+  return values.reduce(
+    (total, value) => total.plus(value ?? "0"),
+    new Decimal(0)
+  ).toFixed(8);
+}
+function decimalDifference(left: string, right: string): string {
+  return new Decimal(left).minus(right).toFixed(8);
 }
 function xml(value: string): string {
   return value
@@ -91,6 +101,13 @@ export async function buildBoardroomPdf(
     pdf.setSubject(
       `Point Economics · ${snapshot.pointEconomics.totals.pointCount} ponto(s) · contribuição incremental líquida ${snapshot.pointEconomics.totals.value.incrementalNetContribution}`
     );
+  }
+  if (snapshot.commercialOperations) {
+    pdf.setKeywords([
+      "Commercial Operations",
+      `gargalo-tours:${snapshot.commercialOperations.room.bottlenecks.tours}`,
+      `gargalo-vendas:${snapshot.commercialOperations.room.bottlenecks.sales}`,
+    ]);
   }
   const page = pdf.addPage([842, 595]);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
@@ -277,6 +294,57 @@ export async function buildBoardroomPdf(
       { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71) }
     );
   }
+  if (snapshot.commercialOperations) {
+    const operationsPage = pdf.addPage([842, 595]);
+    operationsPage.drawRectangle({ x: 0, y: 0, width: 842, height: 595, color: rgb(0.043, 0.071, 0.125) });
+    operationsPage.drawText("COMMERCIAL OPERATIONS", { x: 44, y: 538, size: 10, font: bold, color: rgb(0.91, 0.74, 0.35) });
+    operationsPage.drawText("Sala, workforce, treinamento e comissões", { x: 44, y: 506, size: 22, font: bold, color: rgb(0.91, 0.93, 0.96) });
+    const operationsCosts = decimalSum(snapshot.projections.map(row => row.commercialOperationsCosts));
+    const commissionPayments = decimalSum(snapshot.projections.map(row => row.commissionPayments));
+    const operationsMetrics = [
+      ["TOURS / MÊS", snapshot.commercialOperations.room.capacity.limitedToursMonthly],
+      ["VENDAS / MÊS", snapshot.commercialOperations.room.capacity.limitedSalesMonthly],
+      ["CUSTO OPERAÇÕES", operationsCosts],
+      ["COMISSÕES PAGAS", commissionPayments],
+    ];
+    operationsMetrics.forEach(([label, value], index) => {
+      const x = 44 + index * 192;
+      operationsPage.drawRectangle({ x, y: 375, width: 176, height: 92, color: rgb(0.067, 0.11, 0.19), borderColor: rgb(0.15, 0.2, 0.28), borderWidth: 1 });
+      operationsPage.drawText(label, { x: x + 14, y: 442, size: 8, font: bold, color: rgb(0.91, 0.74, 0.35) });
+      operationsPage.drawText(value, { x: x + 14, y: 407, size: 14, font: bold, color: rgb(0.91, 0.93, 0.96), maxWidth: 148 });
+    });
+    operationsPage.drawText(
+      `Gargalos · tours ${snapshot.commercialOperations.room.bottlenecks.tours} · vendas ${snapshot.commercialOperations.room.bottlenecks.sales}`,
+      { x: 44, y: 336, size: 11, font: bold, color: rgb(0.91, 0.93, 0.96) }
+    );
+    const rows = snapshot.commercialOperations.months.slice(0, 6);
+    rows.forEach((month, index) => {
+      const workforce = snapshot.commercialOperations!.workforce.months[index];
+      const projection = snapshot.projections[index];
+      const y = 296 - index * 34;
+      operationsPage.drawText(
+        `M${month.month + 1} · HC ${workforce?.activeHeadcount ?? "N/D"} · FTE ${workforce?.effectiveFte ?? "N/D"} · tours ${month.tourCapacity} · vendas ${month.salesCapacity}`,
+        { x: 44, y, size: 9, font: bold, color: rgb(0.91, 0.93, 0.96), maxWidth: 400 }
+      );
+      operationsPage.drawText(
+        `Workforce ${month.incrementalWorkforceCost} · treino ${month.incrementalTrainingCost} · caixa ${projection?.commercialOperationsCosts ?? "0"} · comissão ${projection?.commissionPayments ?? "0"}`,
+        { x: 430, y, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 360 }
+      );
+    });
+    const training = snapshot.commercialOperations.training[0];
+    if (training) operationsPage.drawText(
+      `Treinamento ${training.trainingId} · ${training.role} · certificados ${training.summary.certifiedPeople} · produtivo M${training.summary.productiveMonth + 1} · custo ${training.summary.totalCostToProductive}`,
+      { x: 44, y: 78, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 746 }
+    );
+    operationsPage.drawText(
+      `Ledger de comissões · competência ${snapshot.commissionLedger?.totals.accrued ?? "N/D"} · holdback ${snapshot.commissionLedger?.totals.held ?? "N/D"} · pagável ${snapshot.commissionLedger?.totals.payable ?? "N/D"}`,
+      { x: 44, y: 48, size: 9, font: bold, color: rgb(0.91, 0.74, 0.35), maxWidth: 746 }
+    );
+    operationsPage.drawText(
+      snapshot.commercialOperations.room.alerts[0]?.message ?? "Sem alertas críticos de capacidade.",
+      { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 746 }
+    );
+  }
   return pdf.save();
 }
 
@@ -436,10 +504,60 @@ export async function buildBoardroomPptx(
   const pointSlide = pointSlideShapes
     ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${pointSlideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
     : null;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>${pointSlide ? '<Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>' : ""}<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
+  const operationsSlideNumber = pointSlide ? 3 : 2;
+  const operationsSlideShapes = snapshot.commercialOperations
+    ? [
+        shape(2, "Background", 0, 0, 13.333, 7.5, NAVY),
+        shape(3, "Title", 0.55, 0.45, 8, 0.55, NAVY, "Commercial Operations", { color: LIGHT, size: 2600, bold: true, margin: 0 }),
+        shape(4, "Subtitle", 0.55, 1.08, 9, 0.25, NAVY, "Sala, workforce, treinamento e comissões reconciliados com o caixa", { color: MUTED, size: 1000, margin: 0 }),
+        ...[
+          ["TOURS / MÊS", snapshot.commercialOperations.room.capacity.limitedToursMonthly],
+          ["VENDAS / MÊS", snapshot.commercialOperations.room.capacity.limitedSalesMonthly],
+          ["CUSTO OPERAÇÕES", decimalSum(snapshot.projections.map(row => row.commercialOperationsCosts))],
+          ["COMISSÕES PAGAS", decimalSum(snapshot.projections.map(row => row.commissionPayments))],
+        ].flatMap(([label, value], index) => {
+          const x = 0.55 + index * 3.1;
+          return [
+            shape(5 + index * 2, `Operations metric panel ${index + 1}`, x, 1.62, 2.82, 1.15, PANEL, "", { line: "263750" }),
+            shape(6 + index * 2, `Operations metric ${label}`, x + 0.14, 1.84, 2.52, 0.72, PANEL, `${label}\n${value}`, { color: LIGHT, size: 980, bold: true, margin: 0.04 }),
+          ];
+        }),
+        shape(13, "Operations bottlenecks", 0.55, 3.05, 12.22, 0.36, PANEL, `Gargalos · tours ${snapshot.commercialOperations.room.bottlenecks.tours} · vendas ${snapshot.commercialOperations.room.bottlenecks.sales}  |  ${snapshot.commercialOperations.room.alerts[0]?.message ?? "Sem alertas críticos"}`, { color: GOLD, size: 780, bold: true, margin: 0.07, line: "263750" }),
+        ...snapshot.commercialOperations.months.slice(0, 4).map((month, index) => {
+          const workforce = snapshot.commercialOperations!.workforce.months[index];
+          const projection = snapshot.projections[index];
+          return shape(
+            14 + index,
+            `Operations month ${month.month + 1}`,
+            0.55,
+            3.62 + index * 0.58,
+            12.22,
+            0.44,
+            PANEL,
+            `M${month.month + 1} · HC ${workforce?.activeHeadcount ?? "N/D"} · FTE ${workforce?.effectiveFte ?? "N/D"} · tours ${month.tourCapacity} · vendas ${month.salesCapacity}  |  workforce ${month.incrementalWorkforceCost} · treinamento ${month.incrementalTrainingCost} · custo no caixa ${projection?.commercialOperationsCosts ?? "0"} · comissão ${projection?.commissionPayments ?? "0"}`,
+            { color: index === 0 ? LIGHT : MUTED, size: 700, margin: 0.07, line: "263750" }
+          );
+        }),
+        shape(
+          18,
+          "Operations training and commissions",
+          0.55,
+          6.15,
+          12.22,
+          0.68,
+          PANEL,
+          `Treinamento ${snapshot.commercialOperations.training[0]?.trainingId ?? "N/D"} · ${snapshot.commercialOperations.training[0]?.role ?? "sem plano"} · certificados ${snapshot.commercialOperations.training[0]?.summary.certifiedPeople ?? "N/D"}  |  Ledger de comissões · competência ${snapshot.commissionLedger?.totals.accrued ?? "N/D"} · holdback ${snapshot.commissionLedger?.totals.held ?? "N/D"} · pagável ${snapshot.commissionLedger?.totals.payable ?? "N/D"}`,
+          { color: LIGHT, size: 760, bold: true, margin: 0.08, line: "263750" }
+        ),
+      ].join("")
+    : null;
+  const operationsSlide = operationsSlideShapes
+    ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${operationsSlideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
+    : null;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>${pointSlide ? '<Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>' : ""}${operationsSlide ? `<Override PartName="/ppt/slides/slide${operationsSlideNumber}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>` : ""}<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
   const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`;
-  const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/>${pointSlide ? '<p:sldId id="257" r:id="rId6"/>' : ""}</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/><p:defaultTextStyle/></p:presentation>`;
-  const presentationRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>${pointSlide ? '<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>' : ""}</Relationships>`;
+  const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/>${pointSlide ? '<p:sldId id="257" r:id="rId6"/>' : ""}${operationsSlide ? '<p:sldId id="258" r:id="rId7"/>' : ""}</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/><p:defaultTextStyle/></p:presentation>`;
+  const presentationRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>${pointSlide ? '<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>' : ""}${operationsSlide ? `<Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${operationsSlideNumber}.xml"/>` : ""}</Relationships>`;
   const bareSpTree = `<p:spTree>${groups}</p:spTree>`;
   const master = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld name="TGR Master">${bareSpTree}</p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="1" r:id="rId1"/></p:sldLayoutIdLst><p:txStyles/></p:sldMaster>`;
   const layout = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1"><p:cSld name="Blank">${bareSpTree}</p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
@@ -456,6 +574,10 @@ export async function buildBoardroomPptx(
   if (pointSlide) {
     zip.file("ppt/slides/slide2.xml", pointSlide);
     zip.file("ppt/slides/_rels/slide2.xml.rels", slideRels);
+  }
+  if (operationsSlide) {
+    zip.file(`ppt/slides/slide${operationsSlideNumber}.xml`, operationsSlide);
+    zip.file(`ppt/slides/_rels/slide${operationsSlideNumber}.xml.rels`, slideRels);
   }
   zip.file("ppt/slideMasters/slideMaster1.xml", master);
   zip.file("ppt/slideMasters/_rels/slideMaster1.xml.rels", masterRels);
@@ -585,6 +707,8 @@ export async function buildBoardroomXlsx(
     ["variableCosts", "Custos variaveis"],
     ["partnerShare", "Repasse parceiro"],
     ["fixedCosts", "Custos fixos"],
+    ["commercialOperationsCosts", "Custos de Commercial Operations"],
+    ["commissionPayments", "Pagamentos de comissão"],
     ["payroll", "Folha"],
     ["preOperationalInvestment", "Investimento pre-operacional"],
     ["operatingCashFlow", "Fluxo de caixa"],
@@ -695,12 +819,153 @@ export async function buildBoardroomXlsx(
           ]),
         ]),
   ].join("");
+  const operationsHeaders = [
+    "Escopo",
+    "Mês / ID",
+    "Papel / gargalo",
+    "Capacidade tours",
+    "Capacidade vendas",
+    "Headcount ativo",
+    "FTE efetivo",
+    "Workforce incremental",
+    "Treinamento incremental",
+    "Operações esperadas",
+    "Operações na projeção",
+    "Diferença operações",
+    "Comissão no ledger",
+    "Comissão na projeção",
+    "Diferença comissão",
+    "Detalhe / status",
+  ];
+  const operationsRows: string[] = [
+    xlsxRow(1, operationsHeaders.map((label, index) =>
+      xlsxTextCell(`${columnName(index)}1`, label)
+    )),
+  ];
+  let operationsRowIndex = 2;
+  if (snapshot.commercialOperations) {
+    const projectionMonths = new Set(snapshot.projections.map(row => row.month));
+    const operationsExpectedTotal = decimalSum(snapshot.commercialOperations.months.map(row => row.incrementalOperatingCost));
+    const operationsProjectedTotal = decimalSum(snapshot.projections.map(row => row.commercialOperationsCosts));
+    const commissionExpectedTotal = decimalSum(
+      (snapshot.commissionLedger?.payments ?? [])
+        .filter(payment => projectionMonths.has(payment.month))
+        .map(payment => payment.amount)
+    );
+    const commissionProjectedTotal = decimalSum(snapshot.projections.map(row => row.commissionPayments));
+    operationsRows.push(xlsxRow(operationsRowIndex++, [
+      xlsxTextCell("A2", "TOTAL"),
+      xlsxNumberCell("B2", snapshot.horizonMonths),
+      xlsxTextCell("C2", `Tours ${snapshot.commercialOperations.room.bottlenecks.tours} · vendas ${snapshot.commercialOperations.room.bottlenecks.sales}`),
+      xlsxNumberCell("D2", snapshot.commercialOperations.room.capacity.limitedToursMonthly),
+      xlsxNumberCell("E2", snapshot.commercialOperations.room.capacity.limitedSalesMonthly),
+      xlsxTextCell("F2", "N/D"),
+      xlsxTextCell("G2", "N/D"),
+      xlsxNumberCell("H2", decimalSum(snapshot.commercialOperations.months.map(row => row.incrementalWorkforceCost))),
+      xlsxNumberCell("I2", decimalSum(snapshot.commercialOperations.months.map(row => row.incrementalTrainingCost))),
+      xlsxNumberCell("J2", operationsExpectedTotal),
+      xlsxNumberCell("K2", operationsProjectedTotal),
+      xlsxNumberCell("L2", decimalDifference(operationsProjectedTotal, operationsExpectedTotal)),
+      xlsxNumberCell("M2", commissionExpectedTotal),
+      xlsxNumberCell("N2", commissionProjectedTotal),
+      xlsxNumberCell("O2", decimalDifference(commissionProjectedTotal, commissionExpectedTotal)),
+      xlsxTextCell("P2", `Ledger · competência ${snapshot.commissionLedger?.totals.accrued ?? "N/D"} · holdback ${snapshot.commissionLedger?.totals.held ?? "N/D"} · pagável ${snapshot.commissionLedger?.totals.payable ?? "N/D"}`),
+    ]));
+    const commissionByMonth = new Map(
+      (snapshot.commissionLedger?.payments ?? []).map(payment => [payment.month, payment.amount])
+    );
+    snapshot.commercialOperations.months.forEach((month, index) => {
+      const row = operationsRowIndex++;
+      const financialMonth = month.month + 1;
+      const workforce = snapshot.commercialOperations!.workforce.months[index];
+      const projection = snapshot.projections.find(item => item.month === financialMonth);
+      const projectedOperations = projection?.commercialOperationsCosts ?? "0";
+      const expectedCommission = commissionByMonth.get(financialMonth) ?? "0";
+      const projectedCommission = projection?.commissionPayments ?? "0";
+      operationsRows.push(xlsxRow(row, [
+        xlsxTextCell(`A${row}`, "MÊS"),
+        xlsxNumberCell(`B${row}`, financialMonth),
+        xlsxTextCell(`C${row}`, workforce?.cohorts.map(cohort => cohort.role).join(", ") ?? "N/D"),
+        xlsxNumberCell(`D${row}`, month.tourCapacity),
+        xlsxNumberCell(`E${row}`, month.salesCapacity),
+        xlsxNumberCell(`F${row}`, workforce?.activeHeadcount),
+        xlsxNumberCell(`G${row}`, workforce?.effectiveFte),
+        xlsxNumberCell(`H${row}`, month.incrementalWorkforceCost),
+        xlsxNumberCell(`I${row}`, month.incrementalTrainingCost),
+        xlsxNumberCell(`J${row}`, month.incrementalOperatingCost),
+        xlsxNumberCell(`K${row}`, projectedOperations),
+        xlsxNumberCell(`L${row}`, decimalDifference(projectedOperations, month.incrementalOperatingCost)),
+        xlsxNumberCell(`M${row}`, expectedCommission),
+        xlsxNumberCell(`N${row}`, projectedCommission),
+        xlsxNumberCell(`O${row}`, decimalDifference(projectedCommission, expectedCommission)),
+        xlsxTextCell(`P${row}`, "Mês operacional reconciliado com a projeção"),
+      ]));
+    });
+    const roomRow = operationsRowIndex++;
+    operationsRows.push(xlsxRow(roomRow, [
+      xlsxTextCell(`A${roomRow}`, "SALA"),
+      xlsxTextCell(`B${roomRow}`, "ROOM"),
+      xlsxTextCell(`C${roomRow}`, `Tours ${snapshot.commercialOperations.room.bottlenecks.tours} · vendas ${snapshot.commercialOperations.room.bottlenecks.sales}`),
+      xlsxNumberCell(`D${roomRow}`, snapshot.commercialOperations.room.capacity.limitedToursMonthly),
+      xlsxNumberCell(`E${roomRow}`, snapshot.commercialOperations.room.capacity.limitedSalesMonthly),
+      xlsxTextCell(`P${roomRow}`, `Espera no pico ${snapshot.commercialOperations.room.queue.estimatedPeakWaitMinutes ?? "N/D"} · limite ${snapshot.commercialOperations.room.queue.maxWaitMinutes}`),
+    ]));
+    snapshot.commercialOperations.room.alerts.forEach(alert => {
+      const row = operationsRowIndex++;
+      operationsRows.push(xlsxRow(row, [
+        xlsxTextCell(`A${row}`, "ALERTA"),
+        xlsxTextCell(`B${row}`, alert.code),
+        xlsxTextCell(`C${row}`, alert.severity),
+        xlsxNumberCell(`D${row}`, alert.demand),
+        xlsxNumberCell(`E${row}`, alert.capacity),
+        xlsxTextCell(`P${row}`, alert.message),
+      ]));
+    });
+    snapshot.commercialOperations.training.forEach(plan => {
+      const row = operationsRowIndex++;
+      operationsRows.push(xlsxRow(row, [
+        xlsxTextCell(`A${row}`, "TREINAMENTO"),
+        xlsxTextCell(`B${row}`, plan.trainingId),
+        xlsxTextCell(`C${row}`, plan.role),
+        xlsxNumberCell(`F${row}`, plan.summary.certifiedPeople),
+        xlsxNumberCell(`G${row}`, plan.summary.productivePeople),
+        xlsxNumberCell(`I${row}`, plan.summary.totalCostToProductive),
+        xlsxTextCell(`P${row}`, `Produtividade M${plan.summary.productiveMonth + 1} · gap alvo ${plan.summary.targetGap} · custo/produtivo ${plan.summary.costPerProductivePerson ?? "N/D"}`),
+      ]));
+    });
+    if (snapshot.commissionLedger) {
+      const totalRow = operationsRowIndex++;
+      operationsRows.push(xlsxRow(totalRow, [
+        xlsxTextCell(`A${totalRow}`, "COMISSÃO TOTAL"),
+        xlsxTextCell(`B${totalRow}`, "LEDGER"),
+        xlsxNumberCell(`M${totalRow}`, snapshot.commissionLedger.totals.payable),
+        xlsxTextCell(`P${totalRow}`, `Competência ${snapshot.commissionLedger.totals.accrued} · holdback ${snapshot.commissionLedger.totals.held}`),
+      ]));
+      snapshot.commissionLedger.accruals.forEach(accrual => {
+        const row = operationsRowIndex++;
+        operationsRows.push(xlsxRow(row, [
+          xlsxTextCell(`A${row}`, "COMISSÃO"),
+          xlsxTextCell(`B${row}`, accrual.policyId),
+          xlsxTextCell(`C${row}`, accrual.role),
+          xlsxNumberCell(`M${row}`, accrual.payableCommission),
+          xlsxTextCell(`P${row}`, `${accrual.eligibleBase} · competência M${accrual.accrualMonth} · pagamento M${accrual.paymentMonth} · reversão ${accrual.isReversal ? "sim" : "não"}`),
+        ]));
+      });
+    }
+  } else {
+    operationsRows.push(xlsxRow(2, [
+      xlsxTextCell("A2", "SEM DADOS"),
+      xlsxTextCell("P2", "Snapshot sem Commercial Operations"),
+    ]));
+    operationsRowIndex = 3;
+  }
+  const operationsRowsXml = operationsRows.join("");
   const worksheet = (rows: string, maxColumn: string, maxRow: number) =>
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${maxColumn}${Math.max(1, maxRow)}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/><sheetData>${rows}</sheetData></worksheet>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet5.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
   const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
-  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/><sheet name="Memoria de calculo" sheetId="2" r:id="rId2"/><sheet name="Projecao mensal" sheetId="3" r:id="rId3"/><sheet name="Point Economics" sheetId="4" r:id="rId4"/></sheets></workbook>`;
-  const workbookRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet4.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/><sheet name="Memoria de calculo" sheetId="2" r:id="rId2"/><sheet name="Projecao mensal" sheetId="3" r:id="rId3"/><sheet name="Point Economics" sheetId="4" r:id="rId4"/><sheet name="Commercial Operations" sheetId="5" r:id="rId5"/></sheets></workbook>`;
+  const workbookRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet4.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet5.xml"/><Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Aptos"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>`;
   zip.file("[Content_Types].xml", contentTypes);
   zip.file("_rels/.rels", rootRels);
@@ -717,11 +982,15 @@ export async function buildBoardroomXlsx(
   );
   zip.file(
     "xl/worksheets/sheet3.xml",
-    worksheet(projectionRows, "P", snapshot.projections.length + 1)
+    worksheet(projectionRows, "Z", snapshot.projections.length + 1)
   );
   zip.file(
     "xl/worksheets/sheet4.xml",
     worksheet(pointRows, "S", (snapshot.pointEconomics?.points.length ?? 0) + 2)
+  );
+  zip.file(
+    "xl/worksheets/sheet5.xml",
+    worksheet(operationsRowsXml, "P", operationsRowIndex - 1)
   );
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 }

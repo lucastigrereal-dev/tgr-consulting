@@ -2,6 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { calculateFinancialProjection } from "@shared/financial/engine";
+import { calculateCommercialOperations } from "@shared/financial/commercialOperations";
 import { calculatePointEconomics } from "@shared/financial/pointEconomics";
 import type { FinancialCalculation, FinancialInputSnapshot } from "@shared/financial/types";
 
@@ -83,6 +84,46 @@ const pointEconomics = calculatePointEconomics({
   ],
 });
 
+const commercialOperations = calculateCommercialOperations({
+  horizonMonths: 2,
+  pointDemand: { toursMonthly: "100", salesMonthly: "10" },
+  definition: {
+    room: {
+      rooms: [{ roomId: "sala-cotia", tables: "2", overflowTables: "0" }],
+      operatingDaysPerMonth: "20",
+      operatingHoursPerDay: "8",
+      shifts: "2",
+      averageTourDurationMinutes: "60",
+      toursPerTable: "1",
+      receptionists: "1",
+      receptionCapacityPerPerson: "200",
+      consultants: "1",
+      consultantCapacityPerPerson: "50",
+      closers: "1",
+      closerSalesCapacityPerPerson: "20",
+      peakFlowFactor: "1",
+      maxWaitMinutes: "15",
+    },
+    workforce: {
+      cashflowTreatment: "incremental",
+      cohorts: [
+        { cohortId: "consultants", role: "consultant", capacityUnit: "tours", headcount: "1", hireMonth: 0, trainingMonths: 0, certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }], matureProductivity: "80", absenteeismRate: "0", monthlyTurnoverRate: "0", fixedCompensation: "100", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0" },
+        { cohortId: "closers", role: "closer", capacityUnit: "sales", headcount: "1", hireMonth: 0, trainingMonths: 0, certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }], matureProductivity: "8", absenteeismRate: "0", monthlyTurnoverRate: "0", fixedCompensation: "200", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0" },
+      ],
+    },
+    training: {
+      cashflowTreatment: "incremental",
+      plans: [{ trainingId: "academy", role: "closer", startMonth: 0, candidates: "2", classes: "1", durationMonths: 1, trainers: "1", trainerMonthlyCost: "50", candidateMonthlySalary: "25", monthlySupportCost: "0", approvalRate: "1", certificationRate: "1", timeToProductiveMonths: 0, targetProductivePeople: "2" }],
+    },
+    commissions: {
+      cashflowTreatment: "incremental",
+      policies: [
+        { policyId: "closer-fixed", role: "closer", eligibleBase: "fixed", mode: "fixed", fixedAmount: "10", percentageRate: "0", tiers: [], guarantee: "0", cutoffDay: 15, paymentLagMonths: 0, qualityMultiplier: "1", holdbackRate: "0", reversalEnabled: false },
+      ],
+    },
+  },
+});
+
 describe("Boardroom · trilha editorial", () => {
   it("renderiza um snapshot calculado com origem ficha-mãe e fórmulas versionadas nos capítulos do estudo", () => {
     const calculation = calculateFinancialProjection(inputs, 24);
@@ -126,5 +167,31 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain(pointEconomics.points[0].classification);
     expect(html).toContain(pointEconomics.points[0].drivers[0].message);
     expect(html).toContain(pointEconomics.totals.value.incrementalNetContribution);
+    expect(html).not.toContain("Commercial Operations");
+  });
+
+  it("apresenta capacidade, workforce, treinamento e ledger de Commercial Operations", () => {
+    const calculation = calculateFinancialProjection(inputs, 2, {
+      pointEconomics,
+      commercialOperations,
+    });
+    expect(calculation.status).toBe("valid");
+    if (calculation.status !== "valid") return;
+    state.calculation = calculation;
+
+    const html = renderToStaticMarkup(<Boardroom />);
+
+    expect(html).toContain("Commercial Operations");
+    expect(html).toContain("Capacidade da sala");
+    expect(html).toContain("consultants");
+    expect(html).toContain("Tours planejados excedem a capacidade limitada.");
+    expect(html).toContain("Workforce mensal");
+    expect(html).toContain("Treinamento");
+    expect(html).toContain("academy");
+    expect(html).toContain("Ledger de comissões");
+    expect(html).toContain("closer-fixed");
+    expect(html).toContain(calculation.commissionLedger!.totals.payable);
+    expect(html).toContain(calculation.projections[0].commercialOperationsCosts);
+    expect(html).toContain(calculation.projections[0].commissionPayments);
   });
 });

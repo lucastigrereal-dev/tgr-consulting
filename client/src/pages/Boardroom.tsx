@@ -563,6 +563,108 @@ export default function Boardroom() {
         </section>
       ) : null}
 
+      {snapshot && calculation?.commercialOperations ? (
+        <section
+          id="commercial-operations"
+          className="scroll-mt-24 space-y-4"
+          data-commercial-operations-cost={calculation.projections[0]?.commercialOperationsCosts}
+          data-commission-payments={calculation.projections[0]?.commissionPayments}
+          data-commission-payable={calculation.commissionLedger?.totals.payable}
+        >
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
+              Commercial Operations
+            </p>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+              Capacidade da sala, força produtiva, treinamento e comissões
+              confrontados com a produção e o caixa do snapshot.
+            </p>
+          </div>
+
+          <Card className="border-white/10 bg-card/80 shadow-none">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-xl">Capacidade da sala</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ["Tours / mês", formatCount(Number(calculation.commercialOperations.room.capacity.limitedToursMonthly))],
+                  ["Vendas / mês", formatCount(Number(calculation.commercialOperations.room.capacity.limitedSalesMonthly))],
+                  ["Gargalo de tours", calculation.commercialOperations.room.bottlenecks.tours],
+                  ["Gargalo de vendas", calculation.commercialOperations.room.bottlenecks.sales],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
+                    <p className="mt-2 font-mono text-sm text-slate-100">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="grid gap-3 lg:grid-cols-[.7fr_1.3fr]">
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-4 text-sm">
+                  <p className="font-medium text-slate-100">Fila no pico</p>
+                  <p className="mt-2 text-muted-foreground">
+                    Espera estimada: {calculation.commercialOperations.room.queue.estimatedPeakWaitMinutes === null
+                      ? "N/D"
+                      : `${formatCount(Number(calculation.commercialOperations.room.queue.estimatedPeakWaitMinutes))} min`}
+                    {" · "}limite {formatCount(Number(calculation.commercialOperations.room.queue.maxWaitMinutes))} min
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  {calculation.commercialOperations.room.alerts.length ? calculation.commercialOperations.room.alerts.map(alert => (
+                    <div key={alert.code} className="flex gap-3 rounded-xl border border-rose-300/20 bg-rose-300/[0.05] p-3 text-xs leading-5 text-rose-100">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div><p className="font-medium">{alert.message}</p><p className="text-rose-100/70">Demanda {formatCount(Number(alert.demand))} · capacidade {formatCount(Number(alert.capacity))}</p></div>
+                    </div>
+                  )) : (
+                    <div className="rounded-xl border border-emerald-300/20 bg-emerald-300/[0.05] p-3 text-xs text-emerald-100">Sem alertas críticos de capacidade.</div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-card/80 shadow-none">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-xl">Workforce mensal</CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-auto p-0">
+              <table className="w-full min-w-[1120px] text-left text-xs">
+                <thead className="border-b border-white/10 text-[10px] uppercase tracking-[0.1em] text-muted-foreground"><tr><th className="px-4 py-3 font-medium">Mês</th><th className="px-4 py-3 font-medium">Headcount</th><th className="px-4 py-3 font-medium">FTE efetivo</th><th className="px-4 py-3 font-medium">Cap. tours</th><th className="px-4 py-3 font-medium">Cap. vendas</th><th className="px-4 py-3 font-medium">Workforce</th><th className="px-4 py-3 font-medium">Treinamento</th><th className="px-4 py-3 font-medium">Custo no caixa</th><th className="px-4 py-3 font-medium">Comissões pagas</th></tr></thead>
+                <tbody>{calculation.commercialOperations.months.slice(0, 12).map((month, index) => {
+                  const workforce = calculation.commercialOperations!.workforce.months[index];
+                  const projection = calculation.projections[index];
+                  return <tr key={month.month} className="border-b border-white/[0.06] text-slate-200 last:border-0"><td className="px-4 py-3 font-medium">{month.month + 1}</td><td className="px-4 py-3 font-mono">{workforce?.activeHeadcount ?? "N/D"}</td><td className="px-4 py-3 font-mono">{workforce?.effectiveFte ?? "N/D"}</td><td className="px-4 py-3 font-mono">{month.tourCapacity}</td><td className="px-4 py-3 font-mono">{month.salesCapacity}</td><td className="px-4 py-3">{formatKpi("totalOperatingCashFlow", month.incrementalWorkforceCost)}</td><td className="px-4 py-3">{formatKpi("totalOperatingCashFlow", month.incrementalTrainingCost)}</td><td className="px-4 py-3 text-amber-200">{formatKpi("totalOperatingCashFlow", projection?.commercialOperationsCosts ?? "0")}</td><td className="px-4 py-3 text-amber-200">{formatKpi("totalOperatingCashFlow", projection?.commissionPayments ?? "0")}</td></tr>;
+                })}</tbody>
+              </table>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Card className="border-white/10 bg-card/80 shadow-none">
+              <CardHeader className="pb-3"><CardTitle className="text-xl">Treinamento</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {calculation.commercialOperations.training.length ? calculation.commercialOperations.training.map(plan => (
+                  <div key={plan.trainingId} className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-medium text-slate-100">{plan.trainingId}</p><p className="mt-1 text-xs text-muted-foreground">{plan.role}</p></div><Badge variant="outline" className="border-white/15 text-slate-200">Produtividade M{plan.summary.productiveMonth + 1}</Badge></div>
+                    <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"><div><p className="text-muted-foreground">Aprovados</p><p className="mt-1 font-mono">{plan.summary.approvedPeople}</p></div><div><p className="text-muted-foreground">Certificados</p><p className="mt-1 font-mono">{plan.summary.certifiedPeople}</p></div><div><p className="text-muted-foreground">Gap alvo</p><p className="mt-1 font-mono">{plan.summary.targetGap}</p></div><div><p className="text-muted-foreground">Custo até produzir</p><p className="mt-1">{formatKpi("totalOperatingCashFlow", plan.summary.totalCostToProductive)}</p></div></div>
+                  </div>
+                )) : <p className="text-sm text-muted-foreground">Nenhum plano de treinamento no snapshot.</p>}
+              </CardContent>
+            </Card>
+
+            <Card className="border-white/10 bg-card/80 shadow-none">
+              <CardHeader className="pb-3"><CardTitle className="text-xl">Ledger de comissões</CardTitle></CardHeader>
+              <CardContent className="space-y-4">
+                {calculation.commissionLedger ? <>
+                  <div className="grid grid-cols-3 gap-2 text-xs">{[["Competência", calculation.commissionLedger.totals.accrued], ["Holdback", calculation.commissionLedger.totals.held], ["Pagável", calculation.commissionLedger.totals.payable]].map(([label, value]) => <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.025] p-3"><p className="text-muted-foreground">{label}</p><p className="mt-2 font-mono text-slate-100">{value}</p></div>)}</div>
+                  <div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left text-xs"><thead className="border-b border-white/10 text-[10px] uppercase tracking-[0.1em] text-muted-foreground"><tr><th className="px-3 py-2 font-medium">Política</th><th className="px-3 py-2 font-medium">Papel</th><th className="px-3 py-2 font-medium">Base</th><th className="px-3 py-2 font-medium">Competência</th><th className="px-3 py-2 font-medium">Pagamento</th><th className="px-3 py-2 font-medium">Pagável</th></tr></thead><tbody>{calculation.commissionLedger.accruals.slice(0, 12).map(accrual => <tr key={accrual.recordId} className="border-b border-white/[0.06] last:border-0"><td className="px-3 py-2 font-medium">{accrual.policyId}</td><td className="px-3 py-2">{accrual.role}</td><td className="px-3 py-2">{accrual.eligibleBase}</td><td className="px-3 py-2">M{accrual.accrualMonth}</td><td className="px-3 py-2">M{accrual.paymentMonth}</td><td className="px-3 py-2 text-amber-200">{formatKpi("totalOperatingCashFlow", accrual.payableCommission)}</td></tr>)}</tbody></table></div>
+                </> : <p className="text-sm text-muted-foreground">Ledger indisponível neste snapshot.</p>}
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+      ) : null}
+
       {snapshot && calculation && documentTotals ? (
         <section id="study-revenue" className="scroll-mt-24 space-y-4">
           <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 05 · Receita</p><p className="mt-1 text-sm text-muted-foreground">Da entrada contratada ao saldo parcelado e ao dinheiro líquido, respeitando calendário, prazo e MDR.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-revenue")} /></div>
