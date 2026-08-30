@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CotiaProjectMatrix } from "@/components/CotiaProjectMatrix";
 import { AuthoritativeCommercialBuilder } from "@/components/AuthoritativeCommercialBuilder";
+import { CapturePointsBuilder } from "@/components/CapturePointsBuilder";
 import { ReceivablesPolicyBuilder } from "@/components/ReceivablesPolicyBuilder";
 import {
   Card,
@@ -590,6 +591,7 @@ export default function Builder() {
         onSave={registerAssembly}
       />
       <AuthoritativeCommercialBuilder versionId={activeVersionId} />
+      <CapturePointsBuilder versionId={activeVersionId} />
       <ReceivablesPolicyBuilder versionId={activeVersionId} />
     </div>
   );

@@ -53,6 +53,11 @@ import {
 } from "../shared/financial/commercialCondition";
 import { resolveAuthoritativeCommercialModel } from "../shared/financial/authoritativeCommercialModel";
 import {
+  calculatePointEconomics,
+  type PointEconomicsInput,
+  type PointEconomicsPortfolio,
+} from "../shared/financial/pointEconomics";
+import {
   assertReceivablesPolicy,
   type ReceivablesPolicy,
 } from "../shared/financial/receivablesPortfolio";
@@ -550,6 +555,126 @@ export type PersistedCommercialConditionInput = {
   sourceRef?: string;
   condition: CommercialConditionInput;
 };
+
+export type CapturePointDefinition = Omit<
+  PointEconomicsInput,
+  | "averageTicket"
+  | "averageEntry"
+  | "contributionMarginRate"
+  | "healthyD90Rate"
+>;
+
+export type PersistedCapturePoint = {
+  status: "provided" | "pending";
+  sourceType: ProvenanceSourceType;
+  sourceRef?: string;
+  definition: CapturePointDefinition;
+};
+
+function capturePointFromRow(
+  row: typeof projectComponentRecords.$inferSelect
+): PersistedCapturePoint {
+  return {
+    status: row.status,
+    sourceType: row.sourceType,
+    sourceRef: row.sourceRef ?? undefined,
+    definition: row.payload as CapturePointDefinition,
+  };
+}
+
+export async function getCapturePointsForTenant(
+  versionId: string,
+  tenantId: number
+) {
+  await getVersionForTenant(versionId, tenantId);
+  const db = await requireDb();
+  const rows = await db
+    .select()
+    .from(projectComponentRecords)
+    .where(
+      and(
+        eq(projectComponentRecords.versionId, versionId),
+        eq(projectComponentRecords.componentType, "acquisition_capacity")
+      )
+    )
+    .orderBy(projectComponentRecords.name);
+  return rows.map(row => ({ record: row, ...capturePointFromRow(row) }));
+}
+
+export async function replaceCapturePointsForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  points: PersistedCapturePoint[];
+}) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  if (version.isImmutable || version.state !== "draft") {
+    throw new Error(
+      "Pontos de captação só aceitam edição na versão de trabalho."
+    );
+  }
+  const pointIds = new Set<string>();
+  for (const item of params.points) {
+    const pointId = item.definition.pointId.trim();
+    if (!pointId) throw new Error("pointId é obrigatório.");
+    if (pointIds.has(pointId)) throw new Error(`pointId duplicado: ${pointId}.`);
+    pointIds.add(pointId);
+    if (item.status === "provided" && !item.sourceRef?.trim()) {
+      throw new Error(
+        `Ponto informado exige fonte ou responsável: ${pointId}.`
+      );
+    }
+  }
+
+  const records = params.points.map(item => ({
+    id: nanoid(),
+    versionId: version.id,
+    componentType: "acquisition_capacity" as const,
+    name: item.definition.pointId.trim(),
+    status: item.status,
+    payload: { ...item.definition, pointId: item.definition.pointId.trim() },
+    sourceType: item.sourceType,
+    sourceRef: item.sourceRef?.trim() || null,
+    updatedBy: params.actorId,
+  }));
+  await db.transaction(async transaction => {
+    const before = await transaction
+      .select()
+      .from(projectComponentRecords)
+      .where(
+        and(
+          eq(projectComponentRecords.versionId, version.id),
+          eq(projectComponentRecords.componentType, "acquisition_capacity")
+        )
+      );
+    await transaction
+      .delete(projectComponentRecords)
+      .where(
+        and(
+          eq(projectComponentRecords.versionId, version.id),
+          eq(projectComponentRecords.componentType, "acquisition_capacity")
+        )
+      );
+    if (records.length) await transaction.insert(projectComponentRecords).values(records);
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "project_component_collection",
+      entityId: version.id,
+      action: "capture_points.replaced",
+      actorId: params.actorId,
+      beforeHash: sha256(before),
+      afterHash: sha256(records),
+      metadata: {
+        versionId: version.id,
+        pointIds: records.map(record => record.name),
+        count: records.length,
+      },
+    });
+  });
+  return getCapturePointsForTenant(version.id, params.tenantId);
+}
 
 export async function getProductCatalogForTenant(
   versionId: string,
@@ -1666,6 +1791,10 @@ async function getAuthoritativeCalculationContext(params: {
     version.id,
     params.tenantId
   );
+  const capturePoints = await getCapturePointsForTenant(
+    version.id,
+    params.tenantId
+  );
   const usesStructuredCommercialDomains =
     productCatalog.records.length > 0 || conditions.length > 0;
   const providedSkuCodes = new Set(
@@ -1693,6 +1822,10 @@ async function getAuthoritativeCalculationContext(params: {
     domainBlockers.push("receivables_policy.missing");
   else if (persistedReceivablesPolicy.record.status === "pending")
     domainBlockers.push("receivables_policy.pending");
+  if (capturePoints.length === 0)
+    domainBlockers.push("capture_points.missing");
+  else if (capturePoints.some(item => item.status === "pending"))
+    domainBlockers.push("capture_points.pending");
   let authoritativeReceivablesPolicy: ReceivablesPolicy | undefined;
   if (persistedReceivablesPolicy) {
     try {
@@ -1736,7 +1869,48 @@ async function getAuthoritativeCalculationContext(params: {
       domainInvalidities.push(key);
     }
   }
-  const authoritativeDomains = usesStructuredCommercialDomains || persistedReceivablesPolicy
+  let authoritativePointInputs: PointEconomicsInput[] | undefined;
+  let pointEconomics: PointEconomicsPortfolio | undefined;
+  if (
+    capturePoints.length > 0 &&
+    capturePoints.every(item => item.status === "provided") &&
+    commercialModel?.status === "valid" &&
+    authoritativeReceivablesPolicy
+  ) {
+    try {
+      const variableCostRate = new FinanceDecimal(
+        inputs.variableCostRate.value ?? ""
+      );
+      const partnerShareRate = new FinanceDecimal(
+        inputs.partnerShareRate.value ?? ""
+      );
+      const contributionMarginRate = new FinanceDecimal(1)
+        .minus(variableCostRate)
+        .minus(partnerShareRate);
+      if (!contributionMarginRate.isFinite() || contributionMarginRate.lt(0)) {
+        throw new Error("A margem de contribuição dos pontos não pode ser negativa.");
+      }
+      const policy = authoritativeReceivablesPolicy;
+      const residualDelinquencyD90 = new FinanceDecimal(policy.delinquencyRate)
+        .times(new FinanceDecimal(1).minus(policy.cureRates.days1To30))
+        .times(new FinanceDecimal(1).minus(policy.cureRates.days31To60))
+        .times(new FinanceDecimal(1).minus(policy.cureRates.days61To90));
+      const healthyD90Rate = new FinanceDecimal(1)
+        .minus(policy.cancellationCurve.d90)
+        .times(new FinanceDecimal(1).minus(residualDelinquencyD90));
+      authoritativePointInputs = capturePoints.map(item => ({
+        ...item.definition,
+        averageTicket: commercialModel.derived.averageTicket,
+        averageEntry: commercialModel.derived.entryValuePerContract,
+        contributionMarginRate: contributionMarginRate.toFixed(8),
+        healthyD90Rate: healthyD90Rate.toFixed(8),
+      }));
+      pointEconomics = calculatePointEconomics({ points: authoritativePointInputs });
+    } catch {
+      domainInvalidities.push("capture_points.invalid");
+    }
+  }
+  const authoritativeDomains = usesStructuredCommercialDomains || persistedReceivablesPolicy || capturePoints.length > 0
     ? {
         asOfMonth: params.asOfMonth,
         productCatalog: {
@@ -1765,6 +1939,16 @@ async function getAuthoritativeCalculationContext(params: {
               policy: persistedReceivablesPolicy.policy,
             }
           : null,
+        capturePoints: {
+          definitions: capturePoints.map(item => ({
+            status: item.status,
+            sourceType: item.sourceType,
+            sourceRef: item.sourceRef ?? null,
+            definition: item.definition,
+          })),
+          authoritativeInputs: authoritativePointInputs ?? null,
+          economics: pointEconomics ?? null,
+        },
       }
     : undefined;
   const calculationInputs =
@@ -1785,6 +1969,28 @@ async function getAuthoritativeCalculationContext(params: {
             sourceType: "derived_analysis" as const,
             sourceRef: "authoritative-commercial-model",
           },
+          qualifiedCouplesMonth1: {
+            status: "provided" as const,
+            value: pointEconomics!.totals.funnel.qualified,
+            sourceType: "derived_analysis" as const,
+            sourceRef: "authoritative-point-economics",
+          },
+          qualifiedCouplesGrowthRate: {
+            status: "provided" as const,
+            value: "0",
+            sourceType: "derived_analysis" as const,
+            sourceRef: "authoritative-point-economics",
+          },
+          conversionRate: {
+            status: "provided" as const,
+            value: new FinanceDecimal(pointEconomics!.totals.funnel.qualified).eq(0)
+              ? "0"
+              : new FinanceDecimal(pointEconomics!.totals.production.totalSales)
+                  .div(pointEconomics!.totals.funnel.qualified)
+                  .toFixed(8),
+            sourceType: "derived_analysis" as const,
+            sourceRef: "authoritative-point-economics",
+          },
         }
       : undefined;
   const calculationOptions = calculationInputs
@@ -1793,6 +1999,7 @@ async function getAuthoritativeCalculationContext(params: {
         paymentSchedulePerContract:
           commercialModel!.derived.paymentSchedulePerContract,
         receivablesPolicy: authoritativeReceivablesPolicy!,
+        pointEconomics: pointEconomics!,
       }
     : undefined;
   return {
@@ -1802,6 +2009,7 @@ async function getAuthoritativeCalculationContext(params: {
     domainBlockers,
     domainInvalidities,
     commercialModel,
+    pointEconomics,
     calculationInputs,
     calculationOptions,
     authoritativeInputHash: authoritativeDomains
@@ -1929,7 +2137,7 @@ export async function simulateCaptadorChangeForTenant(params: {
     asOfMonth: params.asOfMonth ?? 0,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("A simulação exige produto e condição comercial válidos, sem itens pendentes.");
+    throw new Error("A simulação exige produto, condição comercial, política de carteira e pontos de captação válidos, sem itens pendentes.");
   return simulateCaptadorChange({
     inputs: context.calculationInputs,
     maxContracts: context.calculationOptions?.maxContracts,
@@ -2016,6 +2224,10 @@ export async function createScenarioForTenant(params: {
       .from(receivablesPolicies)
       .where(eq(receivablesPolicies.versionId, currentBase.id))
       .limit(1);
+    const baseProjectComponents = await transaction
+      .select()
+      .from(projectComponentRecords)
+      .where(eq(projectComponentRecords.versionId, currentBase.id));
     const scenarioSkuIds = new Map(
       baseProductSkus.map(sku => [sku.id, nanoid()])
     );
@@ -2130,6 +2342,21 @@ export async function createScenarioForTenant(params: {
         sourceRef: policy.sourceRef,
         updatedBy: params.actorId,
       });
+    }
+    if (baseProjectComponents.length) {
+      await transaction.insert(projectComponentRecords).values(
+        baseProjectComponents.map(component => ({
+          id: nanoid(),
+          versionId,
+          componentType: component.componentType,
+          name: component.name,
+          status: component.status,
+          payload: component.payload,
+          sourceType: component.sourceType,
+          sourceRef: component.sourceRef,
+          updatedBy: params.actorId,
+        }))
+      );
     }
     await transaction.insert(scenarioBranches).values({
       id: branchId,
@@ -2324,7 +2551,7 @@ export async function calculateCapitalEnvelopeForTenant(params: {
     asOfMonth: params.asOfMonth ?? 0,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("Capital Envelope exige produto, condição comercial e política de carteira válidos, sem itens pendentes.");
+    throw new Error("Capital Envelope exige produto, condição comercial, política de carteira e pontos de captação válidos, sem itens pendentes.");
   const calculation = calculateFinancialProjection(
     context.calculationInputs,
     params.horizonMonths,
@@ -2371,7 +2598,7 @@ export async function runProjectGoalSeekForTenant(params: {
     asOfMonth: params.asOfMonth ?? 0,
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
-    throw new Error("Goal Seek exige produto, condição comercial e política de carteira válidos, sem itens pendentes.");
+    throw new Error("Goal Seek exige produto, condição comercial, política de carteira e pontos de captação válidos, sem itens pendentes.");
   const inputs = context.calculationInputs;
   const baseline = calculateFinancialProjection(inputs, params.horizonMonths, context.calculationOptions);
   if (baseline.status !== "valid")

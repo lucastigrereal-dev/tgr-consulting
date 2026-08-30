@@ -19,6 +19,7 @@ import {
   listCommercialConditionsForTenant,
   listHistoricalBenchmarksForTenant,
   replaceProductCatalogForTenant,
+  replaceCapturePointsForTenant,
   saveCommercialModelForTenant,
   upsertCommercialConditionForTenant,
   upsertReceivablesPolicyForTenant,
@@ -173,11 +174,42 @@ async function seedAuthoritativeCommercialDomains(
       sourceRef: "db.integration.test:receivables-policy",
     },
   });
+  await replaceCapturePointsForTenant({
+    tenantId,
+    actorId,
+    versionId,
+    points: [{
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "db.integration.test:capture-point",
+      definition: {
+        pointId: "default-point",
+        name: "Ponto de integração",
+        channel: "PDV",
+        activationCost: "1000",
+        monthlyFixedCost: "500",
+        costPerSale: "10",
+        approaches: "100",
+        researchRate: "1",
+        qualificationRate: "1",
+        invitationRate: "1",
+        appointmentRate: "1",
+        showRate: "1",
+        tourRate: "1",
+        saleRate: "0.1",
+        cannibalizationRate: "0",
+        cashflowTreatment: "included_in_project_totals",
+      },
+    }],
+  });
 }
 
 afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
+  await db.execute(
+    sql`DELETE FROM project_component_records WHERE sourceRef = ${"db.integration.test:capture-point"}`
+  );
   await db.execute(
     sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId}, ${ids.missingDomainProjectId}, ${ids.missingDomainVersionId}, ${ids.missingDomainSnapshotId})`
   );

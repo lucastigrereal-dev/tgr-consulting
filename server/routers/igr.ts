@@ -14,6 +14,7 @@ import {
   createProjectForTenant,
   createScenarioForTenant,
   getExportEligibilityForTenant,
+  getCapturePointsForTenant,
   getProductCatalogForTenant,
   getReceivablesPolicyForTenant,
   getProjectContextForTenant,
@@ -30,6 +31,7 @@ import {
   generateAuthorizedExportForTenant,
   freezeBaselineForTenant,
   replaceProductCatalogForTenant,
+  replaceCapturePointsForTenant,
   saveCommercialModelForTenant,
   updateInputsForTenant,
   upsertBuilderComponentForTenant,
@@ -44,6 +46,9 @@ const builderComponentSchema = z.enum(["project_assembly", "product_stock", "pri
 const costCategorySchema = z.enum(["payroll", "occupancy", "technology", "marketing", "partner", "legal", "operations", "other"]);
 
 const nonNegativeDecimalSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
+const unitRateSchema = nonNegativeDecimalSchema.refine(value => Number(value) <= 1, {
+  message: "Taxa deve estar entre 0 e 1.",
+});
 const productSkuSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
@@ -126,6 +131,50 @@ const receivablesPolicySchema = z.object({
   policyVersion: z.string().trim().min(1).max(120),
   sourceRef: z.string().trim().max(500),
 });
+const capturePointDefinitionSchema = z.object({
+  pointId: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(2).max(255),
+  channel: z.string().trim().min(1).max(120),
+  activationCost: nonNegativeDecimalSchema,
+  monthlyFixedCost: nonNegativeDecimalSchema,
+  costPerSale: nonNegativeDecimalSchema,
+  approaches: nonNegativeDecimalSchema,
+  researchRate: unitRateSchema,
+  qualificationRate: unitRateSchema,
+  invitationRate: unitRateSchema,
+  appointmentRate: unitRateSchema,
+  showRate: unitRateSchema,
+  tourRate: unitRateSchema,
+  saleRate: unitRateSchema,
+  cannibalizationRate: unitRateSchema,
+  cashflowTreatment: z.enum(["incremental", "included_in_project_totals"]),
+});
+const persistedCapturePointSchema = z
+  .object({
+    status: z.enum(["provided", "pending"]),
+    sourceType: provenanceSourceSchema,
+    sourceRef: z.string().trim().max(500).optional(),
+    definition: capturePointDefinitionSchema,
+  })
+  .refine(data => data.status === "pending" || Boolean(data.sourceRef?.trim()), {
+    message: "Ponto informado exige fonte ou responsável.",
+    path: ["sourceRef"],
+  });
+const capturePointCollectionSchema = z.array(persistedCapturePointSchema).superRefine(
+  (points, ctx) => {
+    const ids = new Set<string>();
+    points.forEach((item, index) => {
+      if (ids.has(item.definition.pointId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `pointId duplicado: ${item.definition.pointId}.`,
+          path: [index, "definition", "pointId"],
+        });
+      }
+      ids.add(item.definition.pointId);
+    });
+  }
+);
 
 export const igrRouter = router({
   projects: protectedProcedure.query(({ ctx }) => listProjectsForTenant(tenantIdFromUser(ctx.user.id))),
@@ -180,6 +229,25 @@ export const igrRouter = router({
     .input(z.object({ versionId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       getReceivablesPolicyForTenant(input.versionId, tenantIdFromUser(ctx.user.id))
+    ),
+  capturePoints: protectedProcedure
+    .input(z.object({ versionId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      getCapturePointsForTenant(input.versionId, tenantIdFromUser(ctx.user.id))
+    ),
+  replaceCapturePoints: protectedProcedure
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        points: capturePointCollectionSchema,
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      replaceCapturePointsForTenant({
+        tenantId: tenantIdFromUser(ctx.user.id),
+        actorId: ctx.user.id,
+        ...input,
+      })
     ),
   upsertReceivablesPolicy: protectedProcedure
     .input(

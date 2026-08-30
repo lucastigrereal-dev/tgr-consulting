@@ -34,7 +34,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM calculation_snapshots WHERE projectVersionId IN (${ids.versionId}, ${ids.scenarioVersionId})`);
   await db.execute(sql`DELETE FROM decision_records WHERE versionId = ${ids.versionId}`);
   await db.execute(sql`DELETE FROM cost_catalog_items WHERE versionId = ${ids.versionId}`);
-  await db.execute(sql`DELETE FROM project_component_records WHERE versionId = ${ids.versionId}`);
+  await db.execute(sql`DELETE FROM project_component_records WHERE versionId IN (${ids.versionId}, ${ids.scenarioVersionId})`);
   await db.execute(sql`DELETE FROM input_values WHERE versionId IN (${ids.versionId}, ${ids.scenarioVersionId})`);
   await db.execute(sql`DELETE FROM workflow_events WHERE projectId = ${ids.projectId}`);
   await db.execute(sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`);
@@ -56,7 +56,13 @@ describe("igrRouter + banco", () => {
     expect(components.some(component => component.componentType === "project_assembly")).toBe(true);
     expect(components.find(component => component.componentType === "project_assembly")?.payload).toMatchObject({ nomeProjeto: "[TEST] Projeto Pipa", praca: "Pipa, RN", totalApartamentos: "40" });
 
-    const updatedInputs: FinancialInputSnapshot = { ...inputs, averageTicket: provided("1100") };
+    const updatedInputs: FinancialInputSnapshot = {
+      ...inputs,
+      qualifiedCouplesMonth1: provided("1"),
+      qualifiedCouplesGrowthRate: provided("0.9"),
+      conversionRate: provided("1"),
+      averageTicket: provided("1100"),
+    };
     await owner.updateInputs({ versionId: created.versionId, inputs: updatedInputs });
     expect((await owner.versionInputs({ versionId: created.versionId })).averageTicket.value).toBe("1100");
     const decision = await owner.createDecision({ versionId: created.versionId, inputKey: "averageTicket", title: "Ticket aprovado", decisionValue: "1100", rationale: "Comitê validou o ticket com base no produto definido.", responsible: "Comitê de investimento", sourceRef: "Ata de integração tRPC" });
@@ -146,6 +152,48 @@ describe("igrRouter + banco", () => {
       policyVersion: "portfolio-v1",
       sourceRef: "Ata de política de carteira",
     };
+    const capturePoint = {
+      pointId: "pipa-pdv",
+      name: "PDV Pipa",
+      channel: "PDV",
+      activationCost: "5000",
+      monthlyFixedCost: "1000",
+      costPerSale: "50",
+      approaches: "100",
+      researchRate: "1",
+      qualificationRate: "1",
+      invitationRate: "1",
+      appointmentRate: "1",
+      showRate: "1",
+      tourRate: "1",
+      saleRate: "0.1",
+      cannibalizationRate: "0",
+      cashflowTreatment: "included_in_project_totals" as const,
+    };
+    const pendingPoints = await owner.replaceCapturePoints({
+      versionId: created.versionId,
+      points: [{
+        status: "pending",
+        sourceType: "current_decision",
+        definition: capturePoint,
+      }],
+    });
+    expect(pendingPoints).toHaveLength(1);
+    expect(pendingPoints[0]).toMatchObject({
+      status: "pending",
+      definition: { pointId: "pipa-pdv" },
+    });
+    await expect(owner.replaceCapturePoints({
+      versionId: created.versionId,
+      points: [{
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Cadastro de pontos",
+        definition: { ...capturePoint, saleRate: "1.01" },
+      }],
+    })).rejects.toThrow();
+    await expect(outsider.capturePoints({ versionId: created.versionId }))
+      .rejects.toThrow("não autorizado");
     const pendingPolicy = await owner.upsertReceivablesPolicy({
       versionId: created.versionId,
       status: "pending",
@@ -170,6 +218,7 @@ describe("igrRouter + banco", () => {
     ids.pendingSnapshotId = pendingSnapshot.id;
     expect(pendingSnapshot.status).toBe("blocked_by_pending_inputs");
     expect(pendingSnapshot.domainBlockers).toContain("receivables_policy.pending");
+    expect(pendingSnapshot.domainBlockers).toContain("capture_points.pending");
     expect(pendingSnapshot.domainInvalidities).not.toContain("receivables_policy.invalid");
 
     const providedPolicy = await owner.upsertReceivablesPolicy({
@@ -192,6 +241,24 @@ describe("igrRouter + banco", () => {
         policy,
       }),
     ).rejects.toThrow("não autorizado");
+    await owner.replaceCapturePoints({
+      versionId: created.versionId,
+      points: [{
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Cadastro de pontos",
+        definition: capturePoint,
+      }],
+    });
+    await expect(outsider.replaceCapturePoints({
+      versionId: created.versionId,
+      points: [{
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Cadastro de pontos",
+        definition: capturePoint,
+      }],
+    })).rejects.toThrow("não autorizado");
 
     const scenario = await owner.createScenario({
       baseVersionId: created.versionId,
@@ -204,6 +271,11 @@ describe("igrRouter + banco", () => {
       record: { versionId: scenario.versionId, status: "provided", sourceRef: "Ata de política de carteira" },
       policy,
     });
+    expect(await owner.capturePoints({ versionId: scenario.versionId })).toMatchObject([{
+      record: { versionId: scenario.versionId },
+      status: "provided",
+      definition: { pointId: "pipa-pdv" },
+    }]);
 
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });
     ids.snapshotId = snapshot.id; ids.snapshotHash = snapshot.snapshotHash;
@@ -222,6 +294,15 @@ describe("igrRouter + banco", () => {
     expect(snapshot.authoritativeDomains?.receivablesPolicy).toMatchObject({
       status: "provided",
       policy,
+    });
+    expect(snapshot.authoritativeDomains?.capturePoints).toMatchObject({
+      definitions: [{ status: "provided", definition: { pointId: "pipa-pdv" } }],
+      economics: {
+        totals: {
+          funnel: { qualified: "100.00000000" },
+          production: { totalSales: "10.00000000" },
+        },
+      },
     });
     expect(Number(snapshot.projections[7]?.grossReceivablesSettled)).toBeGreaterThan(0);
     const contextWithSnapshot = await owner.projectContext({ projectId: created.projectId });
@@ -277,5 +358,14 @@ describe("igrRouter + banco", () => {
         policy: { ...policy, sourceRef: "Ata revisada" },
       }),
     ).rejects.toThrow("política de carteira");
+    await expect(owner.replaceCapturePoints({
+      versionId: created.versionId,
+      points: [{
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Cadastro de pontos revisado",
+        definition: capturePoint,
+      }],
+    })).rejects.toThrow("versão de trabalho");
   }, 30_000);
 });
