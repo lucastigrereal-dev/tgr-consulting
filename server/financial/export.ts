@@ -87,6 +87,11 @@ export async function buildBoardroomPdf(
   snapshot: ExportableSnapshot
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
+  if (snapshot.pointEconomics) {
+    pdf.setSubject(
+      `Point Economics · ${snapshot.pointEconomics.totals.pointCount} ponto(s) · contribuição incremental líquida ${snapshot.pointEconomics.totals.value.incrementalNetContribution}`
+    );
+  }
   const page = pdf.addPage([842, 595]);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -198,6 +203,80 @@ export async function buildBoardroomPdf(
     "TGR Consulting · Este arquivo não substitui as premissas e a decisão aprovada no sistema.",
     { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71) }
   );
+  if (snapshot.pointEconomics) {
+    const pointsPage = pdf.addPage([842, 595]);
+    pointsPage.drawRectangle({
+      x: 0,
+      y: 0,
+      width: 842,
+      height: 595,
+      color: rgb(0.043, 0.071, 0.125),
+    });
+    pointsPage.drawText("POINT ECONOMICS", {
+      x: 44,
+      y: 538,
+      size: 10,
+      font: bold,
+      color: rgb(0.91, 0.74, 0.35),
+    });
+    pointsPage.drawText("Captação reconciliada com o estudo", {
+      x: 44,
+      y: 506,
+      size: 22,
+      font: bold,
+      color: rgb(0.91, 0.93, 0.96),
+    });
+    const pointMetrics = [
+      ["PONTOS", String(snapshot.pointEconomics.totals.pointCount)],
+      ["VENDAS", snapshot.pointEconomics.totals.production.totalSales],
+      ["HEALTHY D90", snapshot.pointEconomics.totals.production.healthyD90],
+      ["CONTRIB. INCREMENTAL", snapshot.pointEconomics.totals.value.incrementalNetContribution],
+    ];
+    pointMetrics.forEach(([label, value], index) => {
+      const x = 44 + index * 192;
+      pointsPage.drawRectangle({
+        x,
+        y: 375,
+        width: 176,
+        height: 92,
+        color: rgb(0.067, 0.11, 0.19),
+        borderColor: rgb(0.15, 0.2, 0.28),
+        borderWidth: 1,
+      });
+      pointsPage.drawText(label, { x: x + 14, y: 442, size: 8, font: bold, color: rgb(0.91, 0.74, 0.35) });
+      pointsPage.drawText(value, { x: x + 14, y: 407, size: 14, font: bold, color: rgb(0.91, 0.93, 0.96), maxWidth: 148 });
+    });
+    pointsPage.drawText("Pontos de captação", {
+      x: 44,
+      y: 334,
+      size: 14,
+      font: bold,
+      color: rgb(0.91, 0.93, 0.96),
+    });
+    snapshot.pointEconomics.points.slice(0, 6).forEach((point, index) => {
+      const y = 292 - index * 42;
+      pointsPage.drawText(`${point.name} · ${point.channel} · ${point.classification}`, {
+        x: 44,
+        y,
+        size: 10,
+        font: bold,
+        color: rgb(0.91, 0.93, 0.96),
+        maxWidth: 380,
+      });
+      pointsPage.drawText(
+        `Qualificados ${point.funnel.qualified} · Tours ${point.funnel.tours} · Vendas ${point.production.totalSales} · Healthy D90 ${point.production.healthyD90}`,
+        { x: 430, y, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 360 }
+      );
+      pointsPage.drawText(
+        `Custo mensal ${point.costs.monthlyOperating} · Contribuição incremental ${point.value.incrementalNetContribution} · ROI ${display(point.unitEconomics.monthlyRoi)}x · Payback ${display(point.unitEconomics.paybackMonths)} meses`,
+        { x: 44, y: y - 15, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 746 }
+      );
+    });
+    pointsPage.drawText(
+      `Reconciliação · produção ${snapshot.pointEconomics.totals.reconciliation.productionDifference} · valor de vendas ${snapshot.pointEconomics.totals.reconciliation.salesValueDifference}`,
+      { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71) }
+    );
+  }
   return pdf.save();
 }
 
@@ -321,10 +400,46 @@ export async function buildBoardroomPptx(
       ),
   ].join("");
   const slide = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${slideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
+  const pointSlideShapes = snapshot.pointEconomics
+    ? [
+        shape(2, "Background", 0, 0, 13.333, 7.5, NAVY),
+        shape(3, "Title", 0.55, 0.45, 7.5, 0.55, NAVY, "Point Economics", { color: LIGHT, size: 2600, bold: true, margin: 0 }),
+        shape(4, "Subtitle", 0.55, 1.08, 8, 0.25, NAVY, "Captação reconciliada com o motor financeiro", { color: MUTED, size: 1000, margin: 0 }),
+        ...[
+          ["PONTOS", String(snapshot.pointEconomics.totals.pointCount)],
+          ["VENDAS", snapshot.pointEconomics.totals.production.totalSales],
+          ["HEALTHY D90", snapshot.pointEconomics.totals.production.healthyD90],
+          ["CONTRIB. INCREMENTAL", snapshot.pointEconomics.totals.value.incrementalNetContribution],
+        ].flatMap(([label, value], index) => {
+          const x = 0.55 + index * 3.1;
+          return [
+            shape(5 + index * 2, `Point metric panel ${index + 1}`, x, 1.62, 2.82, 1.15, PANEL, "", { line: "263750" }),
+            shape(6 + index * 2, `Point metric ${label}`, x + 0.14, 1.84, 2.52, 0.72, PANEL, `${label}\n${value}`, { color: LIGHT, size: 980, bold: true, margin: 0.04 }),
+          ];
+        }),
+        shape(13, "Point rows heading", 0.55, 3.08, 4, 0.25, NAVY, "PONTOS DE CAPTAÇÃO", { color: GOLD, size: 800, bold: true, margin: 0 }),
+        ...snapshot.pointEconomics.points.slice(0, 5).map((point, index) =>
+          shape(
+            14 + index,
+            `Point ${index + 1}`,
+            0.55,
+            3.48 + index * 0.62,
+            12.22,
+            0.48,
+            PANEL,
+            `${point.name} · ${point.channel} · ${point.classification}  |  Qualificados ${point.funnel.qualified} · Tours ${point.funnel.tours} · Vendas ${point.production.totalSales} · Healthy D90 ${point.production.healthyD90}  |  Contribuição incremental ${point.value.incrementalNetContribution}`,
+            { color: index === 0 ? LIGHT : MUTED, size: 720, margin: 0.07, line: "263750" }
+          )
+        ),
+      ].join("")
+    : null;
+  const pointSlide = pointSlideShapes
+    ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${pointSlideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
+    : null;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>${pointSlide ? '<Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>' : ""}<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
   const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`;
-  const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/><p:defaultTextStyle/></p:presentation>`;
-  const presentationRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/></Relationships>`;
+  const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/>${pointSlide ? '<p:sldId id="257" r:id="rId6"/>' : ""}</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/><p:defaultTextStyle/></p:presentation>`;
+  const presentationRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>${pointSlide ? '<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>' : ""}</Relationships>`;
   const bareSpTree = `<p:spTree>${groups}</p:spTree>`;
   const master = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld name="TGR Master">${bareSpTree}</p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="1" r:id="rId1"/></p:sldLayoutIdLst><p:txStyles/></p:sldMaster>`;
   const layout = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1"><p:cSld name="Blank">${bareSpTree}</p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
@@ -338,6 +453,10 @@ export async function buildBoardroomPptx(
   zip.file("ppt/_rels/presentation.xml.rels", presentationRels);
   zip.file("ppt/slides/slide1.xml", slide);
   zip.file("ppt/slides/_rels/slide1.xml.rels", slideRels);
+  if (pointSlide) {
+    zip.file("ppt/slides/slide2.xml", pointSlide);
+    zip.file("ppt/slides/_rels/slide2.xml.rels", slideRels);
+  }
   zip.file("ppt/slideMasters/slideMaster1.xml", master);
   zip.file("ppt/slideMasters/_rels/slideMaster1.xml.rels", masterRels);
   zip.file("ppt/slideLayouts/slideLayout1.xml", layout);
@@ -490,12 +609,98 @@ export async function buildBoardroomXlsx(
       );
     }),
   ].join("");
+  const pointHeaders = [
+    "Escopo",
+    "ID do ponto / quantidade",
+    "Nome",
+    "Canal",
+    "Classificação",
+    "Qualificados",
+    "Tours",
+    "Vendas",
+    "Healthy D90",
+    "Ativação",
+    "Custo operacional mensal",
+    "Contribuição incremental líquida",
+    "ROI mensal",
+    "Payback (meses)",
+    "CAPEX incremental",
+    "OPEX incremental",
+    "Diferença de produção",
+    "Diferença de valor de vendas",
+    "Drivers",
+  ];
+  const pointRows = [
+    xlsxRow(
+      1,
+      pointHeaders.map((label, index) =>
+        xlsxTextCell(`${columnName(index)}1`, label)
+      )
+    ),
+    ...(snapshot.pointEconomics
+      ? [
+          xlsxRow(2, [
+            xlsxTextCell("A2", "TOTAL"),
+            xlsxNumberCell("B2", snapshot.pointEconomics.totals.pointCount),
+            xlsxTextCell("C2", "Carteira de pontos"),
+            xlsxTextCell("D2", "Todos os canais"),
+            xlsxTextCell(
+              "E2",
+              `SCALE ${snapshot.pointEconomics.totals.classificationCounts.SCALE} · OPTIMIZE ${snapshot.pointEconomics.totals.classificationCounts.OPTIMIZE} · KILL ${snapshot.pointEconomics.totals.classificationCounts.KILL}`
+            ),
+            xlsxNumberCell("F2", snapshot.pointEconomics.totals.funnel.qualified),
+            xlsxNumberCell("G2", snapshot.pointEconomics.totals.funnel.tours),
+            xlsxNumberCell("H2", snapshot.pointEconomics.totals.production.totalSales),
+            xlsxNumberCell("I2", snapshot.pointEconomics.totals.production.healthyD90),
+            xlsxNumberCell("J2", snapshot.pointEconomics.totals.cashflow.totalActivationCost),
+            xlsxNumberCell("K2", snapshot.pointEconomics.totals.cashflow.totalMonthlyOperatingCost),
+            xlsxNumberCell("L2", snapshot.pointEconomics.totals.value.incrementalNetContribution),
+            xlsxTextCell("M2", "N/D"),
+            xlsxTextCell("N2", "N/D"),
+            xlsxNumberCell("O2", snapshot.pointEconomics.totals.cashflow.incrementalCapex),
+            xlsxNumberCell("P2", snapshot.pointEconomics.totals.cashflow.incrementalMonthlyOpex),
+            xlsxNumberCell("Q2", snapshot.pointEconomics.totals.reconciliation.productionDifference),
+            xlsxNumberCell("R2", snapshot.pointEconomics.totals.reconciliation.salesValueDifference),
+            xlsxTextCell("S2", "Agregado reconciliado"),
+          ]),
+          ...snapshot.pointEconomics.points.map((point, offset) => {
+            const row = offset + 3;
+            return xlsxRow(row, [
+              xlsxTextCell(`A${row}`, "PONTO"),
+              xlsxTextCell(`B${row}`, point.pointId),
+              xlsxTextCell(`C${row}`, point.name),
+              xlsxTextCell(`D${row}`, point.channel),
+              xlsxTextCell(`E${row}`, point.classification),
+              xlsxNumberCell(`F${row}`, point.funnel.qualified),
+              xlsxNumberCell(`G${row}`, point.funnel.tours),
+              xlsxNumberCell(`H${row}`, point.production.totalSales),
+              xlsxNumberCell(`I${row}`, point.production.healthyD90),
+              xlsxNumberCell(`J${row}`, point.costs.activation),
+              xlsxNumberCell(`K${row}`, point.costs.monthlyOperating),
+              xlsxNumberCell(`L${row}`, point.value.incrementalNetContribution),
+              xlsxNumberCell(`M${row}`, point.unitEconomics.monthlyRoi),
+              xlsxNumberCell(`N${row}`, point.unitEconomics.paybackMonths),
+              xlsxNumberCell(`O${row}`, point.cashflow.incrementalCapex),
+              xlsxNumberCell(`P${row}`, point.cashflow.incrementalMonthlyOpex),
+              xlsxNumberCell(`Q${row}`, point.reconciliation.productionDifference),
+              xlsxNumberCell(`R${row}`, point.reconciliation.salesValueDifference),
+              xlsxTextCell(`S${row}`, point.drivers.map(driver => driver.message).join(" | ")),
+            ]);
+          }),
+        ]
+      : [
+          xlsxRow(2, [
+            xlsxTextCell("A2", "SEM DADOS"),
+            xlsxTextCell("C2", "Snapshot sem Point Economics"),
+          ]),
+        ]),
+  ].join("");
   const worksheet = (rows: string, maxColumn: string, maxRow: number) =>
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${maxColumn}${Math.max(1, maxRow)}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/><sheetData>${rows}</sheetData></worksheet>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
   const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
-  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/><sheet name="Memoria de calculo" sheetId="2" r:id="rId2"/><sheet name="Projecao mensal" sheetId="3" r:id="rId3"/></sheets></workbook>`;
-  const workbookRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/><sheet name="Memoria de calculo" sheetId="2" r:id="rId2"/><sheet name="Projecao mensal" sheetId="3" r:id="rId3"/><sheet name="Point Economics" sheetId="4" r:id="rId4"/></sheets></workbook>`;
+  const workbookRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet4.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Aptos"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>`;
   zip.file("[Content_Types].xml", contentTypes);
   zip.file("_rels/.rels", rootRels);
@@ -513,6 +718,10 @@ export async function buildBoardroomXlsx(
   zip.file(
     "xl/worksheets/sheet3.xml",
     worksheet(projectionRows, "P", snapshot.projections.length + 1)
+  );
+  zip.file(
+    "xl/worksheets/sheet4.xml",
+    worksheet(pointRows, "S", (snapshot.pointEconomics?.points.length ?? 0) + 2)
   );
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 }

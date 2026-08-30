@@ -474,6 +474,95 @@ export default function Boardroom() {
         </section>
       ) : null}
 
+      {snapshot && calculation?.pointEconomics ? (
+        <section
+          id="point-economics"
+          className="scroll-mt-24 space-y-4"
+          data-incremental-contribution={calculation.pointEconomics.totals.value.incrementalNetContribution}
+        >
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
+              Point Economics
+            </p>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+              Capacidade, custo e valor incremental de cada ponto de captação,
+              reconciliados com o motor financeiro do estudo.
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              ["Pontos", String(calculation.pointEconomics.totals.pointCount)],
+              ["Vendas", formatCount(Number(calculation.pointEconomics.totals.production.totalSales))],
+              ["Healthy D90", formatCount(Number(calculation.pointEconomics.totals.production.healthyD90))],
+              ["Contribuição incremental líquida", formatKpi("totalOperatingCashFlow", calculation.pointEconomics.totals.value.incrementalNetContribution)],
+            ].map(([label, value]) => (
+              <Card key={label} className="border-white/10 bg-card/80 shadow-none">
+                <CardContent className="p-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
+                  <p className="mt-3 font-serif text-2xl text-slate-100">{value}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            {calculation.pointEconomics.points.map(point => {
+              const classificationClass = point.classification === "SCALE"
+                ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"
+                : point.classification === "KILL"
+                  ? "border-rose-300/30 bg-rose-300/10 text-rose-100"
+                  : "border-amber-200/30 bg-amber-200/10 text-amber-100";
+              return (
+                <Card key={point.pointId} className="border-white/10 bg-card/80 shadow-none">
+                  <CardHeader className="gap-3 pb-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <CardTitle className="truncate text-xl">{point.name}</CardTitle>
+                      <p className="mt-1 text-sm text-muted-foreground">{point.channel}</p>
+                    </div>
+                    <Badge variant="outline" className={classificationClass}>{point.classification}</Badge>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {[
+                        ["Qualificados", formatCount(Number(point.funnel.qualified))],
+                        ["Tours", formatCount(Number(point.funnel.tours))],
+                        ["Vendas", formatCount(Number(point.production.totalSales))],
+                        ["Healthy D90", formatCount(Number(point.production.healthyD90))],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.025] p-3">
+                          <p className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{label}</p>
+                          <p className="mt-2 font-mono text-sm text-slate-100">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+                      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] pb-2"><span className="text-muted-foreground">Ativação</span><span>{formatKpi("preOperationalInvestment", point.costs.activation)}</span></div>
+                      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] pb-2"><span className="text-muted-foreground">Operação mensal</span><span>{formatKpi("totalOperatingCashFlow", point.costs.monthlyOperating)}</span></div>
+                      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] pb-2"><span className="text-muted-foreground">Contribuição incremental líquida</span><span className="text-emerald-200">{formatKpi("totalOperatingCashFlow", point.value.incrementalNetContribution)}</span></div>
+                      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] pb-2"><span className="text-muted-foreground">ROI mensal</span><span>{point.unitEconomics.monthlyRoi === null ? "N/D" : `${Number(point.unitEconomics.monthlyRoi).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}x`}</span></div>
+                      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] pb-2"><span className="text-muted-foreground">Payback</span><span>{point.unitEconomics.paybackMonths === null ? "N/D" : `${Number(point.unitEconomics.paybackMonths).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} meses`}</span></div>
+                      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] pb-2"><span className="text-muted-foreground">Tratamento no caixa</span><span>{point.cashflow.treatment === "incremental" ? "Incremental" : "Incluído no projeto"}</span></div>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Drivers da decisão</p>
+                      <ul className="mt-2 space-y-2">
+                        {point.drivers.map(driver => (
+                          <li key={driver.code} className="flex gap-2 text-xs leading-5 text-slate-300">
+                            <span aria-hidden="true" className={driver.signal === "positive" ? "text-emerald-300" : driver.signal === "critical" ? "text-rose-300" : "text-amber-200"}>●</span>
+                            <span>{driver.message}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       {snapshot && calculation && documentTotals ? (
         <section id="study-revenue" className="scroll-mt-24 space-y-4">
           <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 05 · Receita</p><p className="mt-1 text-sm text-muted-foreground">Da entrada contratada ao saldo parcelado e ao dinheiro líquido, respeitando calendário, prazo e MDR.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-revenue")} /></div>
