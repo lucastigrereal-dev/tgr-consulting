@@ -20,6 +20,10 @@ Nenhum desses gates autoriza o uso de credenciais no repositório.
 5. **Rate limit distribuído:** o limitador atual é local por processo; múltiplas réplicas exigem um store compartilhado.
 6. **Jornada visual com dados completos:** o smoke autenticado cobre shell, rotas, landmarks, teclado, overflow, 1920×1080, zoom 200% e mobile. A digitação de um estudo completo no navegador ainda não substitui os testes transacionais e de domínio existentes.
 
+## P2 — higiene histórica
+
+- A migration `0013` impede novas duplicações de approval e baseline, mas não apaga automaticamente possíveis `workflow_events` ou `audit_events` duplicados que já existissem antes dela. Essa limpeza exige inspeção do banco real e não deve ser inferida ou executada às cegas.
+
 ## Limitações de apresentação
 
 - PDF e PPTX são entregas executivas determinísticas, não um template de agência com edição visual irrestrita.

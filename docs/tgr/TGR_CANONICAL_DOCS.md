@@ -22,6 +22,7 @@ Em caso de divergência, não se corrige cálculo por texto: primeiro se cria um
 | E2E | `docs/tgr/TGR_E2E_MATRIX.md` |
 | Segurança | `docs/tgr/TGR_SECURITY_CHECKLIST.md` |
 | Operação | `docs/tgr/TGR_OPERATIONAL_RUNBOOK.md` |
+| Evidência de certificação | `docs/tgr/TGR_VERIFICATION_RECEIPT.md` |
 | Pendências honestas | `docs/tgr/TGR_KNOWN_ISSUES.md` |
 | Receipt | `docs/tgr/TGR_FINAL_DELIVERY.md` |
 

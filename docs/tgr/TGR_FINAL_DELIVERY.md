@@ -6,7 +6,7 @@
 
 **Branch:** `codex/tgr-master-brd-v1`
 
-**Implementation head before receipt:** `5488879`
+**Certified source head before receipt:** `fa57806708c8f95629001771e76dd74faf8324ae`
 
 **Environment:** Windows local; MySQL e sessão de browser efêmeros; nenhuma credencial de produção usada
 
@@ -28,7 +28,7 @@ O TGR Consulting agora transforma o estudo em um fluxo rastreável: Builder → 
 | Segurança local | PASS — startup fail-closed, cookies, redaction, body limit, rate limit e storage tenant-bound |
 | OAuth/storage/deploy reais | GATE EXTERNO — credenciais e ambiente não foram fornecidos |
 
-As contagens finais de testes e o SHA exato são registrados no PR e no relatório de execução do Codex, porque este próprio receipt integra o último commit.
+As contagens, comandos, SHA certificado e hash do restore drill estão versionados em `TGR_VERIFICATION_RECEIPT.md`.
 
 ## Decisão de release
 
@@ -40,4 +40,5 @@ O branch está elegível para revisão e deploy em ambiente autorizado. Não é 
 - `TGR_E2E_MATRIX.md`: jornadas e evidências;
 - `TGR_SECURITY_CHECKLIST.md`: controles e gates;
 - `TGR_OPERATIONAL_RUNBOOK.md`: certificação, smoke, restore e produção;
+- `TGR_VERIFICATION_RECEIPT.md`: comandos e resultados no SHA certificado;
 - `TGR_KNOWN_ISSUES.md`: riscos externos e contratos pendentes.
