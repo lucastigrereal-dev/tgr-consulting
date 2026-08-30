@@ -34,9 +34,9 @@ describe("motor financeiro determinístico", () => {
     expect(first.status).toBe("valid");
     expect(first.projections).toHaveLength(120);
     expect(first.kpis.grossSales).toBe("1200000.00000000");
-    expect(first.memory).toHaveLength(10);
+    expect(first.memory).toHaveLength(13);
     expect(first.memory.map((memory) => memory.kpiKey)).toEqual([
-      "grossSales", "grossEntryGenerated", "recognizedRevenue", "paymentTermsNetSettlement", "commercialTeamMonthlyCost", "preOperationalInvestment", "operatingCashFlow", "npv", "irrAnnual", "paybackMonths",
+      "grossSales", "grossEntryGenerated", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "recognizedRevenue", "paymentTermsNetSettlement", "commercialTeamMonthlyCost", "preOperationalInvestment", "operatingCashFlow", "npv", "irrAnnual", "paybackMonths",
     ]);
   });
 
@@ -66,6 +66,48 @@ describe("motor financeiro determinístico", () => {
     expect(result.projections[2]).toMatchObject({ grossEntryGenerated: "1000.00000000", netCollections: "0.00000000" });
     expect(result.projections[4]).toMatchObject({ grossEntrySettled: "1000.00000000", paymentFees: "100.00000000", netCollections: "900.00000000", operatingCashFlow: "900.00000000" });
     expect(result.kpis).toMatchObject({ preOperationalInvestment: "600.00000000", paymentFees: "200.00000000", recognizedRevenue: "1800.00000000" });
+  });
+
+  it("liquida calendário comercial autoritativo por coorte de venda", () => {
+    const result = calculateFinancialProjection({
+      ...completeInputs,
+      qualifiedCouplesMonth1: provided("10"), conversionRate: provided("0.1"),
+      fixedCostMonthly: provided("0"), payrollMonthly: provided("0"), variableCostRate: provided("0"), partnerShareRate: provided("0"),
+      averageTicket: provided("1000"), entryValuePerContract: provided("100"),
+      collectionRate: provided("1"), cancellationRate: provided("0"),
+      capexInitial: provided("0"), discountRateAnnual: provided("0"),
+      paymentCardViewMixRate: provided("1"), paymentCardViewMdrRate: provided("0"), paymentCardViewSettlementDays: provided("0"),
+    }, 5, {
+      paymentSchedulePerContract: [
+        { component: "entry", dueMonthOffset: 0, grossAmount: "100" },
+        { component: "balance", dueMonthOffset: 1, grossAmount: "450" },
+        { component: "balance", dueMonthOffset: 2, grossAmount: "450" },
+      ],
+    });
+
+    expect(result.status).toBe("valid");
+    expect(result.projections.map(row => row.grossEntryGenerated)).toEqual([
+      "100.00000000",
+      "100.00000000",
+      "100.00000000",
+      "100.00000000",
+      "100.00000000",
+    ]);
+    expect(result.projections.map(row => row.installmentCollections)).toEqual([
+      "0.00000000",
+      "450.00000000",
+      "900.00000000",
+      "900.00000000",
+      "900.00000000",
+    ]);
+    expect(result.projections.map(row => row.netCollections)).toEqual([
+      "100.00000000",
+      "550.00000000",
+      "1000.00000000",
+      "1000.00000000",
+      "1000.00000000",
+    ]);
+    expect(result.kpis.recognizedRevenue).toBe("3650.00000000");
   });
 
   it("aloca captação, sala e sales kit nos meses específicos quando o cronograma está completo", () => {

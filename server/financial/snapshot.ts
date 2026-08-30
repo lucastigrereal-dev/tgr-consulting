@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { calculateFinancialProjection } from "../../shared/financial/engine";
+import {
+  calculateFinancialProjection,
+  type FinancialProjectionOptions,
+} from "../../shared/financial/engine";
+import { IGR_CORE_FORMULA_SET_V1 } from "../../shared/financial/formulas";
 import type { FinancialInputSnapshot } from "../../shared/financial/types";
 
 function stableSerialize(value: unknown): string {
@@ -20,8 +24,12 @@ export function calculateAuthoritativeSnapshot(params: {
   domainBlockers?: string[];
   domainInvalidities?: string[];
   calculationInputs?: FinancialInputSnapshot;
-  calculationOptions?: { maxContracts?: string };
+  calculationOptions?: FinancialProjectionOptions;
 }) {
+  if (params.formulaSetVersionId !== IGR_CORE_FORMULA_SET_V1.id)
+    throw new Error(
+      `Snapshot exige o conjunto de fórmulas ativo ${IGR_CORE_FORMULA_SET_V1.id}.`
+    );
   const baseCalculation = calculateFinancialProjection(
     params.calculationInputs ?? params.inputs,
     params.horizonMonths,

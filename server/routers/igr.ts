@@ -86,6 +86,7 @@ const commercialConditionSchema = z.object({
     firstDueMonth: z.number().int().min(0),
   }),
   explicitCharges: nonNegativeDecimalSchema,
+  explicitChargesDueMonth: z.number().int().min(0).optional(),
   correctionRate: nonNegativeDecimalSchema.optional(),
   interestRate: nonNegativeDecimalSchema.optional(),
   materialityTolerance: nonNegativeDecimalSchema,

@@ -207,6 +207,7 @@ export const commercialConditions = mysqlTable(
     graceMonths: int("graceMonths").default(0).notNull(),
     balanceFirstDueMonth: int("balanceFirstDueMonth").notNull(),
     explicitChargesText: varchar("explicitChargesText", { length: 255 }).default("0").notNull(),
+    explicitChargesDueMonth: int("explicitChargesDueMonth"),
     correctionRateText: varchar("correctionRateText", { length: 255 }),
     interestRateText: varchar("interestRateText", { length: 255 }),
     materialityToleranceText: varchar("materialityToleranceText", {

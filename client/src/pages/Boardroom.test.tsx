@@ -68,7 +68,9 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain("Página 04 · Vendas");
     expect(html).toContain("gross-sales · v1.0.0");
     expect(html).toContain("Página 05 · Receita");
-    expect(html).toContain("net-entry-collections · v1.1.0");
+    expect(html).toContain("gross-receivables-generated · v1.0.0");
+    expect(html).toContain("installment-collections · v1.0.0");
+    expect(html).toContain("net-entry-collections · v1.2.0");
     expect(html).toContain("Página 06 · Custos");
     expect(html).toContain("Página 07 · Operação");
     expect(html).toContain("Demonstrativo vivo");

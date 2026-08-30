@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { IGR_CORE_FORMULA_SET_V1 } from "../../shared/financial/formulas";
 import { calculateAuthoritativeSnapshot } from "./snapshot";
 import type { FinancialInputSnapshot } from "../../shared/financial/types";
 
@@ -17,24 +18,34 @@ const inputs: FinancialInputSnapshot = {
 
 describe("snapshot autoritativo", () => {
   it("produz hash estável para a mesma entrada", () => {
-    const first = calculateAuthoritativeSnapshot({ inputs, horizonMonths: 12, formulaSetVersionId: "igr-core-formulas-v1" });
-    const second = calculateAuthoritativeSnapshot({ inputs, horizonMonths: 12, formulaSetVersionId: "igr-core-formulas-v1" });
+    const first = calculateAuthoritativeSnapshot({ inputs, horizonMonths: 12, formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id });
+    const second = calculateAuthoritativeSnapshot({ inputs, horizonMonths: 12, formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id });
     expect(first.snapshotHash).toEqual(second.snapshotHash);
     expect(first.snapshotHash).toHaveLength(64);
+  });
+
+  it("recusa combinar ID histórico com o motor financeiro ativo", () => {
+    expect(() =>
+      calculateAuthoritativeSnapshot({
+        inputs,
+        horizonMonths: 12,
+        formulaSetVersionId: "igr-core-formulas-v1",
+      })
+    ).toThrow(IGR_CORE_FORMULA_SET_V1.id);
   });
 
   it("não expõe KPIs nem projeções quando um domínio autoritativo bloqueia o cálculo", () => {
     const result = calculateAuthoritativeSnapshot({
       inputs,
       horizonMonths: 12,
-      formulaSetVersionId: "igr-core-formulas-v1",
+      formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id,
       domainBlockers: ["product_catalog.missing"],
     });
 
     expect(result.status).toBe("blocked_by_pending_inputs");
     expect(result.projections).toEqual([]);
     expect(result.memory).toEqual([]);
-    expect(Object.values(result.kpis)).toEqual(Array(9).fill(null));
+    expect(Object.values(result.kpis).every(value => value === null)).toBe(true);
   });
 
   it("prioriza invalididade autoritativa mesmo quando o motor financeiro tem pendências", () => {
@@ -45,12 +56,12 @@ describe("snapshot autoritativo", () => {
     const result = calculateAuthoritativeSnapshot({
       inputs: pendingInputs,
       horizonMonths: 12,
-      formulaSetVersionId: "igr-core-formulas-v1",
+      formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id,
       domainInvalidities: ["product_catalog.invalid"],
     });
 
     expect(result.status).toBe("invalid");
     expect(result.projections).toEqual([]);
-    expect(Object.values(result.kpis)).toEqual(Array(9).fill(null));
+    expect(Object.values(result.kpis).every(value => value === null)).toBe(true);
   });
 });

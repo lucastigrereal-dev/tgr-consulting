@@ -84,6 +84,7 @@ type ConditionDraft = {
   graceMonths: string;
   balanceFirstDueMonth: string;
   explicitCharges: string;
+  explicitChargesDueMonth: string;
   correctionRate: string;
   interestRate: string;
   materialityTolerance: string;
@@ -123,6 +124,7 @@ function emptyCondition(skuCode: string): ConditionDraft {
     graceMonths: "0",
     balanceFirstDueMonth: "1",
     explicitCharges: "0",
+    explicitChargesDueMonth: "",
     correctionRate: "0",
     interestRate: "0",
     materialityTolerance: "0.01",
@@ -203,6 +205,10 @@ function readDrafts(
             graceMonths: String(condition.balance.graceMonths),
             balanceFirstDueMonth: String(condition.balance.firstDueMonth),
             explicitCharges: condition.explicitCharges,
+            explicitChargesDueMonth:
+              condition.explicitChargesDueMonth === undefined
+                ? ""
+                : String(condition.explicitChargesDueMonth),
             correctionRate: condition.correctionRate ?? "0",
             interestRate: condition.interestRate ?? "0",
             materialityTolerance: condition.materialityTolerance,
@@ -446,6 +452,12 @@ export function AuthoritativeCommercialBuilder({
               ),
             },
             explicitCharges: condition.explicitCharges,
+            explicitChargesDueMonth: condition.explicitChargesDueMonth
+              ? toInteger(
+                  condition.explicitChargesDueMonth,
+                  "Vencimento dos encargos explícitos"
+                )
+              : undefined,
             correctionRate: condition.correctionRate || undefined,
             interestRate: condition.interestRate || undefined,
             materialityTolerance: condition.materialityTolerance,
@@ -950,6 +962,18 @@ export function AuthoritativeCommercialBuilder({
                       }
                       inputMode="decimal"
                       pattern={decimalPattern}
+                    />
+                    <Field
+                      id={`condition-${index}-charges-due`}
+                      label="Vencimento dos encargos"
+                      value={condition.explicitChargesDueMonth}
+                      onChange={value =>
+                        patchCondition(index, {
+                          explicitChargesDueMonth: value,
+                        })
+                      }
+                      inputMode="numeric"
+                      pattern={integerPattern}
                     />
                     <Field
                       id={`condition-${index}-correction`}

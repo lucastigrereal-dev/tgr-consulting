@@ -3,7 +3,7 @@
 ## P0 — release blockers
 
 1. **The BRD master journey is not implemented end to end.** Product/inventory and commercial-condition reconciliation are now authoritative and operable in the Builder, but capture-point economics, sales cohorts, receivables, delinquency/cure and Healthy D90 are not yet authoritative domain modules.
-2. **Payment Calendar and portfolio accounting remain release blockers.** Positive correction/interest is intentionally rejected until an indexed payment calendar exists; cancellation, delinquency, cure and Healthy D90 are still aggregate rates rather than cohort/ledger events.
+2. **Indexed payment schedules and portfolio accounting remain release blockers.** Entry, explicit charges and balance installments now generate an authoritative Payment Calendar, but positive correction/interest still require an explicit periodicity/index contract; cancellation, delinquency, cure and Healthy D90 remain aggregate rates rather than cohort/ledger events.
 3. **Production credentials and infrastructure are absent from this checkout.** OAuth, database and object storage behavior cannot be called production-ready without an authorized environment.
 4. **Production credentials and infrastructure remain an external release gate.** Local MySQL integration is proven, but OAuth, object storage, backup and deployment behavior still require an authorized production-like environment.
 
@@ -30,3 +30,4 @@
 9. Builder now exposes the authoritative product/commercial editor and the calculate action; Boardroom and Scenario Lab propagate the price-reference month and show domain blockers.
 10. MySQL 8.4 integration tests now exercise authority, tenant isolation, rollback, baseline, scenarios, exports, product and commercial conditions locally through the repository test harness.
 11. Builder saves the complete product catalog and its commercial conditions through one backend transaction; a forced condition-write failure proves full rollback of both domains.
+12. Reconciled commercial conditions now generate a weighted Payment Calendar per contract. Snapshots separate entry, gross receivables, settled receivables, installment collections and payment fees without floating-point arithmetic.

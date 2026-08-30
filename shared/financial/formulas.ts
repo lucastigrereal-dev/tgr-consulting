@@ -1,9 +1,9 @@
 import type { FormulaSetVersion } from "./types";
 
 export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
-  id: "igr-core-formulas-v1",
-  semanticVersion: "1.3.0",
-  engineVersion: "igr-engine-1.3.0",
+  id: "igr-core-formulas-v1-4",
+  semanticVersion: "1.4.0",
+  engineVersion: "igr-engine-1.4.0",
   status: "published",
   definitions: [
     {
@@ -31,12 +31,36 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
       description: "Registra a entrada contratada no mês de venda antes de perdas, taxas e prazo de liquidação.",
     },
     {
+      id: "gross-receivables-generated",
+      name: "Recebíveis brutos gerados",
+      version: "1.0.0",
+      expression: "contracts × Σ(paymentCalendar.grossAmount por contrato)",
+      dependencies: ["gross-sales", "authoritative-commercial-model"],
+      description: "Gera entrada, encargos explícitos e parcelas de saldo no calendário comercial da coorte.",
+    },
+    {
+      id: "installment-collections",
+      name: "Recebimento líquido de parcelas",
+      version: "1.0.0",
+      expression: "Σ(balanceReceivable × collectionRate × (1 - cancellationRate) × paymentMixRate × (1 - mdrRate)) no mês de liquidação",
+      dependencies: ["gross-receivables-generated", "collectionRate", "cancellationRate", "paymentCardViewMixRate", "paymentCardViewMdrRate", "paymentCardViewSettlementDays", "paymentCardInstallmentMixRate", "paymentCardInstallmentMdrRate", "paymentCardInstallmentSettlementDays", "paymentDebitMixRate", "paymentDebitMdrRate", "paymentDebitSettlementDays", "paymentRecurringChequeMixRate", "paymentRecurringChequeMdrRate", "paymentRecurringChequeSettlementDays", "paymentBoletoMixRate", "paymentBoletoMdrRate", "paymentBoletoSettlementDays"],
+      description: "Separa a liquidação das parcelas de saldo da entrada contratada.",
+    },
+    {
+      id: "gross-receivables-settled",
+      name: "Recebíveis brutos liquidados",
+      version: "1.0.0",
+      expression: "Σ(receivableSchedule × collectionRate × (1 - cancellationRate) × paymentMixRate) no mês de liquidação",
+      dependencies: ["gross-receivables-generated", "collectionRate", "cancellationRate", "paymentCardViewSettlementDays", "paymentCardInstallmentSettlementDays", "paymentDebitSettlementDays", "paymentRecurringChequeSettlementDays", "paymentBoletoSettlementDays"],
+      description: "Mostra os recebíveis esperados que chegaram ao mês de liquidação antes do MDR.",
+    },
+    {
       id: "net-entry-collections",
-      name: "Entrada líquida recebida",
-      version: "1.1.0",
-      expression: "Σ(grossEntryGenerated em month - floor(settlementDays / 30) × paymentMixRate × collectionRate × (1 - cancellationRate) × (1 - mdrRate))",
-      dependencies: ["gross-entry-generated", "collectionRate", "cancellationRate", "paymentCardViewMixRate", "paymentCardViewMdrRate", "paymentCardViewSettlementDays", "paymentCardInstallmentMixRate", "paymentCardInstallmentMdrRate", "paymentCardInstallmentSettlementDays", "paymentDebitMixRate", "paymentDebitMdrRate", "paymentDebitSettlementDays", "paymentRecurringChequeMixRate", "paymentRecurringChequeMdrRate", "paymentRecurringChequeSettlementDays", "paymentBoletoMixRate", "paymentBoletoMdrRate", "paymentBoletoSettlementDays"],
-      description: "Liquida cada parcela de entrada por método, com perda, MDR e deslocamento mensal pelo prazo informado em dias.",
+      name: "Recebimentos líquidos",
+      version: "1.2.0",
+      expression: "Σ(receivableSchedule × paymentMixRate × collectionRate × (1 - cancellationRate) × (1 - mdrRate)) no mês de liquidação",
+      dependencies: ["gross-receivables-generated", "collectionRate", "cancellationRate", "paymentCardViewMixRate", "paymentCardViewMdrRate", "paymentCardViewSettlementDays", "paymentCardInstallmentMixRate", "paymentCardInstallmentMdrRate", "paymentCardInstallmentSettlementDays", "paymentDebitMixRate", "paymentDebitMdrRate", "paymentDebitSettlementDays", "paymentRecurringChequeMixRate", "paymentRecurringChequeMdrRate", "paymentRecurringChequeSettlementDays", "paymentBoletoMixRate", "paymentBoletoMdrRate", "paymentBoletoSettlementDays"],
+      description: "Liquida entrada, encargos e parcelas de saldo por método, com perda, MDR e prazo.",
     },
     {
       id: "pre-operational-investment",
@@ -57,10 +81,10 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
     {
       id: "payment-terms-net-settlement",
       name: "Liquidação líquida por condição de pagamento",
-      version: "1.0.0",
-      expression: "Σ(entryGenerated × paymentMixRate × (1 - mdrRate)) no mês de liquidação",
+      version: "1.1.0",
+      expression: "Σ(receivableSchedule × paymentMixRate × (1 - mdrRate)) no mês de liquidação",
       dependencies: ["net-entry-collections"],
-      description: "Explicita que condição de pagamento combina mix, MDR e prazo antes de virar caixa.",
+      description: "Explicita que o calendário comercial combina mix, MDR e prazo antes de virar caixa.",
     },
     {
       id: "operating-cash-flow",

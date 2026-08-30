@@ -93,12 +93,13 @@ describe("igrRouter + banco", () => {
           discount: "0",
           entry: { total: "20000", installments: 4, firstDueMonth: 0 },
           balance: {
-            principal: "90000",
+            principal: "89000",
             installments: 48,
             graceMonths: 1,
             firstDueMonth: 2,
           },
-          explicitCharges: "0",
+          explicitCharges: "1000",
+          explicitChargesDueMonth: 7,
           materialityTolerance: "0.01",
         },
       }],
@@ -116,14 +117,28 @@ describe("igrRouter + banco", () => {
     });
     await expect(outsider.productCatalog({ versionId: created.versionId, asOfMonth: 0 })).rejects.toThrow("não autorizado");
     await expect(outsider.saveCommercialModel(commercialModelInput)).rejects.toThrow("não autorizado");
-    expect((await owner.commercialConditions({ versionId: created.versionId }))[0]?.reconciliation.status).toBe("valid");
+    const savedConditions = await owner.commercialConditions({ versionId: created.versionId });
+    expect(savedConditions[0]?.reconciliation.status).toBe("valid");
+    expect(savedConditions[0]?.condition).toMatchObject({
+      explicitCharges: "1000",
+      explicitChargesDueMonth: 7,
+    });
 
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });
     ids.snapshotId = snapshot.id; ids.snapshotHash = snapshot.snapshotHash;
     expect(snapshot.kpis.grossSales).toBe("8360000.00000000");
     expect(snapshot.kpis.grossEntryGenerated).toBe("1520000.00000000");
+    expect(snapshot.kpis.grossReceivablesGenerated).toBe("8360000.00000000");
+    expect(Number(snapshot.kpis.installmentCollections)).toBeGreaterThan(0);
     expect(snapshot.projections.reduce((total, row) => total + Number(row.contracts), 0)).toBe(76);
     expect(snapshot.authoritativeDomains?.commercialModel?.derived).toMatchObject({ averageTicket: "110000.00000000", entryValuePerContract: "20000.00000000", maxContracts: "76.00000000" });
+    expect(snapshot.authoritativeDomains?.commercialModel?.derived.paymentSchedulePerContract.length).toBeGreaterThan(1);
+    expect(snapshot.authoritativeDomains?.commercialModel?.derived.paymentSchedulePerContract).toContainEqual({
+      component: "explicit_charge",
+      dueMonthOffset: 7,
+      grossAmount: "1000.00000000",
+    });
+    expect(Number(snapshot.projections[7]?.grossReceivablesSettled)).toBeGreaterThan(0);
     const contextWithSnapshot = await owner.projectContext({ projectId: created.projectId });
     expect(contextWithSnapshot.snapshotHistory[0]).toMatchObject({ id: snapshot.id, snapshotHash: snapshot.snapshotHash, calculationStatus: "valid" });
     expect(contextWithSnapshot.snapshotHistory[0]?.kpis).toHaveProperty("npv");

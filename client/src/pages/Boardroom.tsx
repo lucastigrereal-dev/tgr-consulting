@@ -313,13 +313,16 @@ export default function Boardroom() {
     grossSales: total.grossSales + Number(row.grossSales),
     grossEntryGenerated: total.grossEntryGenerated + Number(row.grossEntryGenerated ?? "0"),
     grossEntrySettled: total.grossEntrySettled + Number(row.grossEntrySettled ?? "0"),
+    grossReceivablesGenerated: total.grossReceivablesGenerated + Number(row.grossReceivablesGenerated ?? row.grossEntryGenerated ?? "0"),
+    grossReceivablesSettled: total.grossReceivablesSettled + Number(row.grossReceivablesSettled ?? row.grossEntrySettled ?? "0"),
+    installmentCollections: total.installmentCollections + Number(row.installmentCollections ?? "0"),
     paymentFees: total.paymentFees + Number(row.paymentFees ?? "0"),
     netCollections: total.netCollections + Number(row.netCollections ?? row.recognizedRevenue),
     variableCosts: total.variableCosts + Number(row.variableCosts),
     fixedCosts: total.fixedCosts + Number(row.fixedCosts),
     payroll: total.payroll + Number(row.payroll),
     preOperationalInvestment: total.preOperationalInvestment + Number(row.preOperationalInvestment ?? row.capex),
-  }), { qualifiedCouples: 0, contracts: 0, grossSales: 0, grossEntryGenerated: 0, grossEntrySettled: 0, paymentFees: 0, netCollections: 0, variableCosts: 0, fixedCosts: 0, payroll: 0, preOperationalInvestment: 0 });
+  }), { qualifiedCouples: 0, contracts: 0, grossSales: 0, grossEntryGenerated: 0, grossEntrySettled: 0, grossReceivablesGenerated: 0, grossReceivablesSettled: 0, installmentCollections: 0, paymentFees: 0, netCollections: 0, variableCosts: 0, fixedCosts: 0, payroll: 0, preOperationalInvestment: 0 });
   const formatCount = (value: number) => new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(value);
   const chapterFormulaMemory = (href: (typeof LIVE_DOCUMENT_CHAPTERS)[number]["href"]) => getChapterFormulaTrace(href, calculation?.memory ?? []).formulas;
 
@@ -469,8 +472,8 @@ export default function Boardroom() {
 
       {snapshot && calculation && documentTotals ? (
         <section id="study-revenue" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 05 · Receita</p><p className="mt-1 text-sm text-muted-foreground">Da entrada contratada até o dinheiro líquido, respeitando prazo e MDR em cada método.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-revenue")} /></div>
-          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[840px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Entrada gerada</th><th className="px-5 py-3 font-medium">Entrada liquidada</th><th className="px-5 py-3 font-medium">Taxas / MDR</th><th className="px-5 py-3 font-medium">Entrada líquida</th><th className="px-5 py-3 font-medium">Liquidação líquida</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5">{formatKpi("grossEntryGenerated", String(documentTotals.grossEntryGenerated))}</td><td className="px-5 py-5">{formatKpi("grossEntrySettled", String(documentTotals.grossEntrySettled))}</td><td className="px-5 py-5 text-rose-200">{formatKpi("paymentFees", String(documentTotals.paymentFees))}</td><td className="px-5 py-5 text-emerald-200">{formatKpi("netCollections", String(documentTotals.netCollections))}</td><td className="px-5 py-5">{documentTotals.grossEntrySettled ? `${((documentTotals.netCollections / documentTotals.grossEntrySettled) * 100).toFixed(2)}%` : "PENDENTE"}</td></tr></tbody></table></CardContent></Card>
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 05 · Receita</p><p className="mt-1 text-sm text-muted-foreground">Da entrada contratada ao saldo parcelado e ao dinheiro líquido, respeitando calendário, prazo e MDR.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-revenue")} /></div>
+          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[980px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Entrada gerada</th><th className="px-5 py-3 font-medium">Recebíveis gerados</th><th className="px-5 py-3 font-medium">Recebíveis liquidados</th><th className="px-5 py-3 font-medium">Parcelas líquidas</th><th className="px-5 py-3 font-medium">Taxas / MDR</th><th className="px-5 py-3 font-medium">Recebimentos líquidos</th><th className="px-5 py-3 font-medium">Liquidação líquida</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5">{formatKpi("grossEntryGenerated", String(documentTotals.grossEntryGenerated))}</td><td className="px-5 py-5">{formatKpi("grossReceivablesGenerated", String(documentTotals.grossReceivablesGenerated))}</td><td className="px-5 py-5">{formatKpi("grossReceivablesSettled", String(documentTotals.grossReceivablesSettled))}</td><td className="px-5 py-5">{formatKpi("installmentCollections", String(documentTotals.installmentCollections))}</td><td className="px-5 py-5 text-rose-200">{formatKpi("paymentFees", String(documentTotals.paymentFees))}</td><td className="px-5 py-5 text-emerald-200">{formatKpi("netCollections", String(documentTotals.netCollections))}</td><td className="px-5 py-5">{documentTotals.grossReceivablesSettled ? `${((documentTotals.netCollections / documentTotals.grossReceivablesSettled) * 100).toFixed(2)}%` : "PENDENTE"}</td></tr></tbody></table></CardContent></Card>
         </section>
       ) : null}
 
@@ -741,7 +744,8 @@ export default function Boardroom() {
                   <th className="px-3 py-3 font-medium">Contratos</th>
                   <th className="px-3 py-3 font-medium">Venda bruta</th>
                   <th className="px-3 py-3 font-medium">Entrada gerada</th>
-                  <th className="px-3 py-3 font-medium">Entrada liquidada</th>
+                  <th className="px-3 py-3 font-medium">Recebíveis liquidados</th>
+                  <th className="px-3 py-3 font-medium">Parcelas líquidas</th>
                   <th className="px-3 py-3 font-medium">Taxas / MDR</th>
                   <th className="px-3 py-3 font-medium">Entrada líquida</th>
                   <th className="px-3 py-3 font-medium">Pré-invest.</th>
@@ -758,7 +762,8 @@ export default function Boardroom() {
                     <td className="px-3 py-3 font-mono">{row.contracts}</td>
                     <td className="px-3 py-3">{formatKpi("grossSales", row.grossSales)}</td>
                     <td className="px-3 py-3">{formatKpi("grossEntryGenerated", row.grossEntryGenerated ?? "0")}</td>
-                    <td className="px-3 py-3">{formatKpi("grossEntrySettled", row.grossEntrySettled ?? row.recognizedRevenue)}</td>
+                    <td className="px-3 py-3">{formatKpi("grossReceivablesSettled", row.grossReceivablesSettled ?? row.grossEntrySettled ?? row.recognizedRevenue)}</td>
+                    <td className="px-3 py-3">{formatKpi("installmentCollections", row.installmentCollections ?? "0")}</td>
                     <td className="px-3 py-3 text-rose-200">{formatKpi("paymentFees", row.paymentFees ?? "0")}</td>
                     <td className="px-3 py-3 text-emerald-200">{formatKpi("netCollections", row.netCollections ?? row.recognizedRevenue)}</td>
                     <td className="px-3 py-3 text-amber-200">{formatKpi("preOperationalInvestment", row.preOperationalInvestment ?? row.capex)}</td>

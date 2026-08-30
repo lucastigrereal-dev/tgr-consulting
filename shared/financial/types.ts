@@ -108,6 +108,9 @@ export type MonthlyProjection = {
   preOperationalInvestment: DecimalText;
   grossEntryGenerated: DecimalText;
   grossEntrySettled: DecimalText;
+  grossReceivablesGenerated: DecimalText;
+  grossReceivablesSettled: DecimalText;
+  installmentCollections: DecimalText;
   paymentFees: DecimalText;
   netCollections: DecimalText;
   operatingCashFlow: DecimalText;
@@ -127,6 +130,9 @@ export type FinancialCalculation = {
   kpis: {
     grossSales: DecimalText | null;
     grossEntryGenerated: DecimalText | null;
+    grossReceivablesGenerated: DecimalText | null;
+    grossReceivablesSettled: DecimalText | null;
+    installmentCollections: DecimalText | null;
     recognizedRevenue: DecimalText | null;
     paymentFees: DecimalText | null;
     preOperationalInvestment: DecimalText | null;

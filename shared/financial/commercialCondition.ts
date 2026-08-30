@@ -18,6 +18,7 @@ export type CommercialConditionInput = {
     firstDueMonth: number;
   };
   explicitCharges: string;
+  explicitChargesDueMonth?: number;
   correctionRate?: string;
   interestRate?: string;
   materialityTolerance: string;
@@ -100,6 +101,47 @@ export function reconcileCommercialCondition(input: CommercialConditionInput) {
       message: "O saldo precisa ter ao menos uma parcela.",
     });
   }
+  for (const [path, value] of [
+    ["entry.firstDueMonth", input.entry.firstDueMonth],
+    ["balance.graceMonths", input.balance.graceMonths],
+    ["balance.firstDueMonth", input.balance.firstDueMonth],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 0)
+      violations.push({
+        code: "INVALID_COMMERCIAL_MONTH",
+        path,
+        message: "Meses da condição comercial devem ser inteiros não negativos.",
+      });
+  }
+  if (input.balance.firstDueMonth < input.balance.graceMonths)
+    violations.push({
+      code: "BALANCE_DUE_BEFORE_GRACE",
+      path: "balance.firstDueMonth",
+      message:
+        "O primeiro vencimento do saldo não pode ocorrer antes do fim da carência.",
+    });
+  if (explicitCharges.gt(ZERO)) {
+    if (
+      !Number.isInteger(input.explicitChargesDueMonth) ||
+      input.explicitChargesDueMonth! < 0
+    )
+      violations.push({
+        code: "MISSING_EXPLICIT_CHARGES_DUE_MONTH",
+        path: "explicitChargesDueMonth",
+        message:
+          "Encargos explícitos exigem um mês de vencimento inteiro e não negativo.",
+      });
+  } else if (
+    input.explicitChargesDueMonth !== undefined &&
+    (!Number.isInteger(input.explicitChargesDueMonth) ||
+      input.explicitChargesDueMonth < 0)
+  )
+    violations.push({
+      code: "INVALID_EXPLICIT_CHARGES_DUE_MONTH",
+      path: "explicitChargesDueMonth",
+      message:
+        "O mês de vencimento dos encargos deve ser inteiro e não negativo.",
+    });
 
   const expectedPrice = listPrice.minus(discount);
   const financialComponents = entryTotal

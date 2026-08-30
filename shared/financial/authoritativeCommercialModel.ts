@@ -2,6 +2,10 @@ import type Decimal from "decimal.js";
 import { reconcileCommercialCondition, type CommercialConditionInput } from "./commercialCondition";
 import { FinanceDecimal } from "./engine";
 import { evaluateProductInventory, type ProductSkuInput } from "./productInventory";
+import {
+  buildPaymentCalendar,
+  type PaymentCalendarComponent,
+} from "./paymentCalendar";
 
 export type LinkedCommercialConditionInput = {
   productSkuCode?: string | null;
@@ -43,6 +47,14 @@ export function resolveAuthoritativeCommercialModel(input: {
   let weightedTicket = ZERO;
   let weightedEntry = ZERO;
   let availableContracts = ZERO;
+  const weightedSchedule = new Map<
+    string,
+    {
+      component: PaymentCalendarComponent;
+      dueMonthOffset: number;
+      grossAmount: Decimal;
+    }
+  >();
   const assignments: Array<{
     productSkuCode: string;
     conditionId: string;
@@ -107,6 +119,17 @@ export function resolveAuthoritativeCommercialModel(input: {
       new FinanceDecimal(linked.condition.entry.total).times(weight)
     );
     availableContracts = availableContracts.plus(weight);
+    const paymentCalendar = buildPaymentCalendar(linked.condition);
+    for (const line of paymentCalendar.lines) {
+      const key = `${line.component}:${line.dueMonthOffset}`;
+      const current = weightedSchedule.get(key);
+      const grossAmount = new FinanceDecimal(line.grossAmount).times(weight);
+      weightedSchedule.set(key, {
+        component: line.component,
+        dueMonthOffset: line.dueMonthOffset,
+        grossAmount: (current?.grossAmount ?? ZERO).plus(grossAmount),
+      });
+    }
     assignments.push({
       productSkuCode: sku.id,
       conditionId: linked.condition.id,
@@ -121,6 +144,7 @@ export function resolveAuthoritativeCommercialModel(input: {
         averageTicket: "0.00000000",
         entryValuePerContract: "0.00000000",
         maxContracts: "0.00000000",
+        paymentSchedulePerContract: [],
       }
     : {
         averageTicket: decimalText(weightedTicket.div(availableContracts)),
@@ -128,6 +152,19 @@ export function resolveAuthoritativeCommercialModel(input: {
           weightedEntry.div(availableContracts)
         ),
         maxContracts: decimalText(availableContracts),
+        paymentSchedulePerContract: Array.from(weightedSchedule.values())
+          .sort(
+            (left, right) =>
+              left.dueMonthOffset - right.dueMonthOffset ||
+              left.component.localeCompare(right.component)
+          )
+          .map(line => ({
+            component: line.component,
+            dueMonthOffset: line.dueMonthOffset,
+            grossAmount: decimalText(
+              line.grossAmount.div(availableContracts)
+            ),
+          })),
       };
 
   return {

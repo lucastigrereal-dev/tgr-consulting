@@ -759,6 +759,7 @@ function commercialConditionFromRow(
       firstDueMonth: row.balanceFirstDueMonth,
     },
     explicitCharges: row.explicitChargesText,
+    explicitChargesDueMonth: row.explicitChargesDueMonth ?? undefined,
     correctionRate: row.correctionRateText ?? undefined,
     interestRate: row.interestRateText ?? undefined,
     materialityTolerance: row.materialityToleranceText,
@@ -860,6 +861,7 @@ export async function upsertCommercialConditionForTenant(params: {
     graceMonths: params.condition.balance.graceMonths,
     balanceFirstDueMonth: params.condition.balance.firstDueMonth,
     explicitChargesText: params.condition.explicitCharges,
+    explicitChargesDueMonth: params.condition.explicitChargesDueMonth ?? null,
     correctionRateText: params.condition.correctionRate ?? null,
     interestRateText: params.condition.interestRate ?? null,
     materialityToleranceText: params.condition.materialityTolerance,
@@ -887,6 +889,7 @@ export async function upsertCommercialConditionForTenant(params: {
           graceMonths: record.graceMonths,
           balanceFirstDueMonth: record.balanceFirstDueMonth,
           explicitChargesText: record.explicitChargesText,
+          explicitChargesDueMonth: record.explicitChargesDueMonth,
           correctionRateText: record.correctionRateText,
           interestRateText: record.interestRateText,
           materialityToleranceText: record.materialityToleranceText,
@@ -1057,6 +1060,7 @@ export async function saveCommercialModelForTenant(params: {
       graceMonths: item.condition.balance.graceMonths,
       balanceFirstDueMonth: item.condition.balance.firstDueMonth,
       explicitChargesText: item.condition.explicitCharges,
+      explicitChargesDueMonth: item.condition.explicitChargesDueMonth ?? null,
       correctionRateText: item.condition.correctionRate ?? null,
       interestRateText: item.condition.interestRate ?? null,
       materialityToleranceText: item.condition.materialityTolerance,
@@ -1493,6 +1497,10 @@ async function getAuthoritativeCalculationContext(params: {
   asOfMonth: number;
 }) {
   const version = await getVersionForTenant(params.versionId, params.tenantId);
+  if (version.formulaSetVersionId !== IGR_CORE_FORMULA_SET_V1.id)
+    throw new Error(
+      `A versão usa o conjunto de fórmulas ${version.formulaSetVersionId}; crie um novo cenário para calcular com ${IGR_CORE_FORMULA_SET_V1.id}.`
+    );
   const inputs = await getInputsForVersion(version.id);
   const productCatalog = await getProductCatalogForTenant(
     version.id,
@@ -1598,7 +1606,11 @@ async function getAuthoritativeCalculationContext(params: {
         }
       : undefined;
   const calculationOptions = calculationInputs
-    ? { maxContracts: commercialModel!.derived.maxContracts }
+    ? {
+        maxContracts: commercialModel!.derived.maxContracts,
+        paymentSchedulePerContract:
+          commercialModel!.derived.paymentSchedulePerContract,
+      }
     : undefined;
   return {
     version,
@@ -1763,6 +1775,7 @@ export async function createScenarioForTenant(params: {
     params.baseVersionId,
     params.tenantId
   );
+  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
   const versionId = nanoid();
   const branchId = nanoid();
   await db.transaction(async transaction => {
@@ -1822,7 +1835,7 @@ export async function createScenarioForTenant(params: {
       id: versionId,
       projectId: currentBase.projectId,
       parentVersionId: currentBase.id,
-      formulaSetVersionId: currentBase.formulaSetVersionId,
+      formulaSetVersionId,
       kind: "scenario",
       state: "draft",
       isImmutable: false,
@@ -1894,6 +1907,7 @@ export async function createScenarioForTenant(params: {
           graceMonths: condition.graceMonths,
           balanceFirstDueMonth: condition.balanceFirstDueMonth,
           explicitChargesText: condition.explicitChargesText,
+          explicitChargesDueMonth: condition.explicitChargesDueMonth,
           correctionRateText: condition.correctionRateText,
           interestRateText: condition.interestRateText,
           materialityToleranceText: condition.materialityToleranceText,

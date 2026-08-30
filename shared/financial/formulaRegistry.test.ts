@@ -9,7 +9,7 @@ describe("Formula Registry", () => {
     expect(registry.list()).toHaveLength(2);
     expect(registry.getActiveFormulaSet().semanticVersion).toBe("2.0.0");
     registry.selectActiveFormulaSet(IGR_CORE_FORMULA_SET_V1.id);
-    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.3.0");
+    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.4.0");
   });
 
   it("expõe lineage recursivo de KPI até inputs", () => {
@@ -24,9 +24,13 @@ describe("Formula Registry", () => {
     const registry = new FormulaRegistry([IGR_CORE_FORMULA_SET_V1], IGR_CORE_FORMULA_SET_V1.id);
     const teamLineage = registry.getLineage("commercial-team-monthly-cost");
     const paymentLineage = registry.getLineage("payment-terms-net-settlement");
+    const installmentLineage = registry.getLineage("installment-collections");
     expect(teamLineage.find((node) => node.id === "payrollMonthly" && node.kind === "input")).toBeTruthy();
     expect(paymentLineage.find((node) => node.id === "net-entry-collections" && node.kind === "formula")).toBeTruthy();
-    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.3.0");
+    expect(installmentLineage.find((node) => node.id === "paymentCardInstallmentMdrRate" && node.kind === "input")).toBeTruthy();
+    expect(installmentLineage.find((node) => node.id === "paymentCardInstallmentSettlementDays" && node.kind === "input")).toBeTruthy();
+    expect(IGR_CORE_FORMULA_SET_V1.id).toBe("igr-core-formulas-v1-4");
+    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.4.0");
   });
 
   it("recusa ativar formula set que não foi publicado", () => {

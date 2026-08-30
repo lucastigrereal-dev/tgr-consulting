@@ -9,6 +9,7 @@ import type {
   FinancialInputSnapshot,
   MonthlyProjection,
 } from "./types";
+import type { PaymentCalendarComponent } from "./paymentCalendar";
 
 export const FinanceDecimal = Decimal.clone({
   precision: 32,
@@ -28,6 +29,17 @@ const PAYMENT_METHODS = [
   { mix: "paymentRecurringChequeMixRate", mdr: "paymentRecurringChequeMdrRate", settlementDays: "paymentRecurringChequeSettlementDays" },
   { mix: "paymentBoletoMixRate", mdr: "paymentBoletoMdrRate", settlementDays: "paymentBoletoSettlementDays" },
 ] satisfies { mix: FinancialInputKey; mdr: FinancialInputKey; settlementDays: FinancialInputKey }[];
+
+export type PaymentSchedulePerContractItem = {
+  component: PaymentCalendarComponent;
+  dueMonthOffset: number;
+  grossAmount: DecimalText;
+};
+
+export type FinancialProjectionOptions = {
+  maxContracts?: string;
+  paymentSchedulePerContract?: PaymentSchedulePerContractItem[];
+};
 
 function decimalText(value: Decimal): DecimalText {
   return value.toFixed(8);
@@ -55,6 +67,37 @@ function assertUnitRate(key: string, value: Decimal): void {
 
 function assertNonNegative(key: string, value: Decimal): void {
   if (value.isNegative()) throw new Error(`${key} não pode ser negativo.`);
+}
+
+function resolvePaymentSchedulePerContract(
+  entryValuePerContract: Decimal,
+  options?: FinancialProjectionOptions
+) {
+  const schedule = options?.paymentSchedulePerContract;
+  if (!schedule || schedule.length === 0) {
+    return [{
+      component: "entry" as const,
+      dueMonthOffset: 0,
+      grossAmount: entryValuePerContract,
+    }];
+  }
+  return schedule.map((item, index) => {
+    if (!Number.isInteger(item.dueMonthOffset) || item.dueMonthOffset < 0) {
+      throw new Error(
+        `paymentSchedulePerContract.${index}.dueMonthOffset deve ser inteiro maior ou igual a zero.`
+      );
+    }
+    const grossAmount = new FinanceDecimal(item.grossAmount);
+    assertNonNegative(
+      `paymentSchedulePerContract.${index}.grossAmount`,
+      grossAmount
+    );
+    return {
+      component: item.component,
+      dueMonthOffset: item.dueMonthOffset,
+      grossAmount,
+    };
+  });
 }
 
 function calculateIrrMonthly(cashFlows: Decimal[]): Decimal | null {
@@ -130,7 +173,7 @@ function createMemory(
 export function calculateFinancialProjection(
   inputs: FinancialInputSnapshot,
   horizonMonths: number,
-  options?: { maxContracts?: string }
+  options?: FinancialProjectionOptions
 ): FinancialCalculation {
   if (!Number.isInteger(horizonMonths) || horizonMonths < 1 || horizonMonths > 120) {
     throw new Error("O horizonte deve estar entre 1 e 120 meses.");
@@ -148,6 +191,9 @@ export function calculateFinancialProjection(
       kpis: {
         grossSales: null,
         grossEntryGenerated: null,
+        grossReceivablesGenerated: null,
+        grossReceivablesSettled: null,
+        installmentCollections: null,
         recognizedRevenue: null,
         paymentFees: null,
         preOperationalInvestment: null,
@@ -207,6 +253,17 @@ export function calculateFinancialProjection(
   if (!paymentMix.eq(ONE)) {
     throw new Error("O mix de recebimento deve fechar exatamente em 100%.");
   }
+  const paymentSchedulePerContract = resolvePaymentSchedulePerContract(
+    entryValuePerContract,
+    options
+  );
+  const receivableValuePerContract = paymentSchedulePerContract.reduce(
+    (total, item) => total.plus(item.grossAmount),
+    ZERO
+  );
+  const entryScheduleValuePerContract = paymentSchedulePerContract
+    .filter(item => item.component === "entry")
+    .reduce((total, item) => total.plus(item.grossAmount), ZERO);
   const preOperationMonthsNumber = preOperationMonths.toNumber();
   const implementationSchedule = [
     { share: readOptionalInput(inputs, "capexAcquisitionShareRate"), month: readOptionalInput(inputs, "capexAcquisitionMonth"), label: "captação" },
@@ -232,6 +289,9 @@ export function calculateFinancialProjection(
   let cumulativeCashFlow = ZERO;
   let grossSalesTotal = ZERO;
   let grossEntryGeneratedTotal = ZERO;
+  let grossReceivablesGeneratedTotal = ZERO;
+  let grossReceivablesSettledTotal = ZERO;
+  let installmentCollectionsTotal = ZERO;
   let recognizedRevenueTotal = ZERO;
   let paymentFeesTotal = ZERO;
   let preOperationalInvestmentTotal = ZERO;
@@ -239,6 +299,18 @@ export function calculateFinancialProjection(
   const projections: MonthlyProjection[] = [];
   const cashFlows: Decimal[] = [];
   const settlementGrossSchedule = Array.from({ length: horizonMonths + 121 }, () => ZERO);
+  const entrySettlementGrossSchedule = Array.from(
+    { length: horizonMonths + 121 },
+    () => ZERO
+  );
+  const balanceSettlementGrossSchedule = Array.from(
+    { length: horizonMonths + 121 },
+    () => ZERO
+  );
+  const balanceFeeSchedule = Array.from(
+    { length: horizonMonths + 121 },
+    () => ZERO
+  );
   const paymentFeeSchedule = Array.from({ length: horizonMonths + 121 }, () => ZERO);
   let remainingContracts = options?.maxContracts === undefined
     ? null
@@ -265,19 +337,49 @@ export function calculateFinancialProjection(
       remainingContracts = remainingContracts.minus(contracts);
     }
     const grossSales = contracts.times(averageTicket);
-    const grossEntryGenerated = contracts.times(entryValuePerContract);
-    const collectibleEntry = grossEntryGenerated.times(collectionRate).times(ONE.minus(cancellationRate));
-    for (const method of paymentMethods) {
-      const settlementMonth = month + Math.floor(method.settlementDays.div(30).toNumber());
-      if (settlementMonth <= horizonMonths) {
-        const settledByMethod = collectibleEntry.times(method.mix);
-        settlementGrossSchedule[settlementMonth] = settlementGrossSchedule[settlementMonth].plus(settledByMethod);
-        paymentFeeSchedule[settlementMonth] = paymentFeeSchedule[settlementMonth].plus(settledByMethod.times(method.mdr));
+    const grossEntryGenerated = contracts.times(entryScheduleValuePerContract);
+    const grossReceivablesGenerated = contracts.times(
+      receivableValuePerContract
+    );
+    const collectibleReceivables = paymentSchedulePerContract.map(item => ({
+      component: item.component,
+      dueMonth: month + item.dueMonthOffset,
+      grossAmount: contracts
+        .times(item.grossAmount)
+        .times(collectionRate)
+        .times(ONE.minus(cancellationRate)),
+    }));
+    for (const receivable of collectibleReceivables) {
+      for (const method of paymentMethods) {
+        const settlementMonth =
+          receivable.dueMonth +
+          Math.floor(method.settlementDays.div(30).toNumber());
+        if (settlementMonth <= horizonMonths) {
+          const settledByMethod = receivable.grossAmount.times(method.mix);
+          settlementGrossSchedule[settlementMonth] =
+            settlementGrossSchedule[settlementMonth].plus(settledByMethod);
+          const fee = settledByMethod.times(method.mdr);
+          paymentFeeSchedule[settlementMonth] =
+            paymentFeeSchedule[settlementMonth].plus(fee);
+          if (receivable.component === "entry")
+            entrySettlementGrossSchedule[settlementMonth] =
+              entrySettlementGrossSchedule[settlementMonth].plus(settledByMethod);
+          if (receivable.component === "balance") {
+            balanceSettlementGrossSchedule[settlementMonth] =
+              balanceSettlementGrossSchedule[settlementMonth].plus(settledByMethod);
+            balanceFeeSchedule[settlementMonth] =
+              balanceFeeSchedule[settlementMonth].plus(fee);
+          }
+        }
       }
     }
-    const grossEntrySettled = settlementGrossSchedule[month];
+    const grossEntrySettled = entrySettlementGrossSchedule[month];
+    const grossReceivablesSettled = settlementGrossSchedule[month];
     const paymentFees = paymentFeeSchedule[month];
-    const netCollections = grossEntrySettled.minus(paymentFees);
+    const installmentCollections = balanceSettlementGrossSchedule[month].minus(
+      balanceFeeSchedule[month]
+    );
+    const netCollections = grossReceivablesSettled.minus(paymentFees);
     const recognizedRevenue = netCollections;
     const variableCosts = grossSales.times(variableCostRate);
     const partnerShare = netCollections.times(partnerShareRate);
@@ -315,6 +417,9 @@ export function calculateFinancialProjection(
       preOperationalInvestment: decimalText(preOperationalInvestment),
       grossEntryGenerated: decimalText(grossEntryGenerated),
       grossEntrySettled: decimalText(grossEntrySettled),
+      grossReceivablesGenerated: decimalText(grossReceivablesGenerated),
+      grossReceivablesSettled: decimalText(grossReceivablesSettled),
+      installmentCollections: decimalText(installmentCollections),
       paymentFees: decimalText(paymentFees),
       netCollections: decimalText(netCollections),
       operatingCashFlow: decimalText(operatingCashFlow),
@@ -324,6 +429,15 @@ export function calculateFinancialProjection(
 
     grossSalesTotal = grossSalesTotal.plus(grossSales);
     grossEntryGeneratedTotal = grossEntryGeneratedTotal.plus(grossEntryGenerated);
+    grossReceivablesGeneratedTotal = grossReceivablesGeneratedTotal.plus(
+      grossReceivablesGenerated
+    );
+    grossReceivablesSettledTotal = grossReceivablesSettledTotal.plus(
+      grossReceivablesSettled
+    );
+    installmentCollectionsTotal = installmentCollectionsTotal.plus(
+      installmentCollections
+    );
     recognizedRevenueTotal = recognizedRevenueTotal.plus(recognizedRevenue);
     paymentFeesTotal = paymentFeesTotal.plus(paymentFees);
     preOperationalInvestmentTotal = preOperationalInvestmentTotal.plus(preOperationalInvestment);
@@ -349,6 +463,9 @@ export function calculateFinancialProjection(
     kpis: {
       grossSales: decimalText(grossSalesTotal),
       grossEntryGenerated: decimalText(grossEntryGeneratedTotal),
+      grossReceivablesGenerated: decimalText(grossReceivablesGeneratedTotal),
+      grossReceivablesSettled: decimalText(grossReceivablesSettledTotal),
+      installmentCollections: decimalText(installmentCollectionsTotal),
       recognizedRevenue: decimalText(recognizedRevenueTotal),
       paymentFees: decimalText(paymentFeesTotal),
       preOperationalInvestment: decimalText(preOperationalInvestmentTotal),
@@ -360,8 +477,11 @@ export function calculateFinancialProjection(
     memory: [
       createMemory("grossSales", grossSalesTotal, "gross-sales", "Venda assinada acumulada no horizonte selecionado."),
       createMemory("grossEntryGenerated", grossEntryGeneratedTotal, "gross-entry-generated", "Entrada contratada antes de perdas, taxas e prazo de liquidação."),
-      createMemory("recognizedRevenue", recognizedRevenueTotal, "net-entry-collections", "Entrada líquida recebida depois de perda, MDR e prazo por método de pagamento."),
-      createMemory("paymentTermsNetSettlement", recognizedRevenueTotal, "payment-terms-net-settlement", "Condição de pagamento aplicada ao recebimento: mix, MDR e prazo de liquidação."),
+      createMemory("grossReceivablesGenerated", grossReceivablesGeneratedTotal, "gross-receivables-generated", "Recebíveis contratuais gerados pela entrada, encargos e saldo parcelado das coortes."),
+      createMemory("grossReceivablesSettled", grossReceivablesSettledTotal, "gross-receivables-settled", "Recebíveis esperados liquidados antes do MDR, após cancelamento e perda agregados enquanto a carteira por aging não está concluída."),
+      createMemory("installmentCollections", installmentCollectionsTotal, "installment-collections", "Parcelas de saldo liquidadas depois de perda, MDR e prazo por método de pagamento."),
+      createMemory("recognizedRevenue", recognizedRevenueTotal, "net-entry-collections", "Recebimentos líquidos de entrada, encargos e parcelas depois de perda, MDR e prazo."),
+      createMemory("paymentTermsNetSettlement", recognizedRevenueTotal, "payment-terms-net-settlement", "Calendário comercial aplicado ao recebimento líquido: mix, MDR e prazo de liquidação."),
       createMemory("commercialTeamMonthlyCost", payrollMonthly, "commercial-team-monthly-cost", "Folha mensal agregada da estrutura comercial informada na Página 1."),
       createMemory("preOperationalInvestment", preOperationalInvestmentTotal, "pre-operational-investment", hasCompleteImplementationSchedule ? "Pré-investimento alocado por frente e mês de implantação informado." : "Pré-investimento distribuído antes da abertura operacional enquanto o cronograma por rubrica permanece incompleto."),
       createMemory("operatingCashFlow", totalOperatingCashFlow, "operating-cash-flow", "Fluxo acumulado depois de entrada líquida, custos, repasses, folha e implantação."),
