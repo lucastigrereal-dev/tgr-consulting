@@ -26,7 +26,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { trpc } from "@/lib/trpc";
-import { normalizeDecimalInput } from "@/lib/financialPresentation";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import {
@@ -162,6 +161,124 @@ function toInteger(value: string, field: string) {
   return Number(value);
 }
 
+export function normalizeCommercialDecimalInput(value: string) {
+  const cleaned = value.trim().replace(/[^0-9,.-]/g, "");
+  const lastComma = cleaned.lastIndexOf(",");
+  const lastDot = cleaned.lastIndexOf(".");
+  if (lastComma !== -1 && lastDot !== -1) {
+    const decimalSeparator = lastComma > lastDot ? "," : ".";
+    const thousandsSeparator = decimalSeparator === "," ? "." : ",";
+    return cleaned
+      .replace(new RegExp(`\\${thousandsSeparator}`, "g"), "")
+      .replace(decimalSeparator, ".");
+  }
+  if (lastComma !== -1) return cleaned.replace(/\./g, "").replace(",", ".");
+  const parts = cleaned.split(".");
+  if (parts.length <= 2) return cleaned;
+  const decimalPart = parts.pop()!;
+  return `${parts.join("")}.${decimalPart}`;
+}
+
+export function toCommercialModelMutationInput(
+  versionId: string,
+  asOfMonth: number,
+  drafts: CommercialDraft[]
+) {
+  return {
+    versionId,
+    asOfMonth,
+    skus: drafts.map(({ sku }) => ({
+      id: sku.id.trim(),
+      name: sku.name.trim(),
+      unitType: sku.unitType.trim(),
+      unitQuantity: toInteger(sku.unitQuantity, `Unidades de ${sku.name}`),
+      sharesPerUnit: toInteger(
+        sku.sharesPerUnit,
+        `Cotas por unidade de ${sku.name}`
+      ),
+      grossSoldShares: toInteger(
+        sku.grossSoldShares,
+        `Vendas brutas de ${sku.name}`
+      ),
+      returnedShares: toInteger(
+        sku.returnedShares,
+        `Devoluções de ${sku.name}`
+      ),
+      blockedShares: toInteger(
+        sku.blockedShares,
+        `Bloqueios de ${sku.name}`
+      ),
+      status: sku.status,
+      sourceType: sku.sourceType,
+      sourceRef: sku.sourceRef.trim() || undefined,
+      pricePhases: sku.pricePhases.map(phase => ({
+        id: phase.id.trim(),
+        startsAtMonth: toInteger(
+          phase.startsAtMonth,
+          `Mês da fase ${phase.id}`
+        ),
+        price: normalizeCommercialDecimalInput(phase.price),
+      })),
+    })),
+    conditions: drafts.map(({ sku, condition }) => ({
+      productSkuCode: sku.id.trim(),
+      status: condition.status,
+      sourceType: condition.sourceType,
+      sourceRef: condition.sourceRef.trim() || undefined,
+      condition: {
+        id: condition.id.trim(),
+        name: condition.name.trim(),
+        listPrice: normalizeCommercialDecimalInput(condition.listPrice),
+        discount: normalizeCommercialDecimalInput(condition.discount),
+        entry: {
+          total: normalizeCommercialDecimalInput(condition.entryTotal),
+          installments: toInteger(
+            condition.entryInstallments,
+            "Parcelas da entrada"
+          ),
+          firstDueMonth: toInteger(
+            condition.entryFirstDueMonth,
+            "Primeiro vencimento da entrada"
+          ),
+        },
+        balance: {
+          principal: normalizeCommercialDecimalInput(
+            condition.balancePrincipal
+          ),
+          installments: toInteger(
+            condition.balanceInstallments,
+            "Parcelas do saldo"
+          ),
+          graceMonths: toInteger(condition.graceMonths, "Carência"),
+          firstDueMonth: toInteger(
+            condition.balanceFirstDueMonth,
+            "Primeiro vencimento do saldo"
+          ),
+        },
+        explicitCharges: normalizeCommercialDecimalInput(
+          condition.explicitCharges
+        ),
+        explicitChargesDueMonth: condition.explicitChargesDueMonth
+          ? toInteger(
+              condition.explicitChargesDueMonth,
+              "Vencimento dos encargos explícitos"
+            )
+          : undefined,
+        correctionRate: condition.correctionRate
+          ? normalizeCommercialDecimalInput(condition.correctionRate)
+          : undefined,
+        interestRate: condition.interestRate
+          ? normalizeCommercialDecimalInput(condition.interestRate)
+          : undefined,
+        materialityTolerance: normalizeCommercialDecimalInput(
+          condition.materialityTolerance
+        ),
+        campaign: condition.campaign.trim() || undefined,
+      },
+    })),
+  };
+}
+
 function readDrafts(
   catalog: ProductCatalog | undefined,
   commercialConditions: CommercialConditions | undefined
@@ -251,7 +368,7 @@ function Field({
         onChange={event =>
           onChange(
             inputMode === "decimal"
-              ? normalizeDecimalInput(event.target.value)
+              ? normalizeCommercialDecimalInput(event.target.value)
               : event.target.value
           )
         }
@@ -265,8 +382,10 @@ function Field({
 
 export function AuthoritativeCommercialBuilder({
   versionId,
+  onAfterCalculate,
 }: {
   versionId: string;
+  onAfterCalculate?: () => Promise<unknown> | unknown;
 }) {
   const utils = trpc.useUtils();
   const [asOfMonth, setAsOfMonth] = useState("0");
@@ -312,6 +431,7 @@ export function AuthoritativeCommercialBuilder({
   const pendingCount = drafts.filter(
     draft => draft.sku.status === "pending" || draft.condition.status === "pending"
   ).length;
+  const hasCommercialDrafts = drafts.length > 0;
   const persistedSkuCodes = new Set(
     catalogQuery.data?.records.map(record => record.skuCode) ?? []
   );
@@ -383,87 +503,7 @@ export function AuthoritativeCommercialBuilder({
       }
 
       await saveCommercialModel.mutateAsync({
-        versionId,
-        asOfMonth: parsedAsOfMonth,
-        skus: drafts.map(({ sku }) => ({
-          id: sku.id.trim(),
-          name: sku.name.trim(),
-          unitType: sku.unitType.trim(),
-          unitQuantity: toInteger(sku.unitQuantity, `Unidades de ${sku.name}`),
-          sharesPerUnit: toInteger(
-            sku.sharesPerUnit,
-            `Cotas por unidade de ${sku.name}`
-          ),
-          grossSoldShares: toInteger(
-            sku.grossSoldShares,
-            `Vendas brutas de ${sku.name}`
-          ),
-          returnedShares: toInteger(
-            sku.returnedShares,
-            `Devoluções de ${sku.name}`
-          ),
-          blockedShares: toInteger(
-            sku.blockedShares,
-            `Bloqueios de ${sku.name}`
-          ),
-          status: sku.status,
-          sourceType: sku.sourceType,
-          sourceRef: sku.sourceRef.trim() || undefined,
-          pricePhases: sku.pricePhases.map(phase => ({
-            id: phase.id.trim(),
-            startsAtMonth: toInteger(
-              phase.startsAtMonth,
-              `Mês da fase ${phase.id}`
-            ),
-            price: phase.price,
-          })),
-        })),
-        conditions: drafts.map(({ sku, condition }) => ({
-          productSkuCode: sku.id.trim(),
-          status: condition.status,
-          sourceType: condition.sourceType,
-          sourceRef: condition.sourceRef.trim() || undefined,
-          condition: {
-            id: condition.id.trim(),
-            name: condition.name.trim(),
-            listPrice: condition.listPrice,
-            discount: condition.discount,
-            entry: {
-              total: condition.entryTotal,
-              installments: toInteger(
-                condition.entryInstallments,
-                "Parcelas da entrada"
-              ),
-              firstDueMonth: toInteger(
-                condition.entryFirstDueMonth,
-                "Primeiro vencimento da entrada"
-              ),
-            },
-            balance: {
-              principal: condition.balancePrincipal,
-              installments: toInteger(
-                condition.balanceInstallments,
-                "Parcelas do saldo"
-              ),
-              graceMonths: toInteger(condition.graceMonths, "Carência"),
-              firstDueMonth: toInteger(
-                condition.balanceFirstDueMonth,
-                "Primeiro vencimento do saldo"
-              ),
-            },
-            explicitCharges: condition.explicitCharges,
-            explicitChargesDueMonth: condition.explicitChargesDueMonth
-              ? toInteger(
-                  condition.explicitChargesDueMonth,
-                  "Vencimento dos encargos explícitos"
-                )
-              : undefined,
-            correctionRate: condition.correctionRate || undefined,
-            interestRate: condition.interestRate || undefined,
-            materialityTolerance: condition.materialityTolerance,
-            campaign: condition.campaign.trim() || undefined,
-          },
-        })),
+        ...toCommercialModelMutationInput(versionId, parsedAsOfMonth, drafts),
       });
 
       await Promise.all([
@@ -486,6 +526,7 @@ export function AuthoritativeCommercialBuilder({
         utils.igr.projectContext.invalidate(),
         utils.igr.scenarioComparison.invalidate(),
       ]);
+      await onAfterCalculate?.();
       if (snapshot.status === "valid")
         toast.success("Catálogo salvo e snapshot calculado.", {
           description: `Hash ${snapshot.snapshotHash.slice(0, 12).toUpperCase()}`,
@@ -551,9 +592,11 @@ export function AuthoritativeCommercialBuilder({
         <div className="max-w-2xl">
           <div className="mb-2 flex items-center gap-2">
             <Badge variant="outline">Motor autoritativo</Badge>
-            <Badge variant={blockers.length || pendingCount ? "destructive" : "secondary"}>
+            <Badge variant={blockers.length || pendingCount || !hasCommercialDrafts ? "destructive" : "secondary"}>
               {blockers.length
                 ? `${blockers.length} bloqueio(s)`
+                : !hasCommercialDrafts
+                  ? "Sem catálogo"
                 : pendingCount
                   ? `${pendingCount} item(ns) pendente(s)`
                 : "Reconciliado"}

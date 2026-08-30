@@ -47,7 +47,11 @@ vi.mock("@/lib/trpc", () => ({
   },
 }));
 
-import { AuthoritativeCommercialBuilder } from "./AuthoritativeCommercialBuilder";
+import {
+  AuthoritativeCommercialBuilder,
+  normalizeCommercialDecimalInput,
+  toCommercialModelMutationInput,
+} from "./AuthoritativeCommercialBuilder";
 
 describe("AuthoritativeCommercialBuilder", () => {
   beforeEach(() => {
@@ -176,5 +180,60 @@ describe("AuthoritativeCommercialBuilder", () => {
     expect(html).toMatch(
       /<button(?=[^>]*disabled="")[^>]*>[\s\S]*?Salvar e calcular<\/button>/
     );
+  });
+
+  it("normaliza decimais brasileiros no payload da mutação única", () => {
+    expect(normalizeCommercialDecimalInput("12.000,50")).toBe("12000.50");
+    expect(normalizeCommercialDecimalInput("1.234.567,89")).toBe("1234567.89");
+    expect(normalizeCommercialDecimalInput("12000,50")).toBe("12000.50");
+
+    const payload = toCommercialModelMutationInput("version-1", 3, [{
+      sku: {
+        id: "studio",
+        name: "Studio",
+        unitType: "apartamento",
+        unitQuantity: "10",
+        sharesPerUnit: "26",
+        grossSoldShares: "0",
+        returnedShares: "0",
+        blockedShares: "0",
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Tabela aprovada",
+        pricePhases: [{ id: "base", startsAtMonth: "0", price: "12.000,50" }],
+      },
+      condition: {
+        id: "standard-studio",
+        name: "Condição padrão",
+        listPrice: "12.000,50",
+        discount: "500,50",
+        entryTotal: "2.000,00",
+        entryInstallments: "2",
+        entryFirstDueMonth: "0",
+        balancePrincipal: "9.500,00",
+        balanceInstallments: "24",
+        graceMonths: "1",
+        balanceFirstDueMonth: "2",
+        explicitCharges: "0,00",
+        explicitChargesDueMonth: "",
+        correctionRate: "0",
+        interestRate: "0",
+        materialityTolerance: "0,01",
+        campaign: "",
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Tabela aprovada",
+      },
+    }]);
+
+    expect(payload.skus[0]?.pricePhases[0]?.price).toBe("12000.50");
+    expect(payload.conditions[0]?.condition).toMatchObject({
+      listPrice: "12000.50",
+      discount: "500.50",
+      entry: { total: "2000.00" },
+      balance: { principal: "9500.00" },
+      explicitCharges: "0.00",
+      materialityTolerance: "0.01",
+    });
   });
 });

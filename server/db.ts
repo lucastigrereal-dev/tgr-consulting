@@ -1390,6 +1390,22 @@ export async function saveCommercialModelForTenant(params: {
       .select()
       .from(commercialConditions)
       .where(eq(commercialConditions.versionId, version.id));
+    const beforeSkuCodeById = new Map(
+      beforeSkus.map(row => [row.id, row.skuCode])
+    );
+    const removedLinkedSkuCodes = beforeConditions.flatMap(condition => {
+      const skuCode = condition.productSkuId
+        ? beforeSkuCodeById.get(condition.productSkuId)
+        : undefined;
+      return skuCode && !incomingSkuCodes.has(skuCode) ? [skuCode] : [];
+    });
+    if (removedLinkedSkuCodes.length) {
+      throw new Error(
+        `SKU vinculado a condição comercial não pode ser removido ou renomeado: ${[
+          ...Array.from(new Set(removedLinkedSkuCodes)),
+        ].join(", ")}.`
+      );
+    }
 
     if (beforeConditions.length)
       await transaction

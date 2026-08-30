@@ -739,6 +739,56 @@ describe("IGR database integration", () => {
       (await listCommercialConditionsForTenant(created.versionId, tenantId))
         .map(item => item.condition.id)
     ).toEqual(["standard"]);
+
+    await expect(
+      saveCommercialModelForTenant({
+        tenantId,
+        actorId,
+        versionId: created.versionId,
+        asOfMonth: 3,
+        skus: [{
+          id: "beach-2q-renamed",
+          name: "Beach 2 Quartos",
+          unitType: "2Q",
+          unitQuantity: 10,
+          sharesPerUnit: 4,
+          grossSoldShares: 6,
+          returnedShares: 1,
+          blockedShares: 2,
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "db.integration.test:product",
+          pricePhases: [{ id: "launch", startsAtMonth: 0, price: "100000" }],
+        }],
+        conditions: [{
+          productSkuCode: "beach-2q-renamed",
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "db.integration.test:commercial",
+          condition: {
+            id: "standard-renamed",
+            name: "Condição renomeada",
+            listPrice: "100000",
+            discount: "0",
+            entry: { total: "10000", installments: 1, firstDueMonth: 0 },
+            balance: {
+              principal: "90000",
+              installments: 1,
+              graceMonths: 0,
+              firstDueMonth: 1,
+            },
+            explicitCharges: "0",
+            correctionRate: "0",
+            interestRate: "0",
+            materialityTolerance: "0.01",
+          },
+        }],
+      })
+    ).rejects.toThrow("SKU vinculado");
+    expect(
+      (await getProductCatalogForTenant(created.versionId, tenantId, 3)).records
+        .map(record => record.skuCode)
+    ).toEqual(["beach-2q", "garden-3q"]);
   });
 
   it("não deixa versão órfã quando a criação do cenário falha", async () => {

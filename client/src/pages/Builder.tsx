@@ -591,7 +591,10 @@ export default function Builder() {
         onStatusChange={value => patchDraft(assemblyDomain, { status: value })}
         onSave={registerAssembly}
       />
-      <AuthoritativeCommercialBuilder versionId={activeVersionId} />
+      <AuthoritativeCommercialBuilder
+        versionId={activeVersionId}
+        onAfterCalculate={() => contextQuery.refetch()}
+      />
       <CapturePointsBuilder versionId={activeVersionId} />
       <CommercialOperationsBuilder versionId={activeVersionId} />
       <ReceivablesPolicyBuilder versionId={activeVersionId} />
