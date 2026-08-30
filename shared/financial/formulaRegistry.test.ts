@@ -9,7 +9,7 @@ describe("Formula Registry", () => {
     expect(registry.list()).toHaveLength(2);
     expect(registry.getActiveFormulaSet().semanticVersion).toBe("2.0.0");
     registry.selectActiveFormulaSet(IGR_CORE_FORMULA_SET_V1.id);
-    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.6.0");
+    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.7.0");
   });
 
   it("expõe lineage recursivo de KPI até inputs", () => {
@@ -27,6 +27,7 @@ describe("Formula Registry", () => {
     const installmentLineage = registry.getLineage("installment-collections");
     const healthyLineage = registry.getLineage("healthy-d90");
     const pointLineage = registry.getLineage("point-economics");
+    const operationsLineage = registry.getLineage("commercial-operations");
     expect(teamLineage.find((node) => node.id === "payrollMonthly" && node.kind === "input")).toBeTruthy();
     expect(paymentLineage.find((node) => node.id === "net-entry-collections" && node.kind === "formula")).toBeTruthy();
     expect(installmentLineage.find((node) => node.id === "paymentCardInstallmentMdrRate" && node.kind === "input")).toBeTruthy();
@@ -37,8 +38,10 @@ describe("Formula Registry", () => {
     expect(healthyLineage.find((node) => node.id === "cureRates" && node.kind === "input")).toBeTruthy();
     expect(pointLineage.find((node) => node.id === "capture-points" && node.kind === "input")).toBeTruthy();
     expect(pointLineage.find((node) => node.id === "authoritative-commercial-model" && node.kind === "input")).toBeTruthy();
-    expect(IGR_CORE_FORMULA_SET_V1.id).toBe("igr-core-formulas-v1-6");
-    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.6.0");
+    expect(operationsLineage.find((node) => node.id === "room-capacity" && node.kind === "input")).toBeTruthy();
+    expect(operationsLineage.find((node) => node.id === "workforce-cohorts" && node.kind === "input")).toBeTruthy();
+    expect(IGR_CORE_FORMULA_SET_V1.id).toBe("igr-core-formulas-v1-7");
+    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.7.0");
   });
 
   it("recusa ativar formula set que não foi publicado", () => {

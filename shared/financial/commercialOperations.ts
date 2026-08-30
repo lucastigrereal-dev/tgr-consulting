@@ -507,8 +507,18 @@ export function calculateCommercialOperations(input: {
       incrementalOperatingCost: text(workforceCost.plus(trainingCost)),
     };
   });
-  return { room, workforce, training, months };
+  return {
+    room,
+    workforce,
+    training,
+    months,
+    commissions: input.definition.commissions,
+  };
 }
+
+export type CommercialOperationsResult = ReturnType<
+  typeof calculateCommercialOperations
+>;
 
 function percentageCommission(base: D, baseRate: D, tiers: Array<{ threshold: D; rate: D }>) {
   let cursor = ZERO;
@@ -635,3 +645,5 @@ export function calculateCommissionLedger(input: {
     },
   };
 }
+
+export type CommissionLedger = ReturnType<typeof calculateCommissionLedger>;

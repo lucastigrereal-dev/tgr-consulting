@@ -1,5 +1,9 @@
 import type { ReceivablesPortfolio } from "./receivablesPortfolio";
 import type { PointEconomicsPortfolio } from "./pointEconomics";
+import type {
+  CommissionLedger,
+  CommercialOperationsResult,
+} from "./commercialOperations";
 
 export const FINANCIAL_INPUT_KEYS = [
   "qualifiedCouplesMonth1",
@@ -106,6 +110,8 @@ export type MonthlyProjection = {
   variableCosts: DecimalText;
   partnerShare: DecimalText;
   fixedCosts: DecimalText;
+  commercialOperationsCosts: DecimalText;
+  commissionPayments: DecimalText;
   payroll: DecimalText;
   capex: DecimalText;
   preOperationalInvestment: DecimalText;
@@ -157,6 +163,8 @@ export type FinancialCalculation = {
   memory: CalculationMemory[];
   receivablesPortfolio?: ReceivablesPortfolio;
   pointEconomics?: PointEconomicsPortfolio;
+  commercialOperations?: CommercialOperationsResult;
+  commissionLedger?: CommissionLedger;
 };
 
 export type ProjectLifecycleState = "draft" | "in_review" | "approved" | "baseline";

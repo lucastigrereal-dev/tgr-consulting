@@ -94,7 +94,7 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain("Página 01 · Premissas");
     expect(html).toContain("Origem: ficha-mãe e premissas autoritativas");
     expect(html).toContain("Página 04 · Vendas");
-    expect(html).toContain("gross-sales · v1.1.0");
+    expect(html).toContain("gross-sales · v1.2.0");
     expect(html).toContain("Página 05 · Receita");
     expect(html).toContain("gross-receivables-generated · v1.0.0");
     expect(html).toContain("installment-collections · v1.1.0");
@@ -107,7 +107,7 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain("Simulação de reunião");
     expect(html).toContain("Página 07 · Indicadores");
     expect(html).toContain("Como o estudo chegou aqui");
-    expect(html).toContain("operating-cash-flow · v1.1.0");
+    expect(html).toContain("operating-cash-flow · v1.2.0");
   });
 
   it("apresenta Point Economics por ponto sem perder os agregados autoritativos", () => {

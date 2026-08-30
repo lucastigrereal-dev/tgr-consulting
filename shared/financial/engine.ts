@@ -12,6 +12,11 @@ import type {
 import type { PaymentCalendarComponent } from "./paymentCalendar";
 import type { PointEconomicsPortfolio } from "./pointEconomics";
 import {
+  calculateCommissionLedger,
+  type CommissionBaseRecord,
+  type CommercialOperationsResult,
+} from "./commercialOperations";
+import {
   buildReceivablesPortfolio,
   type ReceivablesPolicy,
   type ReceivablesPortfolio,
@@ -48,6 +53,7 @@ export type FinancialProjectionOptions = {
   paymentSchedulePerContract?: PaymentSchedulePerContractItem[];
   receivablesPolicy?: ReceivablesPolicy;
   pointEconomics?: PointEconomicsPortfolio;
+  commercialOperations?: CommercialOperationsResult;
 };
 
 function decimalText(value: Decimal): DecimalText {
@@ -353,11 +359,18 @@ export function calculateFinancialProjection(
     const demandedContracts = isOperating
       ? qualifiedCouples.times(conversionRate)
       : ZERO;
-    const contracts = remainingContracts === null
+    const inventoryLimitedContracts = remainingContracts === null
       ? demandedContracts
       : demandedContracts.lte(remainingContracts)
         ? demandedContracts
         : remainingContracts;
+    const operationsCapacity = options?.commercialOperations?.months[index];
+    const contracts = operationsCapacity
+      ? FinanceDecimal.min(
+          inventoryLimitedContracts,
+          new FinanceDecimal(operationsCapacity.salesCapacity),
+        )
+      : inventoryLimitedContracts;
     if (remainingContracts !== null)
       remainingContracts = remainingContracts.minus(contracts);
     return { month, operationMonth, isOperating, qualifiedCouples, contracts };
@@ -406,6 +419,8 @@ export function calculateFinancialProjection(
   let recognizedRevenueTotal = ZERO;
   let paymentFeesTotal = ZERO;
   let preOperationalInvestmentTotal = ZERO;
+  let commercialOperationsCostsTotal = ZERO;
+  let commissionPaymentsTotal = ZERO;
   let totalOperatingCashFlow = ZERO;
   const projections: MonthlyProjection[] = [];
   const cashFlows: Decimal[] = [];
@@ -423,6 +438,11 @@ export function calculateFinancialProjection(
     () => ZERO
   );
   const paymentFeeSchedule = Array.from({ length: horizonMonths + 121 }, () => ZERO);
+  const commissionPaymentSchedule = Array.from(
+    { length: horizonMonths + 121 },
+    () => ZERO,
+  );
+  const commissionBaseRecords: CommissionBaseRecord[] = [];
 
   if (receivablesPortfolio) {
     const portfolioCollectionEvents = receivablesPortfolio.ledger.flatMap(line => [
@@ -527,6 +547,50 @@ export function calculateFinancialProjection(
     const recognizedRevenue = netCollections;
     const variableCosts = grossSales.times(variableCostRate);
     const partnerShare = netCollections.times(partnerShareRate);
+    const commercialOperationsCosts = new FinanceDecimal(
+      options?.commercialOperations?.months[month - 1]?.incrementalOperatingCost ?? "0"
+    );
+    for (const policy of options?.commercialOperations?.commissions.policies ?? []) {
+      const eligibleAmount = policy.eligibleBase === "gross_sales"
+        ? grossSales
+        : policy.eligibleBase === "contracted_entry"
+          ? grossEntryGenerated
+          : policy.eligibleBase === "collected_entry"
+            ? grossEntrySettled
+            : policy.eligibleBase === "validated_sale"
+              ? contracts
+              : policy.eligibleBase === "d90"
+                ? healthyD90
+                : policy.eligibleBase === "fixed"
+                  ? ONE
+                  : contracts;
+      const accrualMonth = policy.eligibleBase === "d30" ? month + 1 : month;
+      const record: CommissionBaseRecord = {
+        recordId: `${policy.policyId}-${month}`,
+        policyId: policy.policyId,
+        role: policy.role,
+        eligibleBase: policy.eligibleBase,
+        month: accrualMonth,
+        day: 1,
+        amount: decimalText(eligibleAmount),
+        isReversal: false,
+      };
+      commissionBaseRecords.push(record);
+      const accrued = calculateCommissionLedger({
+        policies: [policy],
+        baseRecords: [record],
+      }).accruals[0]!;
+      if (accrued.paymentMonth < commissionPaymentSchedule.length) {
+        commissionPaymentSchedule[accrued.paymentMonth] =
+          commissionPaymentSchedule[accrued.paymentMonth].plus(
+            accrued.payableCommission,
+          );
+      }
+    }
+    const commissionPayments =
+      options?.commercialOperations?.commissions.cashflowTreatment === "incremental"
+        ? commissionPaymentSchedule[month]
+        : ZERO;
     const basePreOperationalInvestment = hasCompleteImplementationSchedule
       ? implementationSchedule.reduce(
         (total, item) => total.plus(item.month!.eq(month) ? capexInitial.times(item.share!) : ZERO),
@@ -547,6 +611,8 @@ export function calculateFinancialProjection(
       .minus(variableCosts)
       .minus(partnerShare)
       .minus(fixedCosts)
+      .minus(commercialOperationsCosts)
+      .minus(commissionPayments)
       .minus(payroll)
       .minus(preOperationalInvestment);
     cumulativeCashFlow = cumulativeCashFlow.plus(operatingCashFlow);
@@ -561,6 +627,8 @@ export function calculateFinancialProjection(
       variableCosts: decimalText(variableCosts),
       partnerShare: decimalText(partnerShare),
       fixedCosts: decimalText(fixedCosts),
+      commercialOperationsCosts: decimalText(commercialOperationsCosts),
+      commissionPayments: decimalText(commissionPayments),
       payroll: decimalText(payroll),
       capex: decimalText(capex),
       preOperationalInvestment: decimalText(preOperationalInvestment),
@@ -601,6 +669,10 @@ export function calculateFinancialProjection(
     recognizedRevenueTotal = recognizedRevenueTotal.plus(recognizedRevenue);
     paymentFeesTotal = paymentFeesTotal.plus(paymentFees);
     preOperationalInvestmentTotal = preOperationalInvestmentTotal.plus(preOperationalInvestment);
+    commercialOperationsCostsTotal = commercialOperationsCostsTotal.plus(
+      commercialOperationsCosts,
+    );
+    commissionPaymentsTotal = commissionPaymentsTotal.plus(commissionPayments);
     totalOperatingCashFlow = totalOperatingCashFlow.plus(operatingCashFlow);
     cashFlows.push(operatingCashFlow);
   }
@@ -615,6 +687,13 @@ export function calculateFinancialProjection(
   const delinquentBalanceClosing = projections.length
     ? new FinanceDecimal(projections[projections.length - 1]!.delinquentBalance)
     : ZERO;
+
+  const commissionLedger = options?.commercialOperations
+    ? calculateCommissionLedger({
+        policies: options.commercialOperations.commissions.policies,
+        baseRecords: commissionBaseRecords,
+      })
+    : undefined;
 
   return {
     status: "valid",
@@ -669,8 +748,28 @@ export function calculateFinancialProjection(
             "Contribuição incremental líquida mensal reconciliada dos pontos de captação; CAPEX e OPEX entram no caixa apenas quando marcados como incrementais.",
           )]
         : []),
+      ...(options?.commercialOperations
+        ? [
+            createMemory(
+              "commercialOperationsCosts",
+              commercialOperationsCostsTotal,
+              "commercial-operations",
+              "Capacidade limitada por sala e workforce; custos de workforce e treinamento entram apenas quando marcados como incrementais.",
+            ),
+            createMemory(
+              "commissionPayments",
+              commissionPaymentsTotal,
+              "commission-policy",
+              "Comissões liquidadas no horizonte segundo base, tier, qualidade, holdback, cutoff, lag e tratamento contra dupla contagem.",
+            ),
+          ]
+        : []),
     ],
     ...(receivablesPortfolio ? { receivablesPortfolio } : {}),
     ...(pointEconomics ? { pointEconomics } : {}),
+    ...(options?.commercialOperations
+      ? { commercialOperations: options.commercialOperations }
+      : {}),
+    ...(commissionLedger ? { commissionLedger } : {}),
   };
 }

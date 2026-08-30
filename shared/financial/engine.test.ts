@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { calculateFinancialProjection } from "./engine";
 import { calculatePointEconomics } from "./pointEconomics";
+import { calculateCommercialOperations } from "./commercialOperations";
 import type { FinancialInputSnapshot } from "./types";
 
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const });
@@ -201,6 +202,60 @@ describe("motor financeiro determinístico", () => {
       value: "7300.00000000",
       formulaId: "point-economics",
     });
+  });
+
+  it("limita vendas pela operação e reconhece workforce, treinamento e comissão sem dupla contagem", () => {
+    const pointEconomics = calculatePointEconomics({ points: [{
+      pointId: "mall", name: "Mall", channel: "Shopping", activationCost: "0",
+      monthlyFixedCost: "0", costPerSale: "0", approaches: "100",
+      researchRate: "1", qualificationRate: "1", invitationRate: "1",
+      appointmentRate: "1", showRate: "1", tourRate: "1", saleRate: "0.1",
+      averageTicket: "1000", averageEntry: "100", contributionMarginRate: "1",
+      healthyD90Rate: "1", cannibalizationRate: "0",
+      cashflowTreatment: "included_in_project_totals",
+    }] });
+    const commercialOperations = calculateCommercialOperations({
+      horizonMonths: 2,
+      pointDemand: { toursMonthly: "100", salesMonthly: "10" },
+      definition: {
+        room: {
+          rooms: [{ roomId: "main", tables: "2", overflowTables: "0" }],
+          operatingDaysPerMonth: "20", operatingHoursPerDay: "8", shifts: "2",
+          averageTourDurationMinutes: "60", toursPerTable: "1",
+          receptionists: "1", receptionCapacityPerPerson: "200",
+          consultants: "1", consultantCapacityPerPerson: "150",
+          closers: "1", closerSalesCapacityPerPerson: "20",
+          peakFlowFactor: "1", maxWaitMinutes: "15",
+        },
+        workforce: { cashflowTreatment: "incremental", cohorts: [
+          { cohortId: "consultants", role: "consultant", capacityUnit: "tours", headcount: "1", hireMonth: 0, trainingMonths: 0, certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }], matureProductivity: "80", absenteeismRate: "0", monthlyTurnoverRate: "0", fixedCompensation: "100", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0" },
+          { cohortId: "closers", role: "closer", capacityUnit: "sales", headcount: "1", hireMonth: 0, trainingMonths: 0, certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }], matureProductivity: "8", absenteeismRate: "0", monthlyTurnoverRate: "0", fixedCompensation: "200", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0" },
+        ] },
+        training: { cashflowTreatment: "incremental", plans: [{ trainingId: "academy", role: "closer", startMonth: 0, candidates: "2", classes: "1", durationMonths: 1, trainers: "1", trainerMonthlyCost: "50", candidateMonthlySalary: "25", monthlySupportCost: "0", approvalRate: "1", certificationRate: "1", timeToProductiveMonths: 0, targetProductivePeople: "2" }] },
+        commissions: { cashflowTreatment: "incremental", policies: [{ policyId: "closer-fixed", role: "closer", eligibleBase: "fixed", mode: "fixed", fixedAmount: "10", percentageRate: "0", tiers: [], guarantee: "0", cutoffDay: 15, paymentLagMonths: 0, qualityMultiplier: "1", holdbackRate: "0", reversalEnabled: false }] },
+      },
+    });
+    const result = calculateFinancialProjection({
+      ...completeInputs,
+      fixedCostMonthly: provided("0"), payrollMonthly: provided("0"),
+      variableCostRate: provided("0"), partnerShareRate: provided("0"),
+      capexInitial: provided("0"), collectionRate: provided("1"),
+      cancellationRate: provided("0"), discountRateAnnual: provided("0"),
+    }, 2, { pointEconomics, commercialOperations });
+
+    expect(result.projections[0]).toMatchObject({
+      contracts: "8.00000000",
+      commercialOperationsCosts: "400.00000000",
+      commissionPayments: "10.00000000",
+      operatingCashFlow: "390.00000000",
+    });
+    expect(result.projections[1]).toMatchObject({
+      contracts: "8.00000000",
+      commercialOperationsCosts: "300.00000000",
+      commissionPayments: "10.00000000",
+      operatingCashFlow: "490.00000000",
+    });
+    expect(result.commissionLedger?.totals.payable).toBe("20.00000000");
   });
 
   it("aloca captação, sala e sales kit nos meses específicos quando o cronograma está completo", () => {

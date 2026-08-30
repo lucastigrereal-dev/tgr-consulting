@@ -1,11 +1,27 @@
 import type { FormulaSetVersion } from "./types";
 
 export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
-  id: "igr-core-formulas-v1-6",
-  semanticVersion: "1.6.0",
-  engineVersion: "igr-engine-1.6.0",
+  id: "igr-core-formulas-v1-7",
+  semanticVersion: "1.7.0",
+  engineVersion: "igr-engine-1.7.0",
   status: "published",
   definitions: [
+    {
+      id: "commercial-operations",
+      name: "Capacidade e custo da operação comercial",
+      version: "1.0.0",
+      expression: "vendas = min(demanda dos pontos, capacidade da sala, workforce produtivo); custo incremental = workforce + treinamento",
+      dependencies: ["point-economics", "room-capacity", "workforce-cohorts", "training-economics"],
+      description: "Limita produção pelos gargalos físicos e humanos mensais e leva ao caixa somente custos marcados como incrementais.",
+    },
+    {
+      id: "commission-policy",
+      name: "Comissões por competência e pagamento",
+      version: "1.0.0",
+      expression: "base elegível × política/tier × qualidade - holdback, liquidado após cutoff + lag",
+      dependencies: ["commercial-operations", "gross-sales", "gross-entry-generated", "net-entry-collections", "healthy-d90"],
+      description: "Calcula competência e caixa por função/base sem contar a mesma política, base, função e mês duas vezes.",
+    },
     {
       id: "point-economics",
       name: "Economia incremental dos pontos de captação",
@@ -25,10 +41,10 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
     {
       id: "gross-sales",
       name: "Venda bruta",
-      version: "1.1.0",
-      expression: "pointEconomics.totalSales × averageTicket; no modo legado, qualifiedCouples × conversionRate × averageTicket",
-      dependencies: ["qualified-couples", "point-economics", "conversionRate", "averageTicket"],
-      description: "Converte a produção reconciliada dos pontos em venda assinada antes de recebimento e perda.",
+      version: "1.2.0",
+      expression: "min(pointEconomics.totalSales, commercialOperations.salesCapacity) × averageTicket; no modo legado, qualifiedCouples × conversionRate × averageTicket",
+      dependencies: ["qualified-couples", "point-economics", "commercial-operations", "conversionRate", "averageTicket"],
+      description: "Converte produção em venda assinada depois de respeitar estoque, sala e workforce.",
     },
     {
       id: "gross-entry-generated",
@@ -137,10 +153,10 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
     {
       id: "operating-cash-flow",
       name: "Fluxo de caixa operacional",
-      version: "1.1.0",
-      expression: "netCollections - variableCosts - partnerShare - fixedCosts - pointEconomics.incrementalMonthlyOpex - payroll - preOperationalInvestment",
-      dependencies: ["net-entry-collections", "variableCostRate", "partnerShareRate", "fixedCostMonthly", "point-economics", "payrollMonthly", "pre-operational-investment"],
-      description: "Produz caixa mensal depois de recebimentos, custos, repasses, pontos incrementais, folha e implantação.",
+      version: "1.2.0",
+      expression: "netCollections - variableCosts - partnerShare - fixedCosts - custos incrementais de pontos/operação/comissão - payroll - preOperationalInvestment",
+      dependencies: ["net-entry-collections", "variableCostRate", "partnerShareRate", "fixedCostMonthly", "point-economics", "commercial-operations", "commission-policy", "payrollMonthly", "pre-operational-investment"],
+      description: "Produz caixa mensal depois de recebimentos, custos, repasses, operação, comissão, folha e implantação, respeitando os tratamentos contra dupla contagem.",
     },
     {
       id: "npv",
