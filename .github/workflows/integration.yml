@@ -1,0 +1,56 @@
+name: TGR integration
+
+on:
+  push:
+    branches:
+      - codex/tgr-master-brd-v1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: tgr-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: mysql://root@127.0.0.1:3306/tgr_consulting_test
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: tgr_consulting_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=45
+          --health-start-period=15s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - name: Apply migrations 0000-0007
+        run: pnpm exec drizzle-kit migrate
+      - name: Full test suite with MySQL
+        run: pnpm test
+      - run: pnpm run check
+      - run: pnpm run build
