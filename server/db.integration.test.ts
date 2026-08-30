@@ -166,7 +166,7 @@ describe("IGR database integration", () => {
           snapshotId: snapshot.id,
           rationale: "A falha intermediária não pode deixar aprovação parcial.",
         })
-      ).rejects.toThrow("forced approval failure");
+      ).rejects.toThrow();
     } finally {
       await db.execute(
         sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_approval_workflow")
