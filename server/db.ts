@@ -1014,53 +1014,57 @@ export async function createScenarioForTenant(params: {
   const inputSnapshot = await getInputsForVersion(baseVersion.id);
   const versionId = nanoid();
   const branchId = nanoid();
-  await db.insert(projectVersions).values({
-    id: versionId,
-    projectId: baseVersion.projectId,
-    parentVersionId: baseVersion.id,
-    formulaSetVersionId: baseVersion.formulaSetVersionId,
-    kind: "scenario",
-    state: "draft",
-    isImmutable: false,
-    inputHash: sha256(inputSnapshot),
-    createdBy: params.actorId,
-  });
-  await db.insert(inputValues).values(
-    Object.entries(inputSnapshot).map(([key, input]) => ({
+  await db.transaction(async transaction => {
+    await transaction.insert(projectVersions).values({
+      id: versionId,
+      projectId: baseVersion.projectId,
+      parentVersionId: baseVersion.id,
+      formulaSetVersionId: baseVersion.formulaSetVersionId,
+      kind: "scenario",
+      state: "draft",
+      isImmutable: false,
+      inputHash: sha256(inputSnapshot),
+      createdBy: params.actorId,
+    });
+    await transaction.insert(inputValues).values(
+      Object.entries(inputSnapshot).map(([key, input]) => ({
+        id: nanoid(),
+        versionId,
+        key,
+        status: input.status,
+        valueText: input.value ?? null,
+        sourceType: input.sourceType,
+        sourceRef: input.sourceRef ?? null,
+        updatedBy: params.actorId,
+      }))
+    );
+    await transaction.insert(scenarioBranches).values({
+      id: branchId,
+      projectId: baseVersion.projectId,
+      baseVersionId: baseVersion.id,
+      branchVersionId: versionId,
+      name: params.name,
+      reason: params.reason,
+      createdBy: params.actorId,
+    });
+    await transaction.insert(workflowEvents).values({
       id: nanoid(),
+      projectId: baseVersion.projectId,
       versionId,
-      key,
-      status: input.status,
-      valueText: input.value ?? null,
-      sourceType: input.sourceType,
-      sourceRef: input.sourceRef ?? null,
-      updatedBy: params.actorId,
-    }))
-  );
-  await db.insert(scenarioBranches).values({
-    id: branchId,
-    projectId: baseVersion.projectId,
-    baseVersionId: baseVersion.id,
-    branchVersionId: versionId,
-    name: params.name,
-    reason: params.reason,
-    createdBy: params.actorId,
-  });
-  await recordWorkflowEvent({
-    projectId: baseVersion.projectId,
-    versionId,
-    toState: "draft",
-    action: "scenario.created",
-    rationale: params.reason,
-    actorId: params.actorId,
-  });
-  await recordAuditEvent({
-    tenantId: params.tenantId,
-    entityType: "scenario_branch",
-    entityId: branchId,
-    action: "scenario.created",
-    actorId: params.actorId,
-    metadata: { baseVersionId: baseVersion.id, branchVersionId: versionId },
+      toState: "draft",
+      action: "scenario.created",
+      rationale: params.reason,
+      actorId: params.actorId,
+    });
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "scenario_branch",
+      entityId: branchId,
+      action: "scenario.created",
+      actorId: params.actorId,
+      metadata: { baseVersionId: baseVersion.id, branchVersionId: versionId },
+    });
   });
   return { branchId, versionId };
 }

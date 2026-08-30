@@ -39,6 +39,8 @@ const ids = {
   exportRollbackProjectId: "",
   exportRollbackVersionId: "",
   exportRollbackSnapshotId: "",
+  scenarioRollbackProjectId: "",
+  scenarioRollbackVersionId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -82,7 +84,7 @@ afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
@@ -157,6 +159,9 @@ afterAll(async () => {
     sql`DELETE FROM input_values WHERE versionId = ${ids.exportRollbackVersionId}`
   );
   await db.execute(
+    sql`DELETE iv FROM input_values iv INNER JOIN project_versions pv ON iv.versionId = pv.id WHERE pv.projectId = ${ids.scenarioRollbackProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`
   );
   await db.execute(
@@ -175,6 +180,12 @@ afterAll(async () => {
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.exportRollbackProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.scenarioRollbackProjectId}`
+  );
+  await db.execute(
+    sql`DELETE FROM scenario_branches WHERE projectId = ${ids.scenarioRollbackProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`
   );
   await db.execute(
@@ -189,6 +200,9 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.exportRollbackVersionId}`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE projectId = ${ids.scenarioRollbackProjectId}`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
@@ -202,9 +216,56 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.exportRollbackProjectId}`
   );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id = ${ids.scenarioRollbackProjectId}`
+  );
 });
 
 describe("IGR database integration", () => {
+  it("não deixa versão órfã quando a criação do cenário falha", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Rollback de cenário",
+      inputs: { ...inputs, averageTicket: provided("1004") },
+    });
+    ids.scenarioRollbackProjectId = created.projectId;
+    ids.scenarioRollbackVersionId = created.versionId;
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+
+    await db.execute(
+      sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_scenario_branch")
+    );
+    await db.execute(
+      sql.raw(
+        `CREATE TRIGGER tgr_test_fail_scenario_branch BEFORE INSERT ON scenario_branches FOR EACH ROW BEGIN IF NEW.projectId = '${created.projectId}' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced scenario branch failure'; END IF; END`
+      )
+    );
+    try {
+      await expect(
+        createScenarioForTenant({
+          tenantId,
+          actorId,
+          baseVersionId: created.versionId,
+          name: "[TEST] Cenário que falha",
+          reason: "Provar rollback sem versão órfã.",
+        })
+      ).rejects.toThrow();
+    } finally {
+      await db.execute(
+        sql.raw("DROP TRIGGER IF EXISTS tgr_test_fail_scenario_branch")
+      );
+    }
+
+    const context = await getProjectContextForTenant(
+      created.projectId,
+      tenantId
+    );
+    expect(context.versions).toHaveLength(1);
+    expect(context.versions[0]?.id).toBe(created.versionId);
+  });
+
   it("mantém export queued quando a transição de falha não pode ser auditada", async () => {
     const created = await createProjectForTenant({
       tenantId,
@@ -235,7 +296,7 @@ describe("IGR database integration", () => {
     );
     await db.execute(
       sql.raw(
-        "CREATE TRIGGER tgr_test_fail_export_audit BEFORE INSERT ON audit_events FOR EACH ROW BEGIN IF NEW.action = 'export.failed' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced export audit failure'; END IF; END"
+        `CREATE TRIGGER tgr_test_fail_export_audit BEFORE INSERT ON audit_events FOR EACH ROW BEGIN IF NEW.action = 'export.failed' AND NEW.metadata LIKE '%${snapshot.id}%' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced export audit failure'; END IF; END`
       )
     );
     try {
@@ -291,7 +352,7 @@ describe("IGR database integration", () => {
     );
     await db.execute(
       sql.raw(
-        "CREATE TRIGGER tgr_test_fail_baseline_benchmark BEFORE INSERT ON historical_benchmarks FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced baseline benchmark failure'"
+        `CREATE TRIGGER tgr_test_fail_baseline_benchmark BEFORE INSERT ON historical_benchmarks FOR EACH ROW BEGIN IF NEW.sourceRef = 'snapshot:${snapshot.snapshotHash}' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced baseline benchmark failure'; END IF; END`
       )
     );
     try {
@@ -339,7 +400,7 @@ describe("IGR database integration", () => {
     );
     await db.execute(
       sql.raw(
-        "CREATE TRIGGER tgr_test_fail_kpi_memory BEFORE INSERT ON kpi_memory_records FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced KPI memory failure'"
+        `CREATE TRIGGER tgr_test_fail_kpi_memory BEFORE INSERT ON kpi_memory_records FOR EACH ROW BEGIN IF EXISTS (SELECT 1 FROM calculation_snapshots WHERE id = NEW.snapshotId AND projectVersionId = '${created.versionId}') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced KPI memory failure'; END IF; END`
       )
     );
     try {
@@ -390,7 +451,7 @@ describe("IGR database integration", () => {
     );
     await db.execute(
       sql.raw(
-        "CREATE TRIGGER tgr_test_fail_approval_workflow BEFORE INSERT ON workflow_events FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced approval failure'"
+        `CREATE TRIGGER tgr_test_fail_approval_workflow BEFORE INSERT ON workflow_events FOR EACH ROW BEGIN IF NEW.versionId = '${created.versionId}' AND NEW.action = 'snapshot.approved' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced approval failure'; END IF; END`
       )
     );
     try {
