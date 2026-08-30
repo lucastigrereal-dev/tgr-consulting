@@ -6,7 +6,7 @@
 
 **Branch:** `codex/tgr-master-brd-v1`
 
-**Certified source head before receipt:** `fa57806708c8f95629001771e76dd74faf8324ae`
+**Certified source head before receipt:** `89ad2e4f43fd3a61c462e75e3f51f11958448fd4`
 
 **Environment:** Windows local; MySQL e sessão de browser efêmeros; nenhuma credencial de produção usada
 

@@ -4,7 +4,7 @@
 
 - Data local: 2026-08-30
 - Branch: `codex/tgr-master-brd-v1`
-- Source head certificado: `fa57806708c8f95629001771e76dd74faf8324ae`
+- Source head certificado: `89ad2e4f43fd3a61c462e75e3f51f11958448fd4`
 - Ambiente: Windows local, MySQL 8.4 efêmero e Microsoft Edge headless
 - Credenciais de produção: não usadas
 
@@ -22,6 +22,8 @@ Este arquivo é o commit de receipt posterior ao source head acima; o SHA final 
 | `pnpm run test:backup-restore` | PASS — dump, hash, recreate, restore, canary e limpeza |
 | `pnpm audit --prod` | PASS — zero vulnerabilidades conhecidas |
 | `git diff --check` | PASS |
+
+Os arquivos de teste são executados sem paralelismo entre files porque as integrações compartilham deliberadamente um único schema efêmero. O bootstrap do formula set também usa upsert transacional para tolerar criação concorrente em runtime.
 
 ## Restore drill
 
