@@ -10,6 +10,7 @@ import type {
   MonthlyProjection,
 } from "./types";
 import type { PaymentCalendarComponent } from "./paymentCalendar";
+import type { PointEconomicsPortfolio } from "./pointEconomics";
 import {
   buildReceivablesPortfolio,
   type ReceivablesPolicy,
@@ -46,6 +47,7 @@ export type FinancialProjectionOptions = {
   maxContracts?: string;
   paymentSchedulePerContract?: PaymentSchedulePerContractItem[];
   receivablesPolicy?: ReceivablesPolicy;
+  pointEconomics?: PointEconomicsPortfolio;
 };
 
 function decimalText(value: Decimal): DecimalText {
@@ -186,11 +188,19 @@ export function calculateFinancialProjection(
     throw new Error("O horizonte deve estar entre 1 e 120 meses.");
   }
 
-  const missingInputKeys = getPendingInputKeys(inputs).filter(
-    key =>
-      !options?.receivablesPolicy ||
-      (key !== "collectionRate" && key !== "cancellationRate")
-  );
+  const missingInputKeys = getPendingInputKeys(inputs).filter(key => {
+    if (
+      options?.receivablesPolicy &&
+      (key === "collectionRate" || key === "cancellationRate")
+    ) return false;
+    if (
+      options?.pointEconomics &&
+      (key === "qualifiedCouplesMonth1" ||
+        key === "qualifiedCouplesGrowthRate" ||
+        key === "conversionRate")
+    ) return false;
+    return true;
+  });
   if (missingInputKeys.length > 0) {
     return {
       status: "blocked_by_pending_inputs",
@@ -222,9 +232,20 @@ export function calculateFinancialProjection(
     };
   }
 
-  const qualifiedCouplesMonth1 = readInput(inputs, "qualifiedCouplesMonth1");
-  const qualifiedCouplesGrowthRate = readInput(inputs, "qualifiedCouplesGrowthRate");
-  const conversionRate = readInput(inputs, "conversionRate");
+  const pointEconomics = options?.pointEconomics;
+  const pointQualified = pointEconomics
+    ? new FinanceDecimal(pointEconomics.totals.funnel.qualified)
+    : null;
+  const pointSales = pointEconomics
+    ? new FinanceDecimal(pointEconomics.totals.production.totalSales)
+    : null;
+  const qualifiedCouplesMonth1 = pointQualified ?? readInput(inputs, "qualifiedCouplesMonth1");
+  const qualifiedCouplesGrowthRate = pointEconomics
+    ? ZERO
+    : readInput(inputs, "qualifiedCouplesGrowthRate");
+  const conversionRate = pointQualified
+    ? (pointQualified.eq(ZERO) ? ZERO : pointSales!.div(pointQualified))
+    : readInput(inputs, "conversionRate");
   const averageTicket = readInput(inputs, "averageTicket");
   const collectionRate = options?.receivablesPolicy
     ? ONE
@@ -237,6 +258,12 @@ export function calculateFinancialProjection(
   const fixedCostMonthly = readInput(inputs, "fixedCostMonthly");
   const payrollMonthly = readInput(inputs, "payrollMonthly");
   const capexInitial = readInput(inputs, "capexInitial");
+  const pointIncrementalCapex = new FinanceDecimal(
+    pointEconomics?.totals.cashflow.incrementalCapex ?? "0"
+  );
+  const pointIncrementalMonthlyOpex = new FinanceDecimal(
+    pointEconomics?.totals.cashflow.incrementalMonthlyOpex ?? "0"
+  );
   const preOperationMonths = readInput(inputs, "preOperationMonths");
   const entryValuePerContract = readInput(inputs, "entryValuePerContract");
   const discountRateAnnual = readInput(inputs, "discountRateAnnual");
@@ -246,6 +273,8 @@ export function calculateFinancialProjection(
     ["fixedCostMonthly", fixedCostMonthly],
     ["payrollMonthly", payrollMonthly],
     ["capexInitial", capexInitial],
+    ["pointEconomics.incrementalCapex", pointIncrementalCapex],
+    ["pointEconomics.incrementalMonthlyOpex", pointIncrementalMonthlyOpex],
     ["entryValuePerContract", entryValuePerContract],
   ].forEach(([key, value]) => assertNonNegative(String(key), value as Decimal));
   [
@@ -498,7 +527,7 @@ export function calculateFinancialProjection(
     const recognizedRevenue = netCollections;
     const variableCosts = grossSales.times(variableCostRate);
     const partnerShare = netCollections.times(partnerShareRate);
-    const preOperationalInvestment = hasCompleteImplementationSchedule
+    const basePreOperationalInvestment = hasCompleteImplementationSchedule
       ? implementationSchedule.reduce(
         (total, item) => total.plus(item.month!.eq(month) ? capexInitial.times(item.share!) : ZERO),
         ZERO,
@@ -506,8 +535,13 @@ export function calculateFinancialProjection(
       : preOperationMonthsNumber > 0
         ? (month <= preOperationMonthsNumber ? capexInitial.div(preOperationMonths) : ZERO)
         : (month === 1 ? capexInitial : ZERO);
+    const preOperationalInvestment = basePreOperationalInvestment.plus(
+      month === 1 ? pointIncrementalCapex : ZERO
+    );
     const capex = preOperationalInvestment;
-    const fixedCosts = isOperating ? fixedCostMonthly : ZERO;
+    const fixedCosts = isOperating
+      ? fixedCostMonthly.plus(pointIncrementalMonthlyOpex)
+      : ZERO;
     const payroll = isOperating ? payrollMonthly : ZERO;
     const operatingCashFlow = netCollections
       .minus(variableCosts)
@@ -627,7 +661,16 @@ export function calculateFinancialProjection(
       createMemory("npv", npv, "npv", "Valor presente dos fluxos mensais usando a taxa anual convertida para taxa mensal equivalente."),
       createMemory("irrAnnual", irrAnnual, "irr", "Taxa anual equivalente ao retorno interno dos fluxos mensais; fica indisponível quando não há mudança de sinal nos fluxos."),
       createMemory("paybackMonths", paybackMonths, "payback", "Mês de recuperação do caixa acumulado, com interpolação quando o ponto de equilíbrio ocorre entre dois meses."),
+      ...(pointEconomics
+        ? [createMemory(
+            "pointEconomicsIncrementalNetContribution",
+            new FinanceDecimal(pointEconomics.totals.value.incrementalNetContribution),
+            "point-economics",
+            "Contribuição incremental líquida mensal reconciliada dos pontos de captação; CAPEX e OPEX entram no caixa apenas quando marcados como incrementais.",
+          )]
+        : []),
     ],
     ...(receivablesPortfolio ? { receivablesPortfolio } : {}),
+    ...(pointEconomics ? { pointEconomics } : {}),
   };
 }

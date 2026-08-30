@@ -343,7 +343,6 @@ function calculatePoint(point: ValidatedPoint): PointEconomicsResult {
   const tours = shows.times(point.rates.tour);
   const sales = tours.times(point.rates.sale);
   const incrementalSales = sales.times(ONE.minus(point.rates.cannibalization));
-  const cannibalizedSales = sales.minus(incrementalSales);
   const healthyD90 = sales.times(point.rates.healthyD90);
   const incrementalHealthyD90 = incrementalSales.times(point.rates.healthyD90);
 
@@ -351,7 +350,6 @@ function calculatePoint(point: ValidatedPoint): PointEconomicsResult {
   const monthlyOperatingCost = point.monthlyFixedCost.plus(monthlyVariableCost);
   const grossSalesValue = sales.times(point.averageTicket);
   const incrementalSalesValue = incrementalSales.times(point.averageTicket);
-  const cannibalizedSalesValue = cannibalizedSales.times(point.averageTicket);
   const grossEntryValue = sales.times(point.averageEntry);
   const grossContribution = grossSalesValue.times(point.rates.contributionMargin);
   const d90Contribution = grossContribution.times(point.rates.healthyD90);
@@ -383,6 +381,16 @@ function calculatePoint(point: ValidatedPoint): PointEconomicsResult {
     monthlyRoi,
     paybackMonths,
   });
+  const totalSalesText = decimalText(sales);
+  const incrementalSalesText = decimalText(incrementalSales);
+  const cannibalizedSalesText = decimalText(
+    new PointDecimal(totalSalesText).minus(incrementalSalesText),
+  );
+  const grossSalesValueText = decimalText(grossSalesValue);
+  const incrementalSalesValueText = decimalText(incrementalSalesValue);
+  const cannibalizedSalesValueText = decimalText(
+    new PointDecimal(grossSalesValueText).minus(incrementalSalesValueText),
+  );
 
   return {
     pointId: point.source.pointId,
@@ -399,9 +407,9 @@ function calculatePoint(point: ValidatedPoint): PointEconomicsResult {
       sales: decimalText(sales),
     },
     production: {
-      totalSales: decimalText(sales),
-      incrementalSales: decimalText(incrementalSales),
-      cannibalizedSales: decimalText(cannibalizedSales),
+      totalSales: totalSalesText,
+      incrementalSales: incrementalSalesText,
+      cannibalizedSales: cannibalizedSalesText,
       healthyD90: decimalText(healthyD90),
       incrementalHealthyD90: decimalText(incrementalHealthyD90),
     },
@@ -418,9 +426,9 @@ function calculatePoint(point: ValidatedPoint): PointEconomicsResult {
       perHealthyD90: safeDivide(monthlyOperatingCost, healthyD90),
     },
     value: {
-      grossSales: decimalText(grossSalesValue),
-      incrementalSales: decimalText(incrementalSalesValue),
-      cannibalizedSales: decimalText(cannibalizedSalesValue),
+      grossSales: grossSalesValueText,
+      incrementalSales: incrementalSalesValueText,
+      cannibalizedSales: cannibalizedSalesValueText,
       grossEntry: decimalText(grossEntryValue),
       grossContribution: decimalText(grossContribution),
       d90Contribution: decimalText(d90Contribution),
@@ -450,10 +458,16 @@ function calculatePoint(point: ValidatedPoint): PointEconomicsResult {
     drivers: classification.drivers,
     reconciliation: {
       productionDifference: decimalText(
-        sales.minus(incrementalSales.plus(cannibalizedSales)),
+        new PointDecimal(totalSalesText).minus(
+          new PointDecimal(incrementalSalesText).plus(cannibalizedSalesText),
+        ),
       ),
       salesValueDifference: decimalText(
-        grossSalesValue.minus(incrementalSalesValue.plus(cannibalizedSalesValue)),
+        new PointDecimal(grossSalesValueText).minus(
+          new PointDecimal(incrementalSalesValueText).plus(
+            cannibalizedSalesValueText,
+          ),
+        ),
       ),
     },
   };
@@ -545,13 +559,13 @@ export function calculatePointEconomics(input: {
         KILL: points.filter(point => point.classification === "KILL").length,
       },
       reconciliation: {
-        productionDifference: decimalText(
-          totalSales.minus(incrementalSales.plus(cannibalizedSales)),
+        productionDifference: sumText(
+          points,
+          result => result.reconciliation.productionDifference,
         ),
-        salesValueDifference: decimalText(
-          grossSalesValue.minus(
-            incrementalSalesValue.plus(cannibalizedSalesValue),
-          ),
+        salesValueDifference: sumText(
+          points,
+          result => result.reconciliation.salesValueDifference,
         ),
       },
     },

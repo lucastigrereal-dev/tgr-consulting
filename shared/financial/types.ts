@@ -1,4 +1,5 @@
 import type { ReceivablesPortfolio } from "./receivablesPortfolio";
+import type { PointEconomicsPortfolio } from "./pointEconomics";
 
 export const FINANCIAL_INPUT_KEYS = [
   "qualifiedCouplesMonth1",
@@ -155,6 +156,7 @@ export type FinancialCalculation = {
   };
   memory: CalculationMemory[];
   receivablesPortfolio?: ReceivablesPortfolio;
+  pointEconomics?: PointEconomicsPortfolio;
 };
 
 export type ProjectLifecycleState = "draft" | "in_review" | "approved" | "baseline";

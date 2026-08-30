@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { calculateFinancialProjection } from "./engine";
+import { calculatePointEconomics } from "./pointEconomics";
 import type { FinancialInputSnapshot } from "./types";
 
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const });
@@ -146,6 +147,59 @@ describe("motor financeiro determinístico", () => {
       curedCollections: "150.00000000",
       writtenOffBalance: "50.00000000",
       healthyD90: "0.50000000",
+    });
+  });
+
+  it("usa Point Economics como capacidade autoritativa e inclui apenas custos incrementais no caixa", () => {
+    const pointEconomics = calculatePointEconomics({
+      points: [{
+        pointId: "totem-cotia",
+        name: "Totem Cotia",
+        channel: "Mall",
+        activationCost: "200",
+        monthlyFixedCost: "100",
+        costPerSale: "10",
+        approaches: "100",
+        researchRate: "1",
+        qualificationRate: "1",
+        invitationRate: "1",
+        appointmentRate: "1",
+        showRate: "1",
+        tourRate: "1",
+        saleRate: "0.1",
+        averageTicket: "1000",
+        averageEntry: "100",
+        contributionMarginRate: "0.75",
+        healthyD90Rate: "0.8",
+        cannibalizationRate: "0",
+        cashflowTreatment: "incremental",
+      }],
+    });
+    const result = calculateFinancialProjection({
+      ...completeInputs,
+      qualifiedCouplesMonth1: { status: "pending", sourceType: "current_decision" },
+      qualifiedCouplesGrowthRate: { status: "pending", sourceType: "current_decision" },
+      conversionRate: { status: "pending", sourceType: "current_decision" },
+    }, 2, { pointEconomics });
+
+    expect(result.status).toBe("valid");
+    expect(result.projections.map(row => row.qualifiedCouples)).toEqual([
+      "100.00000000", "100.00000000",
+    ]);
+    expect(result.projections.map(row => row.contracts)).toEqual([
+      "10.00000000", "10.00000000",
+    ]);
+    expect(result.projections[0]).toMatchObject({
+      grossSales: "10000.00000000",
+      preOperationalInvestment: "5200.00000000",
+      fixedCosts: "1200.00000000",
+    });
+    expect(result.projections[1]?.fixedCosts).toBe("1200.00000000");
+    expect(result.pointEconomics).toEqual(pointEconomics);
+    expect(result.memory.at(-1)).toMatchObject({
+      kpiKey: "pointEconomicsIncrementalNetContribution",
+      value: "7300.00000000",
+      formulaId: "point-economics",
     });
   });
 

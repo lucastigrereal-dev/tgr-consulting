@@ -1,26 +1,34 @@
 import type { FormulaSetVersion } from "./types";
 
 export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
-  id: "igr-core-formulas-v1-5",
-  semanticVersion: "1.5.0",
-  engineVersion: "igr-engine-1.5.0",
+  id: "igr-core-formulas-v1-6",
+  semanticVersion: "1.6.0",
+  engineVersion: "igr-engine-1.6.0",
   status: "published",
   definitions: [
     {
+      id: "point-economics",
+      name: "Economia incremental dos pontos de captação",
+      version: "1.0.0",
+      expression: "Σ((vendas incrementais × ticket × margem de contribuição) - custo fixo mensal - vendas totais × custo por venda)",
+      dependencies: ["capture-points", "authoritative-commercial-model", "receivables-policy"],
+      description: "Reconcilia funil, canibalização, Healthy D90, contribuição e tratamento de caixa por ponto para decidir SCALE, OPTIMIZE ou KILL.",
+    },
+    {
       id: "qualified-couples",
       name: "Casais qualificados por mês",
-      version: "1.0.0",
-      expression: "qualifiedCouplesMonth1 × (1 + qualifiedCouplesGrowthRate)^(month - 1)",
-      dependencies: ["qualifiedCouplesMonth1", "qualifiedCouplesGrowthRate"],
-      description: "Projeta capacidade de captação com crescimento ou sazonalidade parametrizada.",
+      version: "1.1.0",
+      expression: "pointEconomics.totalQualified; no modo legado, qualifiedCouplesMonth1 × (1 + qualifiedCouplesGrowthRate)^(month - 1)",
+      dependencies: ["point-economics", "qualifiedCouplesMonth1", "qualifiedCouplesGrowthRate"],
+      description: "Usa a capacidade reconciliada dos pontos de captação e preserva o crescimento agregado apenas no modo legado.",
     },
     {
       id: "gross-sales",
       name: "Venda bruta",
-      version: "1.0.0",
-      expression: "qualifiedCouples × conversionRate × averageTicket",
-      dependencies: ["qualified-couples", "conversionRate", "averageTicket"],
-      description: "Converte volume qualificado em venda assinada antes de recebimento e perda.",
+      version: "1.1.0",
+      expression: "pointEconomics.totalSales × averageTicket; no modo legado, qualifiedCouples × conversionRate × averageTicket",
+      dependencies: ["qualified-couples", "point-economics", "conversionRate", "averageTicket"],
+      description: "Converte a produção reconciliada dos pontos em venda assinada antes de recebimento e perda.",
     },
     {
       id: "gross-entry-generated",
@@ -105,10 +113,10 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
     {
       id: "pre-operational-investment",
       name: "Pré-investimento de implantação",
-      version: "1.2.0",
-      expression: "Σ(capexInitial × capexShareRate da frente no capexMonth da frente); na ausência de cronograma completo, capexInitial / preOperationMonths nos meses de pré-operação",
-      dependencies: ["capexInitial", "preOperationMonths", "capexAcquisitionShareRate", "capexAcquisitionMonth", "capexSalesRoomShareRate", "capexSalesRoomMonth", "capexSalesKitShareRate", "capexSalesKitMonth"],
-      description: "Aloca captação, sala e sales kit no mês definido; só usa distribuição uniforme quando o cronograma por rubrica ainda não foi informado por completo.",
+      version: "1.3.0",
+      expression: "implantação base programada + pointEconomics.incrementalCapex no mês 1",
+      dependencies: ["capexInitial", "preOperationMonths", "capexAcquisitionShareRate", "capexAcquisitionMonth", "capexSalesRoomShareRate", "capexSalesRoomMonth", "capexSalesKitShareRate", "capexSalesKitMonth", "point-economics"],
+      description: "Aloca implantação base e adiciona ativação de pontos apenas quando seu tratamento de caixa é incremental.",
     },
     {
       id: "commercial-team-monthly-cost",
@@ -129,10 +137,10 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
     {
       id: "operating-cash-flow",
       name: "Fluxo de caixa operacional",
-      version: "1.0.0",
-      expression: "netCollections - variableCosts - partnerShare - fixedCosts - payroll - preOperationalInvestment",
-      dependencies: ["net-entry-collections", "variableCostRate", "partnerShareRate", "fixedCostMonthly", "payrollMonthly", "pre-operational-investment"],
-      description: "Produz caixa mensal depois de entrada líquida, custos, repasses e implantação distribuída.",
+      version: "1.1.0",
+      expression: "netCollections - variableCosts - partnerShare - fixedCosts - pointEconomics.incrementalMonthlyOpex - payroll - preOperationalInvestment",
+      dependencies: ["net-entry-collections", "variableCostRate", "partnerShareRate", "fixedCostMonthly", "point-economics", "payrollMonthly", "pre-operational-investment"],
+      description: "Produz caixa mensal depois de recebimentos, custos, repasses, pontos incrementais, folha e implantação.",
     },
     {
       id: "npv",

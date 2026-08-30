@@ -9,7 +9,7 @@ describe("Formula Registry", () => {
     expect(registry.list()).toHaveLength(2);
     expect(registry.getActiveFormulaSet().semanticVersion).toBe("2.0.0");
     registry.selectActiveFormulaSet(IGR_CORE_FORMULA_SET_V1.id);
-    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.5.0");
+    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.6.0");
   });
 
   it("expõe lineage recursivo de KPI até inputs", () => {
@@ -20,12 +20,13 @@ describe("Formula Registry", () => {
     expect(lineage.find((node) => node.id === "averageTicket" && node.kind === "input")).toBeTruthy();
   });
 
-  it("publica estrutura comercial e condição de pagamento como fórmulas rastreáveis", () => {
+  it("publica estrutura comercial, carteira e Point Economics como fórmulas rastreáveis", () => {
     const registry = new FormulaRegistry([IGR_CORE_FORMULA_SET_V1], IGR_CORE_FORMULA_SET_V1.id);
     const teamLineage = registry.getLineage("commercial-team-monthly-cost");
     const paymentLineage = registry.getLineage("payment-terms-net-settlement");
     const installmentLineage = registry.getLineage("installment-collections");
     const healthyLineage = registry.getLineage("healthy-d90");
+    const pointLineage = registry.getLineage("point-economics");
     expect(teamLineage.find((node) => node.id === "payrollMonthly" && node.kind === "input")).toBeTruthy();
     expect(paymentLineage.find((node) => node.id === "net-entry-collections" && node.kind === "formula")).toBeTruthy();
     expect(installmentLineage.find((node) => node.id === "paymentCardInstallmentMdrRate" && node.kind === "input")).toBeTruthy();
@@ -34,8 +35,10 @@ describe("Formula Registry", () => {
     expect(installmentLineage.find((node) => node.id === "collectionRate")).toBeFalsy();
     expect(healthyLineage.find((node) => node.id === "cancellationCurveD90" && node.kind === "input")).toBeTruthy();
     expect(healthyLineage.find((node) => node.id === "cureRates" && node.kind === "input")).toBeTruthy();
-    expect(IGR_CORE_FORMULA_SET_V1.id).toBe("igr-core-formulas-v1-5");
-    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.5.0");
+    expect(pointLineage.find((node) => node.id === "capture-points" && node.kind === "input")).toBeTruthy();
+    expect(pointLineage.find((node) => node.id === "authoritative-commercial-model" && node.kind === "input")).toBeTruthy();
+    expect(IGR_CORE_FORMULA_SET_V1.id).toBe("igr-core-formulas-v1-6");
+    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.6.0");
   });
 
   it("recusa ativar formula set que não foi publicado", () => {
