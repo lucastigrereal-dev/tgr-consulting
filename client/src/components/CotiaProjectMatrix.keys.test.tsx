@@ -66,5 +66,6 @@ describe("CotiaProjectMatrix · estabilidade de listas", () => {
     expect(html).toContain('aria-label="Cotas bloqueadas"');
     expect(html).toMatch(/Premissa edit(?:a|á)vel/);
     expect(html).toContain("nenhuma regra é inventada");
+    expect(html).toContain("Digite 1 para 1% e 0,5 para 0,5%");
   });
 });

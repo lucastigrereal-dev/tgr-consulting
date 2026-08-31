@@ -69,13 +69,13 @@ const paymentMethods: CostLine[] = [
   { key: "boleto", label: "Boleto" },
 ];
 
-function money(value: number, known = value !== 0) {
+function formatMoney(value: number, known: boolean) {
   return known && Number.isFinite(value)
     ? value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
     : "—";
 }
 
-function number(value: number, digits = 0, known = value !== 0) {
+function formatNumber(value: number, digits: number, known: boolean) {
   return known && Number.isFinite(value)
     ? value.toLocaleString("pt-BR", { maximumFractionDigits: digits })
     : "—";
@@ -114,6 +114,10 @@ function humanizeField(key: string) {
     .replace(/\b\w/g, character => character.toUpperCase());
 }
 
+function isPercentField(key: string) {
+  return /(?:Percentual|Taxa|Rate|Conversao|AtivoD90|eficiencia|cancelamento|inadimplencia|curaD|encargos)/i.test(key);
+}
+
 function MatrixSection({
   title,
   children,
@@ -143,20 +147,27 @@ export function CotiaProjectMatrix({
   onSave,
 }: CotiaProjectMatrixProps) {
   const v = (key: string) => values[key] ?? "";
-  const field = (key: string, placeholder = "PENDENTE", mode = "decimal", label?: string) => (
-    <Input
+  const hasAnyExplicitValue = Object.values(values).some(value => value.trim().length > 0);
+  const money = (value: number, known = hasAnyExplicitValue) => formatMoney(value, known);
+  const number = (value: number, digits = 0, known = hasAnyExplicitValue) => formatNumber(value, digits, known);
+  const field = (key: string, placeholder = "PENDENTE", mode = "decimal", label?: string) => {
+    const accessibleLabel = label ?? fieldLabels[key] ?? humanizeField(key);
+    const percentHint = isPercentField(key)
+      ? " Digite 1 para 1% e 0,5 para 0,5%. O motor financeiro recebe o decimal equivalente."
+      : "";
+    return <Input
       id={`cotia-${key}`}
       name={key}
-      aria-label={label ?? fieldLabels[key] ?? humanizeField(key)}
-      title={`Premissa editável: ${label ?? fieldLabels[key] ?? humanizeField(key)}. Campo vazio permanece PENDENTE.`}
+      aria-label={accessibleLabel}
+      title={`Premissa editável: ${accessibleLabel}. Campo vazio permanece PENDENTE.${percentHint}`}
       disabled={disabled}
       inputMode={mode === "text" ? "text" : "decimal"}
       value={v(key)}
       onChange={event => onChange(key, event.target.value)}
       placeholder={placeholder}
       className="h-9 min-w-0 border-0 bg-amber-50/60 px-2 text-right text-sm font-semibold text-slate-900 shadow-none focus-visible:ring-2 focus-visible:ring-amber-500"
-    />
-  );
+    />;
+  };
   const calculations = calculateCotiaMatrix(values);
   const has = (...keys: string[]) => keys.every(key => Boolean(v(key).trim()));
 
@@ -225,7 +236,7 @@ export function CotiaProjectMatrix({
                 ["cotasVendidasMes", "Cotas vendidas por mês", "Qtd."],
               ].map(([key, label, unit]) => (
                 <tr className="border-b border-slate-900/20" key={key}>
-                  <td className="w-[48%] bg-slate-50 px-3 py-1.5 font-bold">{label}</td>
+                  <td className="w-[48%] bg-slate-50 px-3 py-1.5 font-bold"><Label htmlFor={`cotia-${key}`} className="font-bold">{label}</Label></td>
                   <td className="w-[12%] border-l border-slate-900/20 px-2 text-center text-xs text-slate-500">{unit}</td>
                   <td className="border-l border-slate-900/20">{field(key, "PENDENTE", "decimal", label)}</td>
                   <td className="w-[25%] border-l border-slate-900/20 px-3 text-right text-xs text-slate-500">Premissa da operação</td>
@@ -291,7 +302,7 @@ export function CotiaProjectMatrix({
       <MatrixSection title="Carteira do projeto e comissão por cota da pirâmide">
         <div className="grid border-b border-slate-900/20 sm:grid-cols-2">
           <div className="border-r border-slate-900/20 p-2">
-            <Label className="text-[10px] font-black uppercase text-slate-600">Percentual do projeto adimplente</Label>
+            <Label htmlFor="cotia-percentualAdimplente" className="text-[10px] font-black uppercase text-slate-600">Percentual do projeto adimplente</Label>
             {field("percentualAdimplente", "PENDENTE")}
           </div>
           <div className="p-2 text-right text-xs text-slate-500">Definir se é meta de carteira saudável ou regra de recebimento.</div>
@@ -350,13 +361,13 @@ export function CotiaProjectMatrix({
 
       <MatrixSection title="Pré-investimento — sala de vendas e sales kit">
         <div className="grid border-b border-slate-900/20 sm:grid-cols-2">
-          <div className="border-r border-slate-900/20 p-2"><Label className="text-[10px] font-black uppercase text-slate-600">Meses de pré-operação</Label>{field("mesesPreOperacao", "PENDENTE")}</div>
+          <div className="border-r border-slate-900/20 p-2"><Label htmlFor="cotia-mesesPreOperacao" className="text-[10px] font-black uppercase text-slate-600">Meses de pré-operação</Label>{field("mesesPreOperacao", "PENDENTE")}</div>
           <div className="p-2 text-right text-xs text-slate-500">O pré-investimento será distribuído antes da abertura da operação. Sem prazo, o fluxo fica PENDENTE.</div>
         </div>
         <div className="grid border-b border-slate-900/20 sm:grid-cols-3">
-          <div className="border-r border-slate-900/20 p-2"><Label className="text-[10px] font-black uppercase text-slate-600">Mês · ativação de captação</Label>{field("implantacaoCaptacaoMes", "PENDENTE")}</div>
-          <div className="border-r border-slate-900/20 p-2"><Label className="text-[10px] font-black uppercase text-slate-600">Mês · sala de vendas</Label>{field("implantacaoSalaMes", "PENDENTE")}</div>
-          <div className="p-2"><Label className="text-[10px] font-black uppercase text-slate-600">Mês · sales kit</Label>{field("implantacaoSalesKitMes", "PENDENTE")}</div>
+          <div className="border-r border-slate-900/20 p-2"><Label htmlFor="cotia-implantacaoCaptacaoMes" className="text-[10px] font-black uppercase text-slate-600">Mês · ativação de captação</Label>{field("implantacaoCaptacaoMes", "PENDENTE")}</div>
+          <div className="border-r border-slate-900/20 p-2"><Label htmlFor="cotia-implantacaoSalaMes" className="text-[10px] font-black uppercase text-slate-600">Mês · sala de vendas</Label>{field("implantacaoSalaMes", "PENDENTE")}</div>
+          <div className="p-2"><Label htmlFor="cotia-implantacaoSalesKitMes" className="text-[10px] font-black uppercase text-slate-600">Mês · sales kit</Label>{field("implantacaoSalesKitMes", "PENDENTE")}</div>
         </div>
         <div className="border-b border-slate-900/20 bg-slate-50 px-3 py-2 text-xs text-slate-600">Sala premium sem obra pesada: quantidade é definida pela capacidade da operação; fornecedor e custo a cotar nunca são inventados.</div>
         <div className="overflow-x-auto"><table className="min-w-[1500px] border-collapse text-sm"><thead className="bg-slate-950 text-[10px] uppercase tracking-wide text-white"><tr><th className="px-3 py-2 text-left">Sala de vendas</th><th className="px-3 py-2">Nível</th><th className="px-3 py-2">Base de quantidade</th><th className="px-3 py-2">Qtd.</th><th className="px-3 py-2">Custo unit.</th><th className="px-3 py-2">Owner</th><th className="px-3 py-2">Lead time</th><th className="px-3 py-2">Dependência</th><th className="px-3 py-2">Fornecedor</th><th className="px-3 py-2">Total</th></tr></thead><tbody>

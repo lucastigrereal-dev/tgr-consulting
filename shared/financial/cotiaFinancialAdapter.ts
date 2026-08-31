@@ -1,4 +1,5 @@
 import { calculateCotiaMatrix, parseBrazilianDecimal } from "./cotiaMatrix";
+import { normalizeCotiaPercentInput } from "./cotiaAuthoritativeAdapter";
 import type { FinancialInputKey } from "./types";
 
 export type CotiaFinancialMapping = {
@@ -8,10 +9,7 @@ export type CotiaFinancialMapping = {
 };
 
 const decimalText = (value: string) => String(parseBrazilianDecimal(value));
-const decimalRate = (value: string) => {
-  const numeric = parseBrazilianDecimal(value);
-  return String(numeric > 1 ? numeric / 100 : numeric);
-};
+const decimalRate = (value: string) => normalizeCotiaPercentInput(value);
 
 export function buildCotiaFinancialMappings(values: Record<string, string>): CotiaFinancialMapping[] {
   const calculations = calculateCotiaMatrix(values);

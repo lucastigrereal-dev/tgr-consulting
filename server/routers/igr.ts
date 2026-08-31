@@ -36,6 +36,7 @@ import {
   freezeBaselineForTenant,
   replaceProductCatalogForTenant,
   replaceCapturePointsForTenant,
+  registerCotiaAssemblyForTenant,
   upsertCommercialOperationsForTenant,
   saveCommercialModelForTenant,
   updateInputsForTenant,
@@ -399,6 +400,18 @@ export const igrRouter = router({
   builderComponents: protectedProcedure.input(z.object({ versionId: z.string().min(1) })).query(({ ctx, input }) =>
     listBuilderComponentsForTenant(input.versionId, tenantIdFromUser(ctx.user.id)),
   ),
+  registerCotiaAssembly: protectedProcedure
+    .input(z.object({
+      versionId: z.string().min(1),
+      name: z.string().trim().min(2).max(255),
+      payload: z.record(z.string(), z.string()),
+      sourceRef: z.string().trim().max(500).optional(),
+    }))
+    .mutation(({ ctx, input }) => registerCotiaAssemblyForTenant({
+      tenantId: tenantIdFromUser(ctx.user.id),
+      actorId: ctx.user.id,
+      ...input,
+    })),
   productCatalog: protectedProcedure
     .input(
       z.object({

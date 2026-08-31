@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 import { buildCotiaFinancialMappings } from "./cotiaFinancialAdapter";
 
 describe("adaptador financeiro da matriz Cotia", () => {
+  it("converte pontos percentuais da UI para decimal sem ambiguidade", () => {
+    const mappings = buildCotiaFinancialMappings({
+      taxaCancelamento: "1",
+      percentualAdimplente: "0,5",
+      cartaoVistaPercentual: "20",
+      cartaoVistaTaxa: "1",
+    });
+    const value = (key: string) => mappings.find(mapping => mapping.inputKey === key)?.value;
+    expect(value("cancellationRate")).toBe("0.01");
+    expect(value("collectionRate")).toBe("0.005");
+    expect(value("paymentCardViewMixRate")).toBe("0.2");
+    expect(value("paymentCardViewMdrRate")).toBe("0.01");
+  });
+
   it("não duplica comissão de canal ou comercial entre custo fixo e variável", () => {
     const mappings = buildCotiaFinancialMappings({
       valorCota: "35000", cotasVendidasMes: "10", utilidadesMensal: "1000", canalMidiaMensal: "300",

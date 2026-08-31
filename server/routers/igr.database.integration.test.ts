@@ -1,14 +1,15 @@
-import { sql } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import type { FinancialInputSnapshot } from "../../shared/financial/types";
 import type { CommercialOperationsDefinition } from "../../shared/financial/commercialOperations";
 import type { TrpcContext } from "../_core/context";
 import { getDb } from "../db";
 import { igrRouter } from "./igr";
+import { auditEvents, projectVersions } from "../../drizzle/schema";
 
 const ownerId = 1;
 const outsiderId = 991_001;
-const ids = { projectId: "", versionId: "", pendingSnapshotId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "", commercialConditionId: "", receivablesPolicyId: "", scenarioBranchId: "", scenarioVersionId: "" };
+const ids = { projectId: "", versionId: "", pendingSnapshotId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "", commercialConditionId: "", receivablesPolicyId: "", scenarioBranchId: "", scenarioVersionId: "", cotiaProjectId: "", cotiaVersionId: "", cotiaRollbackProjectId: "", cotiaRollbackVersionId: "" };
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const, sourceRef: "igr.database.integration.test" });
 const inputs: FinancialInputSnapshot = {
   qualifiedCouplesMonth1: provided("100"), qualifiedCouplesGrowthRate: provided("0"), conversionRate: provided("0.1"), averageTicket: provided("1000"),
@@ -69,7 +70,7 @@ function contextFor(userId: number, role: "user" | "admin" = "admin"): TrpcConte
 afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
-  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.pendingSnapshotId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId}, ${ids.commercialConditionId}, ${ids.receivablesPolicyId}, ${ids.scenarioBranchId}, ${ids.scenarioVersionId})`);
+  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.pendingSnapshotId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId}, ${ids.commercialConditionId}, ${ids.receivablesPolicyId}, ${ids.scenarioBranchId}, ${ids.scenarioVersionId}, ${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId})`);
   await db.execute(sql`DELETE FROM historical_benchmarks WHERE tenantId = ${ownerId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`);
   await db.execute(sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.snapshotId}`);
   await db.execute(sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.snapshotId}`);
@@ -83,6 +84,8 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM project_versions WHERE id = ${ids.scenarioVersionId}`);
   await db.execute(sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
+  await db.execute(sql`DELETE FROM project_versions WHERE id IN (${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId})`);
+  await db.execute(sql`DELETE FROM projects WHERE id IN (${ids.cotiaProjectId}, ${ids.cotiaRollbackProjectId})`);
 });
 
 describe("igrRouter + banco", () => {
@@ -471,5 +474,124 @@ describe("igrRouter + banco", () => {
       sourceRef: "Plano revisado",
       definition: commercialOperationsDefinition,
     })).rejects.toThrow("versão de trabalho");
+  }, 30_000);
+
+  it("registra a Pagina 1 em uma transacao e preserva SKU e fases nao controlados", async () => {
+    const owner = igrRouter.createCaller(contextFor(ownerId));
+    const outsider = igrRouter.createCaller(contextFor(outsiderId));
+    const pendingInputs = Object.fromEntries(Object.keys(inputs).map(key => [
+      key,
+      { status: "pending", sourceType: "current_decision" },
+    ])) as FinancialInputSnapshot;
+    const created = await owner.createProject({ name: "[TEST] Cotia transacional", inputs: pendingInputs });
+    ids.cotiaProjectId = created.projectId;
+    ids.cotiaVersionId = created.versionId;
+
+    await owner.saveCommercialModel({
+      versionId: created.versionId,
+      asOfMonth: 0,
+      skus: [
+        {
+          id: "produto-principal", name: "Produto Cotia", unitType: "UH",
+          unitQuantity: 60, sharesPerUnit: 52, grossSoldShares: 0,
+          returnedShares: 0, blockedShares: 0, status: "provided",
+          sourceType: "current_document", sourceRef: "Tabela original",
+          pricePhases: [
+            { id: "base", startsAtMonth: 0, price: "28000" },
+            { id: "futura", startsAtMonth: 6, price: "35000" },
+          ],
+        },
+        {
+          id: "outro-sku", name: "Produto preservado", unitType: "UH",
+          unitQuantity: 10, sharesPerUnit: 10, grossSoldShares: 0,
+          returnedShares: 0, blockedShares: 0, status: "provided",
+          sourceType: "current_document", sourceRef: "Tabela paralela",
+          pricePhases: [{ id: "base-outro", startsAtMonth: 0, price: "50000" }],
+        },
+      ],
+      conditions: [
+        {
+          productSkuCode: "produto-principal", status: "provided",
+          sourceType: "current_document", sourceRef: "Tabela original",
+          condition: {
+            id: "condicao-base-cotia", name: "Condicao Cotia", listPrice: "28000", discount: "0",
+            entry: { total: "3200", installments: 8, firstDueMonth: 0 },
+            balance: { principal: "24800", installments: 84, graceMonths: 2, firstDueMonth: 3 },
+            explicitCharges: "0", materialityTolerance: "0.01",
+          },
+        },
+        {
+          productSkuCode: "outro-sku", status: "provided",
+          sourceType: "current_document", sourceRef: "Tabela paralela",
+          condition: {
+            id: "condicao-outro", name: "Condicao preservada", listPrice: "50000", discount: "0",
+            entry: { total: "5000", installments: 1, firstDueMonth: 0 },
+            balance: { principal: "45000", installments: 36, graceMonths: 0, firstDueMonth: 1 },
+            explicitCharges: "0", materialityTolerance: "0.01",
+          },
+        },
+      ],
+    });
+    const revisionBefore = (await (await getDb())!.select({ financialRevision: projectVersions.financialRevision }).from(projectVersions).where(eq(projectVersions.id, created.versionId)).limit(1))[0]!.financialRevision;
+    const assemblyPayload = {
+      nomeProjeto: "Projeto Ponta Negra", nomeProduto: "Cota Ponta Negra", praca: "Natal/RN",
+      dataBase: "08/2026", inicioOperacao: "01/2027", horizonteMeses: "120",
+      valorCota: "30.000,00", valorEntrada: "3.200,00", parcelasEntrada: "8",
+      primeiroVencimentoEntradaMes: "0", parcelasSaldo: "84", carenciaSaldoMeses: "2",
+      primeiroVencimentoSaldoMes: "3", cotasPorApartamento: "52", totalApartamentos: "60",
+      cotasBloqueadas: "0", cotasVendidasAcumuladas: "0", cotasRetornadas: "0",
+      cotasVendidasMes: "100", eficiencia: "20", taxaCancelamento: "30",
+      percentualAdimplente: "75", descontoComercial: "0", encargosExplicitos: "0",
+      toleranciaMaterialidade: "0,01", taxaCorrecao: "1", taxaJuros: "0,5",
+      politicaCarteiraVersao: "natal-v1", cancelamentoD7: "5", cancelamentoD30: "10",
+      cancelamentoD60: "15", cancelamentoD90: "20", cancelamentoD180: "25",
+      cancelamentoLifetime: "30", inadimplencia: "25", curaD1a30: "40",
+      curaD31a60: "30", curaD61a90: "20", curaD90Mais: "10", writeOffAposDias: "180",
+    };
+
+    await expect(outsider.registerCotiaAssembly({
+      versionId: created.versionId, name: "Montagem do Projeto", payload: assemblyPayload,
+      sourceRef: "Ata Natal",
+    })).rejects.toThrow("não autorizado");
+    const registered = await owner.registerCotiaAssembly({
+      versionId: created.versionId, name: "Montagem do Projeto", payload: assemblyPayload,
+      sourceRef: "Ata Natal",
+    });
+    expect(registered).toMatchObject({ status: "provided", commercialModelUpdated: true, policyUpdated: true });
+
+    const catalog = await owner.productCatalog({ versionId: created.versionId, asOfMonth: 0 });
+    expect(catalog.records.map(record => record.skuCode)).toEqual(["outro-sku", "produto-principal"]);
+    const cotiaSku = catalog.records.find(record => record.skuCode === "produto-principal")!;
+    expect(cotiaSku.pricePhases.map(phase => ({ month: phase.startsAtMonth, price: phase.priceText }))).toEqual([
+      { month: 0, price: "30000" },
+      { month: 6, price: "35000" },
+    ]);
+    expect(catalog.records.find(record => record.skuCode === "outro-sku")?.pricePhases[0]?.priceText).toBe("50000");
+    const conditions = await owner.commercialConditions({ versionId: created.versionId });
+    expect(conditions.map(item => item.condition.id)).toEqual(["condicao-base-cotia", "condicao-outro"]);
+    expect(conditions.find(item => item.condition.id === "condicao-base-cotia")?.condition).toMatchObject({
+      listPrice: "30000", correctionRate: "0.01", interestRate: "0.005",
+    });
+    expect((await owner.receivablesPolicy({ versionId: created.versionId }))?.policy).toMatchObject({
+      policyVersion: "natal-v1",
+      cancellationCurve: { d7: "0.05", lifetime: "0.3" },
+      delinquencyRate: "0.25",
+    });
+    expect((await owner.versionInputs({ versionId: created.versionId })).averageTicket.value).toBe("30000");
+    const revisionAfter = (await (await getDb())!.select({ financialRevision: projectVersions.financialRevision }).from(projectVersions).where(eq(projectVersions.id, created.versionId)).limit(1))[0]!.financialRevision;
+    expect(revisionAfter).toBe(revisionBefore + 1);
+    const auditCount = await (await getDb())!.select({ value: count() }).from(auditEvents).where(and(eq(auditEvents.entityId, created.versionId), eq(auditEvents.action, "cotia_assembly.registered")));
+    expect(auditCount[0]?.value).toBe(1);
+
+    const rollbackCreated = await owner.createProject({ name: "[TEST] Cotia rollback", inputs: pendingInputs });
+    ids.cotiaRollbackProjectId = rollbackCreated.projectId;
+    ids.cotiaRollbackVersionId = rollbackCreated.versionId;
+    await expect(owner.registerCotiaAssembly({
+      versionId: rollbackCreated.versionId, name: "Montagem do Projeto",
+      payload: { ...assemblyPayload, valorEntrada: "40000" }, sourceRef: "Ata invalida",
+    })).rejects.toThrow("exceder o valor da cota");
+    expect((await owner.versionInputs({ versionId: rollbackCreated.versionId })).averageTicket.status).toBe("pending");
+    expect(await owner.builderComponents({ versionId: rollbackCreated.versionId })).toEqual([]);
+    expect((await owner.productCatalog({ versionId: rollbackCreated.versionId, asOfMonth: 0 })).records).toEqual([]);
   }, 30_000);
 });

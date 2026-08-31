@@ -94,10 +94,10 @@ function integer(value: string, label: string, minimum = 0) {
   return number;
 }
 
-function rateText(value: string, label: string) {
+export function normalizeCotiaPercentInput(value: string, label = "Percentual") {
   const normalized = normalizeBrazilianDecimal(value);
   const raw = normalized === null ? Number.NaN : Number(normalized);
-  const rate = raw > 1 ? raw / 100 : raw;
+  const rate = raw / 100;
   if (!value.trim() || !Number.isFinite(rate) || rate < 0 || rate > 1)
     throw new Error(`${label} deve estar entre 0% e 100%.`);
   return String(rate);
@@ -173,9 +173,9 @@ export function buildCotiaAuthoritativePayload(
     const explicitCharges = parseBrazilianDecimal(values.encargosExplicitos);
     const horizonMonths = integer(values.horizonteMeses, "Horizonte", 1);
     if (horizonMonths > 120) throw new Error("Horizonte deve estar entre 1 e 120 meses.");
-    rateText(values.eficiencia, "Eficiencia comercial");
-    rateText(values.taxaCancelamento, "Taxa de cancelamento");
-    rateText(values.percentualAdimplente, "Percentual adimplente");
+    normalizeCotiaPercentInput(values.eficiencia, "Eficiencia comercial");
+    normalizeCotiaPercentInput(values.taxaCancelamento, "Taxa de cancelamento");
+    normalizeCotiaPercentInput(values.percentualAdimplente, "Percentual adimplente");
     integer(values.cotasVendidasMes, "Cotas vendidas por mes");
     const unitQuantity = integer(values.totalApartamentos, "Total de UH", 1);
     const sharesPerUnit = integer(values.cotasPorApartamento, "Cotas por UH", 1);
@@ -210,10 +210,10 @@ export function buildCotiaAuthoritativePayload(
       explicitCharges: decimalText(values.encargosExplicitos, "Encargos explicitos"),
       materialityTolerance: decimalText(values.toleranciaMaterialidade, "Tolerancia de materialidade"),
       ...(present(values, "taxaCorrecao")
-        ? { correctionRate: rateText(values.taxaCorrecao, "Taxa de correcao") }
+        ? { correctionRate: normalizeCotiaPercentInput(values.taxaCorrecao, "Taxa de correcao") }
         : {}),
       ...(present(values, "taxaJuros")
-        ? { interestRate: rateText(values.taxaJuros, "Taxa de juros") }
+        ? { interestRate: normalizeCotiaPercentInput(values.taxaJuros, "Taxa de juros") }
         : {}),
     };
     commercialModel = {
@@ -246,12 +246,12 @@ export function buildCotiaAuthoritativePayload(
   if (completion.policyStatus === "provided") {
     if (!sourceRef) throw new Error("Politica de carteira informada exige fonte ou responsavel.");
     const curve = [
-      rateText(values.cancelamentoD7, "Cancelamento D7"),
-      rateText(values.cancelamentoD30, "Cancelamento D30"),
-      rateText(values.cancelamentoD60, "Cancelamento D60"),
-      rateText(values.cancelamentoD90, "Cancelamento D90"),
-      rateText(values.cancelamentoD180, "Cancelamento D180"),
-      rateText(values.cancelamentoLifetime, "Cancelamento lifetime"),
+      normalizeCotiaPercentInput(values.cancelamentoD7, "Cancelamento D7"),
+      normalizeCotiaPercentInput(values.cancelamentoD30, "Cancelamento D30"),
+      normalizeCotiaPercentInput(values.cancelamentoD60, "Cancelamento D60"),
+      normalizeCotiaPercentInput(values.cancelamentoD90, "Cancelamento D90"),
+      normalizeCotiaPercentInput(values.cancelamentoD180, "Cancelamento D180"),
+      normalizeCotiaPercentInput(values.cancelamentoLifetime, "Cancelamento lifetime"),
     ];
     if (curve.some((value, index) => index > 0 && Number(value) < Number(curve[index - 1])))
       throw new Error("A curva de cancelamento cumulativa deve ser crescente.");
@@ -264,12 +264,12 @@ export function buildCotiaAuthoritativePayload(
           d7: curve[0], d30: curve[1], d60: curve[2], d90: curve[3],
           d180: curve[4], lifetime: curve[5],
         },
-        delinquencyRate: rateText(values.inadimplencia, "Inadimplencia"),
+        delinquencyRate: normalizeCotiaPercentInput(values.inadimplencia, "Inadimplencia"),
         cureRates: {
-          days1To30: rateText(values.curaD1a30, "Cura D1-D30"),
-          days31To60: rateText(values.curaD31a60, "Cura D31-D60"),
-          days61To90: rateText(values.curaD61a90, "Cura D61-D90"),
-          days90Plus: rateText(values.curaD90Mais, "Cura D90+"),
+          days1To30: normalizeCotiaPercentInput(values.curaD1a30, "Cura D1-D30"),
+          days31To60: normalizeCotiaPercentInput(values.curaD31a60, "Cura D31-D60"),
+          days61To90: normalizeCotiaPercentInput(values.curaD61a90, "Cura D61-D90"),
+          days90Plus: normalizeCotiaPercentInput(values.curaD90Mais, "Cura D90+"),
         },
         writeOffAfterDays: integer(values.writeOffAposDias, "Write-off", 90),
         policyVersion: values.politicaCarteiraVersao.trim(),

@@ -94,6 +94,8 @@ import {
   type FinancialInputKey,
   type FinancialInputSnapshot,
 } from "../shared/financial/types";
+import { buildCotiaFinancialMappings } from "../shared/financial/cotiaFinancialAdapter";
+import { buildCotiaAuthoritativePayload } from "../shared/financial/cotiaAuthoritativeAdapter";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -626,6 +628,417 @@ export type PersistedCommercialConditionInput = {
   sourceRef?: string;
   condition: CommercialConditionInput;
 };
+
+const COTIA_SKU_CODE = "produto-principal";
+const COTIA_CONDITION_CODE = "condicao-base-cotia";
+
+export async function registerCotiaAssemblyForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  versionId: string;
+  name: string;
+  payload: Record<string, string>;
+  sourceRef?: string;
+}) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  const sourceRef = params.sourceRef?.trim() ?? "";
+  const authoritative = buildCotiaAuthoritativePayload(params.payload, sourceRef);
+  const mappings = sourceRef.length >= 2
+    ? buildCotiaFinancialMappings(params.payload)
+    : [];
+  const incomingSku = authoritative.commercialModel?.skus.find(
+    sku => sku.id === COTIA_SKU_CODE
+  );
+  const incomingCondition = authoritative.commercialModel?.conditions.find(
+    item => item.condition.id === COTIA_CONDITION_CODE
+  );
+  if (authoritative.commercialModel && (!incomingSku || !incomingCondition)) {
+    throw new Error("A Página 1 não produziu o produto e a condição Cotia esperados.");
+  }
+  if (incomingSku) {
+    const evaluation = evaluateProductInventory({
+      asOfMonth: authoritative.commercialModel!.asOfMonth,
+      skus: [incomingSku],
+    });
+    if (evaluation.status === "invalid") {
+      throw new Error(
+        `Catálogo Cotia inválido: ${evaluation.violations.map(item => item.code).join(", ")}.`
+      );
+    }
+  }
+  if (incomingCondition) {
+    const reconciliation = reconcileCommercialCondition(incomingCondition.condition);
+    const blockingAssemblyViolations = reconciliation.violations.filter(
+      item => item.code !== "INDEXED_PAYMENT_SCHEDULE_REQUIRED"
+    );
+    if (blockingAssemblyViolations.length) {
+      throw new Error(
+        `Condição comercial Cotia inválida: ${blockingAssemblyViolations.map(item => item.code).join(", ")}.`
+      );
+    }
+  }
+  if (authoritative.receivablesPolicy) {
+    assertReceivablesPolicy(authoritative.receivablesPolicy.policy);
+  }
+
+  return db.transaction(async transaction => {
+    await transaction.execute(
+      sql`SELECT ${projectVersions.id} FROM ${projectVersions} WHERE ${projectVersions.id} = ${version.id} FOR UPDATE`
+    );
+    const lockedVersions = await transaction
+      .select()
+      .from(projectVersions)
+      .where(eq(projectVersions.id, version.id))
+      .limit(1);
+    const lockedVersion = lockedVersions[0];
+    if (!lockedVersion || lockedVersion.isImmutable || lockedVersion.state !== "draft") {
+      throw new Error("A Página 1 só aceita edição na versão de trabalho.");
+    }
+
+    const beforeInputsRows = await transaction
+      .select()
+      .from(inputValues)
+      .where(eq(inputValues.versionId, version.id));
+    const beforeInputsByKey = new Map(beforeInputsRows.map(row => [row.key, row]));
+    const nextInputs = Object.fromEntries(
+      FINANCIAL_INPUT_KEYS.map(key => {
+        const row = beforeInputsByKey.get(key);
+        return [key, row
+          ? {
+              status: row.status,
+              value: row.valueText ?? undefined,
+              sourceType: row.sourceType,
+              sourceRef: row.sourceRef ?? undefined,
+            }
+          : { status: "pending" as const, sourceType: "current_decision" as const }];
+      })
+    ) as FinancialInputSnapshot;
+    const changedInputKeys: FinancialInputKey[] = [];
+    for (const mapping of mappings) {
+      const nextValue = {
+        status: "provided" as const,
+        value: mapping.value,
+        sourceType: "current_decision" as const,
+        sourceRef: `montagem: ${sourceRef}`,
+      };
+      if (stableSerialize(nextInputs[mapping.inputKey]) !== stableSerialize(nextValue)) {
+        changedInputKeys.push(mapping.inputKey);
+      }
+      nextInputs[mapping.inputKey] = nextValue;
+    }
+    for (const key of FINANCIAL_INPUT_KEYS) {
+      const input = nextInputs[key];
+      await transaction
+        .insert(inputValues)
+        .values({
+          id: beforeInputsByKey.get(key)?.id ?? nanoid(),
+          versionId: version.id,
+          key,
+          status: input.status,
+          valueText: input.value ?? null,
+          sourceType: input.sourceType,
+          sourceRef: input.sourceRef ?? null,
+          updatedBy: params.actorId,
+        })
+        .onDuplicateKeyUpdate({
+          set: {
+            status: input.status,
+            valueText: input.value ?? null,
+            sourceType: input.sourceType,
+            sourceRef: input.sourceRef ?? null,
+            updatedBy: params.actorId,
+          },
+        });
+    }
+
+    const beforeComponents = await transaction
+      .select()
+      .from(projectComponentRecords)
+      .where(
+        and(
+          eq(projectComponentRecords.versionId, version.id),
+          eq(projectComponentRecords.componentType, "project_assembly")
+        )
+      )
+      .limit(1);
+    const assemblyRecord = {
+      id: beforeComponents[0]?.id ?? nanoid(),
+      versionId: version.id,
+      componentType: "project_assembly" as const,
+      name: params.name.trim(),
+      status: authoritative.completion.status,
+      payload: {
+        ...Object.fromEntries(
+          Object.entries(params.payload).map(([key, value]) => [
+            key,
+            value.trim() || "PENDENTE",
+          ])
+        ),
+        derivedEconomics: null,
+      },
+      sourceType: "current_decision" as const,
+      sourceRef: sourceRef || null,
+      updatedBy: params.actorId,
+    };
+    await transaction
+      .insert(projectComponentRecords)
+      .values(assemblyRecord)
+      .onDuplicateKeyUpdate({
+        set: {
+          name: assemblyRecord.name,
+          status: assemblyRecord.status,
+          payload: assemblyRecord.payload,
+          sourceType: assemblyRecord.sourceType,
+          sourceRef: assemblyRecord.sourceRef,
+          updatedBy: assemblyRecord.updatedBy,
+        },
+      });
+
+    const beforeSkus = await transaction
+      .select()
+      .from(productSkus)
+      .where(eq(productSkus.versionId, version.id));
+    const beforeConditions = await transaction
+      .select()
+      .from(commercialConditions)
+      .where(eq(commercialConditions.versionId, version.id));
+    let commercialModelUpdated = false;
+    if (incomingSku && incomingCondition) {
+      commercialModelUpdated = true;
+      const beforeSku = beforeSkus.find(row => row.skuCode === COTIA_SKU_CODE);
+      const skuId = beforeSku?.id ?? nanoid();
+      const skuRecord = {
+        id: skuId,
+        versionId: version.id,
+        skuCode: incomingSku.id,
+        name: incomingSku.name,
+        unitType: incomingSku.unitType,
+        unitQuantity: incomingSku.unitQuantity,
+        sharesPerUnit: incomingSku.sharesPerUnit,
+        grossSoldShares: incomingSku.grossSoldShares,
+        returnedShares: incomingSku.returnedShares,
+        blockedShares: incomingSku.blockedShares,
+        status: incomingSku.status,
+        sourceType: incomingSku.sourceType,
+        sourceRef: incomingSku.sourceRef ?? null,
+        updatedBy: params.actorId,
+      };
+      await transaction
+        .insert(productSkus)
+        .values(skuRecord)
+        .onDuplicateKeyUpdate({
+          set: {
+            name: skuRecord.name,
+            unitType: skuRecord.unitType,
+            unitQuantity: skuRecord.unitQuantity,
+            sharesPerUnit: skuRecord.sharesPerUnit,
+            grossSoldShares: skuRecord.grossSoldShares,
+            returnedShares: skuRecord.returnedShares,
+            blockedShares: skuRecord.blockedShares,
+            status: skuRecord.status,
+            sourceType: skuRecord.sourceType,
+            sourceRef: skuRecord.sourceRef,
+            updatedBy: skuRecord.updatedBy,
+          },
+        });
+      const beforePhases = beforeSku
+        ? await transaction
+            .select()
+            .from(productPricePhases)
+            .where(eq(productPricePhases.productSkuId, beforeSku.id))
+        : [];
+      const incomingBasePhase = incomingSku.pricePhases.find(phase => phase.startsAtMonth === 0)!;
+      const beforeBasePhase = beforePhases.find(phase => phase.startsAtMonth === 0);
+      const basePhaseRecord = {
+        id: beforeBasePhase?.id ?? nanoid(),
+        productSkuId: skuId,
+        phaseCode: beforeBasePhase?.phaseCode ?? incomingBasePhase.id,
+        name: beforeBasePhase?.name ?? incomingBasePhase.id,
+        startsAtMonth: 0,
+        priceText: incomingBasePhase.price,
+        promotionalPriceText: null,
+      };
+      await transaction
+        .insert(productPricePhases)
+        .values(basePhaseRecord)
+        .onDuplicateKeyUpdate({
+          set: {
+            priceText: basePhaseRecord.priceText,
+            promotionalPriceText: null,
+          },
+        });
+
+      const condition = incomingCondition.condition;
+      const beforeCondition = beforeConditions.find(
+        row => row.conditionCode === COTIA_CONDITION_CODE
+      );
+      const conditionRecord = {
+        id: beforeCondition?.id ?? nanoid(),
+        versionId: version.id,
+        productSkuId: skuId,
+        conditionCode: condition.id,
+        name: condition.name,
+        listPriceText: condition.listPrice,
+        discountText: condition.discount,
+        entryTotalText: condition.entry.total,
+        entryInstallments: condition.entry.installments,
+        entryFirstDueMonth: condition.entry.firstDueMonth,
+        balancePrincipalText: condition.balance.principal,
+        balanceInstallments: condition.balance.installments,
+        graceMonths: condition.balance.graceMonths,
+        balanceFirstDueMonth: condition.balance.firstDueMonth,
+        explicitChargesText: condition.explicitCharges,
+        explicitChargesDueMonth: null,
+        correctionRateText: condition.correctionRate ?? null,
+        interestRateText: condition.interestRate ?? null,
+        materialityToleranceText: condition.materialityTolerance,
+        campaign: null,
+        status: incomingCondition.status,
+        sourceType: incomingCondition.sourceType,
+        sourceRef: incomingCondition.sourceRef ?? null,
+        updatedBy: params.actorId,
+      };
+      await transaction
+        .insert(commercialConditions)
+        .values(conditionRecord)
+        .onDuplicateKeyUpdate({
+          set: {
+            productSkuId: conditionRecord.productSkuId,
+            name: conditionRecord.name,
+            listPriceText: conditionRecord.listPriceText,
+            discountText: conditionRecord.discountText,
+            entryTotalText: conditionRecord.entryTotalText,
+            entryInstallments: conditionRecord.entryInstallments,
+            entryFirstDueMonth: conditionRecord.entryFirstDueMonth,
+            balancePrincipalText: conditionRecord.balancePrincipalText,
+            balanceInstallments: conditionRecord.balanceInstallments,
+            graceMonths: conditionRecord.graceMonths,
+            balanceFirstDueMonth: conditionRecord.balanceFirstDueMonth,
+            explicitChargesText: conditionRecord.explicitChargesText,
+            explicitChargesDueMonth: conditionRecord.explicitChargesDueMonth,
+            correctionRateText: conditionRecord.correctionRateText,
+            interestRateText: conditionRecord.interestRateText,
+            materialityToleranceText: conditionRecord.materialityToleranceText,
+            campaign: conditionRecord.campaign,
+            status: conditionRecord.status,
+            sourceType: conditionRecord.sourceType,
+            sourceRef: conditionRecord.sourceRef,
+            updatedBy: conditionRecord.updatedBy,
+          },
+        });
+    }
+
+    const beforePolicies = await transaction
+      .select()
+      .from(receivablesPolicies)
+      .where(eq(receivablesPolicies.versionId, version.id))
+      .limit(1);
+    const policyPayload = authoritative.receivablesPolicy;
+    if (policyPayload) {
+      const policy = policyPayload.policy;
+      const policyRecord = {
+        id: beforePolicies[0]?.id ?? nanoid(),
+        versionId: version.id,
+        cancellationD7Text: policy.cancellationCurve.d7,
+        cancellationD30Text: policy.cancellationCurve.d30,
+        cancellationD60Text: policy.cancellationCurve.d60,
+        cancellationD90Text: policy.cancellationCurve.d90,
+        cancellationD180Text: policy.cancellationCurve.d180,
+        cancellationLifetimeText: policy.cancellationCurve.lifetime,
+        delinquencyRateText: policy.delinquencyRate,
+        cureDays1To30Text: policy.cureRates.days1To30,
+        cureDays31To60Text: policy.cureRates.days31To60,
+        cureDays61To90Text: policy.cureRates.days61To90,
+        cureDays90PlusText: policy.cureRates.days90Plus,
+        writeOffAfterDays: policy.writeOffAfterDays,
+        policyVersion: policy.policyVersion,
+        status: policyPayload.status,
+        sourceType: policyPayload.sourceType,
+        sourceRef: sourceRef,
+        updatedBy: params.actorId,
+      };
+      await transaction
+        .insert(receivablesPolicies)
+        .values(policyRecord)
+        .onDuplicateKeyUpdate({
+          set: {
+            cancellationD7Text: policyRecord.cancellationD7Text,
+            cancellationD30Text: policyRecord.cancellationD30Text,
+            cancellationD60Text: policyRecord.cancellationD60Text,
+            cancellationD90Text: policyRecord.cancellationD90Text,
+            cancellationD180Text: policyRecord.cancellationD180Text,
+            cancellationLifetimeText: policyRecord.cancellationLifetimeText,
+            delinquencyRateText: policyRecord.delinquencyRateText,
+            cureDays1To30Text: policyRecord.cureDays1To30Text,
+            cureDays31To60Text: policyRecord.cureDays31To60Text,
+            cureDays61To90Text: policyRecord.cureDays61To90Text,
+            cureDays90PlusText: policyRecord.cureDays90PlusText,
+            writeOffAfterDays: policyRecord.writeOffAfterDays,
+            policyVersion: policyRecord.policyVersion,
+            status: policyRecord.status,
+            sourceType: policyRecord.sourceType,
+            sourceRef: policyRecord.sourceRef,
+            updatedBy: policyRecord.updatedBy,
+          },
+        });
+    }
+
+    const inputHash = sha256(nextInputs);
+    const versionUpdate = await transaction
+      .update(projectVersions)
+      .set({
+        inputHash,
+        financialRevision: sql`${projectVersions.financialRevision} + 1`,
+      })
+      .where(
+        and(
+          eq(projectVersions.id, version.id),
+          eq(projectVersions.state, "draft"),
+          eq(projectVersions.isImmutable, false)
+        )
+      );
+    if (versionUpdate[0].affectedRows !== 1) {
+      throw new Error("A versão mudou durante a reconciliação da Página 1.");
+    }
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "project_version",
+      entityId: version.id,
+      action: "cotia_assembly.registered",
+      actorId: params.actorId,
+      beforeHash: sha256({
+        inputHash: lockedVersion.inputHash,
+        assembly: beforeComponents[0] ?? null,
+        sku: beforeSkus.find(row => row.skuCode === COTIA_SKU_CODE) ?? null,
+        condition: beforeConditions.find(row => row.conditionCode === COTIA_CONDITION_CODE) ?? null,
+        policy: beforePolicies[0] ?? null,
+      }),
+      afterHash: sha256({
+        inputHash,
+        assembly: assemblyRecord,
+        commercialModel: authoritative.commercialModel ?? null,
+        policy: policyPayload ?? null,
+      }),
+      metadata: {
+        versionId: version.id,
+        status: authoritative.completion.status,
+        changedInputKeys,
+        commercialModelUpdated,
+        policyUpdated: Boolean(policyPayload),
+      },
+    });
+    return {
+      versionId: version.id,
+      status: authoritative.completion.status,
+      inputHash,
+      changedInputKeys,
+      commercialModelUpdated,
+      policyUpdated: Boolean(policyPayload),
+    };
+  });
+}
 
 export type CapturePointDefinition = Omit<
   PointEconomicsInput,

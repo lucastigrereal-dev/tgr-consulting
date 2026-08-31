@@ -134,6 +134,37 @@ describe("adaptador autoritativo da Pagina 1 Cotia", () => {
     });
   });
 
+  it("interpreta todos os campos visuais de percentual como pontos percentuais", () => {
+    const result = buildCotiaAuthoritativePayload({
+      ...completeAssembly,
+      taxaCorrecao: "1",
+      taxaJuros: "0,5",
+      politicaCarteiraVersao: "natal-v-percent",
+      cancelamentoD7: "0,5",
+      cancelamentoD30: "1",
+      cancelamentoD60: "2",
+      cancelamentoD90: "3",
+      cancelamentoD180: "4",
+      cancelamentoLifetime: "20",
+      inadimplencia: "25",
+      curaD1a30: "40",
+      curaD31a60: "30",
+      curaD61a90: "20",
+      curaD90Mais: "10",
+      writeOffAposDias: "180",
+    }, "Ata de percentuais");
+
+    expect(result.commercialModel?.conditions[0]?.condition).toMatchObject({
+      correctionRate: "0.01",
+      interestRate: "0.005",
+    });
+    expect(result.receivablesPolicy?.policy).toMatchObject({
+      cancellationCurve: { d7: "0.005", d30: "0.01", lifetime: "0.2" },
+      delinquencyRate: "0.25",
+      cureRates: { days1To30: "0.4" },
+    });
+  });
+
   it("mantem a montagem pendente enquanto qualquer campo obrigatorio estiver vazio", () => {
     const incomplete = { ...completeAssembly, valorEntrada: "" };
     expect(evaluateCotiaAssemblyCompleteness(incomplete)).toMatchObject({

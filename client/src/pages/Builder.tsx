@@ -16,11 +16,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import {
-  buildCotiaAuthoritativePayload,
   evaluateCotiaAssemblyCompleteness,
   hydrateCotiaAssemblyDraft,
 } from "@shared/financial/cotiaAuthoritativeAdapter";
-import { buildCotiaFinancialMappings } from "@shared/financial/cotiaFinancialAdapter";
 import { getStudyImpacts } from "@shared/financial/impactMap";
 import {
   FINANCIAL_INPUT_KEYS,
@@ -435,32 +433,24 @@ export default function Builder() {
   const createProject = trpc.igr.createProject.useMutation({
     onSuccess: async (result, variables) => {
       await utils.igr.projects.invalidate();
+      const pendingAssembly = pendingAssemblyRef.current;
+      if (pendingAssembly) {
+        assemblyHydrationRef.current = {
+          versionId: result.versionId,
+          dirty: true,
+          recordSignature: "",
+        };
+      }
       setActiveProjectId(result.projectId);
       setInputs(variables.inputs as FinancialInputSnapshot);
       setPersistedSignature(signature(variables.inputs as FinancialInputSnapshot));
-      const pendingAssembly = pendingAssemblyRef.current;
       if (pendingAssembly) {
-        upsertComponent.mutate({
+        await registerCotiaAssembly.mutateAsync({
           versionId: result.versionId,
-          componentType: "project_assembly",
-          ...pendingAssembly,
-          sourceType: "current_decision",
+          name: pendingAssembly.name,
+          payload: pendingAssembly.payload,
+          sourceRef: pendingAssembly.sourceRef,
         });
-        const authoritative = buildCotiaAuthoritativePayload(
-          pendingAssembly.payload,
-          pendingAssembly.sourceRef ?? ""
-        );
-        if (authoritative.commercialModel)
-          saveCommercialModel.mutate({
-            versionId: result.versionId,
-            ...authoritative.commercialModel,
-          });
-        if (authoritative.receivablesPolicy)
-          upsertReceivablesPolicy.mutate({
-            versionId: result.versionId,
-            ...authoritative.receivablesPolicy,
-          });
-        pendingAssemblyRef.current = null;
       }
       toast.success("Projeto criado com trilha de auditoria.", {
         description: `Versão ${result.versionId} aberta em rascunho.`,
@@ -468,20 +458,6 @@ export default function Builder() {
     },
     onError: error =>
       toast.error("Não foi possível criar o projeto.", {
-        description: error.message,
-      }),
-  });
-  const updateInputs = trpc.igr.updateInputs.useMutation({
-    onSuccess: async (_, variables) => {
-      setInputs(variables.inputs as FinancialInputSnapshot);
-      setPersistedSignature(signature(variables.inputs as FinancialInputSnapshot));
-      await contextQuery.refetch();
-      toast.success("Premissas salvas.", {
-        description: "Hash de input e audit trail foram renovados.",
-      });
-    },
-    onError: error =>
-      toast.error("Não foi possível alterar esta versão.", {
         description: error.message,
       }),
   });
@@ -497,22 +473,28 @@ export default function Builder() {
         description: error.message,
       }),
   });
-  const saveCommercialModel = trpc.igr.saveCommercialModel.useMutation({
+  const registerCotiaAssembly = trpc.igr.registerCotiaAssembly.useMutation({
     onSuccess: async () => {
-      await utils.igr.productCatalog.invalidate();
-      await utils.igr.commercialConditions.invalidate();
+      pendingAssemblyRef.current = null;
+      assemblyHydrationRef.current = {
+        ...assemblyHydrationRef.current,
+        dirty: false,
+        recordSignature: "",
+      };
+      await Promise.all([
+        utils.igr.versionInputs.invalidate(),
+        utils.igr.builderComponents.invalidate(),
+        utils.igr.productCatalog.invalidate(),
+        utils.igr.commercialConditions.invalidate(),
+        utils.igr.receivablesPolicy.invalidate(),
+      ]);
+      await contextQuery.refetch();
+      toast.success("Página 1 reconciliada.", {
+        description: "Premissas, produto, condição e carteira foram gravados atomicamente.",
+      });
     },
     onError: error =>
-      toast.error("Não foi possível registrar produto e condição.", {
-        description: error.message,
-      }),
-  });
-  const upsertReceivablesPolicy = trpc.igr.upsertReceivablesPolicy.useMutation({
-    onSuccess: async () => {
-      await utils.igr.receivablesPolicy.invalidate();
-    },
-    onError: error =>
-      toast.error("Não foi possível registrar política de carteira.", {
+      toast.error("Página 1 Cotia não pôde ser reconciliada.", {
         description: error.message,
       }),
   });
@@ -568,39 +550,14 @@ export default function Builder() {
   };
   const registerAssembly = () => {
     const draft = getDraft(assemblyDomain);
-    const filledMappings = buildCotiaFinancialMappings(draft.values);
-    const sourcedMappings = draft.sourceRef.trim().length >= 2 ? filledMappings : [];
-    let authoritative: ReturnType<typeof buildCotiaAuthoritativePayload>;
-    try {
-      authoritative = buildCotiaAuthoritativePayload(
-        draft.values,
-        draft.sourceRef.trim()
-      );
-    } catch (error) {
-      return toast.error("Página 1 Cotia não pôde ser reconciliada.", {
-        description: error instanceof Error ? error.message : "Revise as premissas estruturadas.",
-      });
-    }
-    const assemblyStatus = authoritative.completion.status;
+    const completion = evaluateCotiaAssemblyCompleteness(draft.values);
+    const assemblyStatus = completion.status;
     if (assemblyStatus === "provided" && draft.sourceRef.trim().length < 2)
       return toast.error("Alavanca financeira informada exige fonte, ata ou responsável.");
-    const nextInputs = { ...inputs };
-    for (const mapping of sourcedMappings) {
-      nextInputs[mapping.inputKey] = {
-        status: "provided",
-        value: mapping.value,
-        sourceType: "current_decision",
-        sourceRef: `montagem: ${draft.sourceRef.trim()}`,
-      };
-    }
-    if (activeVersionId && sourcedMappings.length) {
-      setInputs(nextInputs);
-      updateInputs.mutate({ versionId: activeVersionId, inputs: nextInputs });
-    }
     const payload = Object.fromEntries(
       Object.entries(draft.values).map(([key, value]) => [
         key,
-        value.trim() || "PENDENTE",
+        value,
       ])
     );
     const assemblyRecord: PendingAssembly = {
@@ -610,29 +567,19 @@ export default function Builder() {
       sourceRef: draft.sourceRef.trim() || undefined,
     };
     if (activeVersionId) {
-      upsertComponent.mutate({
+      registerCotiaAssembly.mutate({
         versionId: activeVersionId,
-        componentType: assemblyDomain.type,
-        ...assemblyRecord,
-        sourceType: "current_decision",
+        name: assemblyRecord.name,
+        payload: assemblyRecord.payload,
+        sourceRef: assemblyRecord.sourceRef,
       });
-      if (authoritative.commercialModel)
-        saveCommercialModel.mutate({
-          versionId: activeVersionId,
-          ...authoritative.commercialModel,
-        });
-      if (authoritative.receivablesPolicy)
-        upsertReceivablesPolicy.mutate({
-          versionId: activeVersionId,
-          ...authoritative.receivablesPolicy,
-        });
       return;
     }
     const assemblyProjectName = draft.values.nomeProjeto?.trim() || projectName.trim();
     if (assemblyProjectName.length < 3)
       return toast.error("Dê um nome ao estudo antes de registrar a Montagem.");
     pendingAssemblyRef.current = assemblyRecord;
-    createProject.mutate({ name: assemblyProjectName, inputs: nextInputs });
+    createProject.mutate({ name: assemblyProjectName, inputs: createPendingInputs() });
   };
   const assemblyDraft = getDraft(assemblyDomain);
   const assemblyCompletion = evaluateCotiaAssemblyCompleteness(assemblyDraft.values);
@@ -675,8 +622,8 @@ export default function Builder() {
         values={assemblyDraft.values}
         sourceRef={assemblyDraft.sourceRef}
         status={assemblyDisplayStatus}
-        disabled={upsertComponent.isPending || saveCommercialModel.isPending || upsertReceivablesPolicy.isPending}
-        saving={upsertComponent.isPending || saveCommercialModel.isPending || upsertReceivablesPolicy.isPending || createProject.isPending}
+        disabled={registerCotiaAssembly.isPending}
+        saving={registerCotiaAssembly.isPending || createProject.isPending}
         onChange={(key, value) => {
           assemblyHydrationRef.current = {
             ...assemblyHydrationRef.current,
