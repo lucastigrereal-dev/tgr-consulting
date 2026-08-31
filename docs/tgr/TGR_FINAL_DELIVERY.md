@@ -6,39 +6,43 @@
 
 **Branch:** `codex/tgr-master-brd-v1`
 
-**Certified source head before receipt:** `89ad2e4f43fd3a61c462e75e3f51f11958448fd4`
+**Certified source head before receipt:** `891a8411a187b74d2aa09d5be3a1895df3b4f0a3`
 
-**Environment:** Windows local; MySQL e sessão de browser efêmeros; nenhuma credencial de produção usada
+**Environment:** Windows local; MySQL, storage e sessão de browser efêmeros; nenhuma credencial de produção usada
 
 ## Resultado entregue
 
-O TGR Consulting agora transforma o estudo em um fluxo rastreável: Builder → snapshot determinístico → cenários/Goal Seek → approval/baseline → Boardroom → PDF/PPTX/XLSX. Produto, comercial, pontos, sala, workforce, treinamento, comissão, pagamentos, coortes, carteira e capital usam o mesmo motor decimal e o formula set `1.7.0`.
+O TGR Consulting transforma o estudo em um fluxo rastreável: Builder → snapshot determinístico → Scenario Lab/Goal Seek → approval/baseline → Boardroom → PDF/PPTX/XLSX. Produto, condição comercial, captação, operações, workforce, treinamento, comissão, pagamentos, coortes, carteira e capital convergem no mesmo motor decimal e no formula set `1.7.0`.
+
+Goal Seek V1 é recalculado no servidor, aplicado somente a branch de cenário e protegido por `inputHash` + `financialRevision` monotônica. Comparações e exports de cenário carregam horizonte, `asOfMonth`, `selectionHash` e `exportPackHash`; snapshots incompatíveis são excluídos com estado explícito.
 
 ## Gates provados
 
 | Gate | Resultado |
 | --- | --- |
-| TypeScript | PASS — `pnpm run check` |
-| Build | PASS — Vite + bundle Node |
-| Integração MySQL | PASS — migrations `0000`–`0013`, tenant, transações, Goal Seek e lifecycle concorrente |
-| Restore drill | PASS — ambiente isolado, dump + SHA-256 + restore + canary + limpeza |
-| UI autenticada | PASS — 7 rotas e 11 capítulos em 4 viewports, teclado e overflow |
-| Boardroom visual | PASS local — capturas 1920×1080 e zoom 200% inspecionadas |
-| PDF/PPTX/XLSX | PASS — artefatos derivados do snapshot aprovado |
-| Segurança local | PASS — startup fail-closed, cookies, redaction, body limit, rate limit e storage tenant-bound |
+| TypeScript/build | PASS — `pnpm run check` e `pnpm run build` |
+| Suíte completa | PASS — 48 arquivos, 193 testes |
+| Integração MySQL | PASS — migrations `0000`–`0015`, tenancy, transações, corrida de Goal Seek e lifecycle |
+| Migração legada | PASS — deduplicação, `asOfMonth`, ordinal cronológica e revisão financeira |
+| Restore drill | PASS — dump + SHA-256 + restore + canary + limpeza |
+| E2E master | PASS — híbrido autenticado, 30/30 adversariais, 4 viewports × 16 capítulos |
+| PDF/PPTX/XLSX | PASS — bytes válidos derivados do snapshot aprovado |
+| Segurança/dependências | PASS local — headers, redaction, request ID, limites, startup fail-closed e audit sem vulnerabilidades conhecidas |
+| Revisão P0/P1 | PASS — nenhum bloqueador no diff certificado |
 | OAuth/storage/deploy reais | GATE EXTERNO — credenciais e ambiente não foram fornecidos |
-
-As contagens, comandos, SHA certificado e hash do restore drill estão versionados em `TGR_VERIFICATION_RECEIPT.md`.
 
 ## Decisão de release
 
-O branch está elegível para revisão e deploy em ambiente autorizado. Não é correto chamá-lo de produção concluída antes dos gates externos de OAuth, storage, deploy/observabilidade e backup gerenciado. As limitações que dependem de política financeira permanecem explicitamente `PENDING` em `TGR_KNOWN_ISSUES.md`, sem números inventados.
+O branch está elegível para revisão humana, merge e deploy em ambiente autorizado. Merge não foi executado. Não é correto chamá-lo de produção concluída antes dos gates externos de identidade, storage, secrets, observabilidade, rede e backup gerenciado.
 
 ## Documentação
 
-- `TGR_CANONICAL_DOCS.md`: índice e autoridade;
+- `TGR_PRODUCT_BRD.md`: escopo funcional reconciliado;
+- `TGR_ARCHITECTURE.md`: fronteiras e fluxo autoritativo;
+- `TGR_FORMULA_REGISTRY.md`: contratos financeiros e Goal Seek;
+- `TGR_DATA_MODEL.md`: persistência e invariantes;
+- `TGR_SECURITY.md`: controles e gates externos;
+- `TGR_RUNBOOK.md`: execução operacional;
 - `TGR_E2E_MATRIX.md`: jornadas e evidências;
-- `TGR_SECURITY_CHECKLIST.md`: controles e gates;
-- `TGR_OPERATIONAL_RUNBOOK.md`: certificação, smoke, restore e produção;
 - `TGR_VERIFICATION_RECEIPT.md`: comandos e resultados no SHA certificado;
-- `TGR_KNOWN_ISSUES.md`: riscos externos e contratos pendentes.
+- `TGR_KNOWN_ISSUES.md`: riscos e contratos ainda pendentes.

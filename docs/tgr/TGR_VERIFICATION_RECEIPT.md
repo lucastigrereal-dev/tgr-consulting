@@ -3,48 +3,51 @@
 ## Identidade
 
 - Data local: 2026-08-30
+- Repositório: `lucastigrereal-dev/tgr-consulting`
 - Branch: `codex/tgr-master-brd-v1`
-- Source head certificado: `89ad2e4f43fd3a61c462e75e3f51f11958448fd4`
+- Source head certificado: `891a8411a187b74d2aa09d5be3a1895df3b4f0a3`
 - Ambiente: Windows local, MySQL 8.4 efêmero e Microsoft Edge headless
 - Credenciais de produção: não usadas
 
-Este arquivo é o commit de receipt posterior ao source head acima; o SHA final do branch fica registrado no PR.
+Este receipt é posterior ao source head certificado. O SHA do commit documental e o estado remoto ficam registrados no PR.
 
 ## Gates executados
 
 | Comando/prova | Resultado |
 | --- | --- |
 | `pnpm run check` | PASS — TypeScript sem emissão |
-| `pnpm run build` | PASS — 1.798 módulos Vite + bundle Node |
-| `pnpm run test:integration:db` | PASS — 3 arquivos, 11 testes, migrations `0000`–`0013` |
-| `pnpm test` com MySQL efêmero ativo | PASS — 45 arquivos, 160 testes |
-| `pnpm run test:smoke:auth` | PASS — 7 rotas + 11 capítulos em 4 viewports |
-| `pnpm run test:backup-restore` | PASS — dump, hash, recreate, restore, canary e limpeza |
-| `pnpm audit --prod` | PASS — zero vulnerabilidades conhecidas |
+| `pnpm run build` | PASS — Vite 7.3.5, 1.877 módulos + bundle Node |
+| `pnpm run test:migration:legacy` | PASS — deduplicação 0011, backfill cronológico/as-of 0014 e revisão financeira 0015 |
+| `pnpm run test:integration:db` | PASS — 3 arquivos, 14 testes, migrations `0000`–`0015` |
+| `pnpm test` com MySQL efêmero ativo | PASS — 48 arquivos, 193 testes |
+| `pnpm run test:e2e:master` | PASS — jornada híbrida autenticada, 30/30 casos adversariais, 4 viewports × 16 capítulos |
+| `pnpm run test:backup-restore` | PASS — dump, hash, restore, canary e limpeza |
+| `pnpm audit --audit-level=low` | PASS — nenhuma vulnerabilidade conhecida |
+| busca de instrumentação em `dist` | PASS — plugins de desenvolvimento ausentes do bundle de produção |
 | `git diff --check` | PASS |
+| revisão final P0/P1 | PASS — nenhum bloqueador restante no diff certificado |
 
-Os arquivos de teste são executados sem paralelismo entre files porque as integrações compartilham deliberadamente um único schema efêmero. O bootstrap do formula set também usa upsert transacional para tolerar criação concorrente em runtime.
+## Identidade E2E e exports
+
+- snapshot oficial: `8d99b6ec20ea4229d0c2a849c6075d2102b114e8cfc62676dc99600a9242d874`;
+- snapshot comparável do cenário: `6e804ccdc060ccca8510d7121818c4388587c4b00a299425eac0da7b28126850`;
+- snapshot deliberadamente incompatível e excluído: `9d444544f8612a0b448ead9785a92fe967e1fade3a601983db7850f91d7ad1c7`;
+- export pack: `99b3dc842a6db5a8edd40b3238c897af1f92fa94e4ab5470a0d78f60058ae9e9`;
+- PDF: 8.097 bytes; PPTX: 17.691 bytes; XLSX: 19.941 bytes;
+- Boardroom responsivo: 4 viewports, 16 capítulos por viewport.
+
+O E2E é explicitamente híbrido: browser real cobre sessão, navegação, Boardroom, logout/reentrada e reload; tRPC autenticado prepara domínios cuja edição click-only completa ainda não existe. Não há alegação de jornada integral apenas por cliques.
 
 ## Restore drill
 
-- Banco validado: `tgr_consulting_test`
-- Tamanho do dump: 31.181 bytes
-- SHA-256: `02e94643b158caf003189503989df5a4166f8ba8fe46420765b6a2d5877bccc8`
-- Canary: validado
-- Container e network: removidos ao final
+- banco validado: `tgr_consulting_test`;
+- tamanho do dump: 31.581 bytes;
+- SHA-256: `951f033a130b260e5aac96afe15c968bd7a85650dfe5139d5ad09bcbb790e7b3`;
+- canary: validado;
+- container e network: removidos ao final.
 
-O hash muda quando timestamps ou dados efêmeros mudam; sua função aqui é provar integridade entre dump e restore da execução registrada.
-
-## Smoke autenticado
-
-- desktop: 1280×720;
-- apresentação: 1920×1080;
-- zoom 200% equivalente: 960×540;
-- mobile: 375×812;
-- verificações: sessão aceita, conteúdo principal não vazio, ausência de overflow global, foco por teclado, navegação dos 11 capítulos e zero `console.error`.
-
-Foram geradas e inspecionadas capturas locais do Boardroom em desktop, apresentação e zoom 200%. A sessão, o usuário, o banco e as capturas eram efêmeros e não contêm credenciais de produção.
+O hash muda com os dados efêmeros; ele prova integridade entre dump e restore desta execução.
 
 ## Limite da certificação
 
-Esta é uma certificação local do código. OAuth real, object storage real, deploy/observabilidade e restore segundo RPO/RTO do banco gerenciado continuam gates externos documentados em `TGR_SECURITY_CHECKLIST.md` e `TGR_KNOWN_ISSUES.md`.
+Este é um release candidate local do código, não uma declaração de produção ativa. OAuth real, object storage real, deploy/observabilidade, secret manager, rate limit distribuído e restore segundo RPO/RTO do banco gerenciado continuam gates externos. Merge não foi executado.
