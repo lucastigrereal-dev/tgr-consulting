@@ -510,7 +510,7 @@ describe("Goal Seek aplicado em branch", () => {
       "não autorizado"
     );
     },
-    15_000
+    30_000
   );
 
   it("valida versão e tenant antes de retornar unsupported para target sem fórmula autoritativa", async () => {

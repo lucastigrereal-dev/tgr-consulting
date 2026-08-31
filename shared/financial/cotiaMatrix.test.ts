@@ -5,6 +5,9 @@ describe("calculateCotiaMatrix", () => {
   it("normaliza os formatos brasileiros usados nas linhas da matriz", () => {
     expect(parseBrazilianDecimal("1.234,56")).toBe(1234.56);
     expect(parseBrazilianDecimal("1,5")).toBe(1.5);
+    expect(parseBrazilianDecimal("0.01")).toBe(0.01);
+    expect(parseBrazilianDecimal("28000.00")).toBe(28000);
+    expect(parseBrazilianDecimal("1.234")).toBe(1234);
     expect(parseBrazilianDecimal(undefined)).toBe(0);
   });
 
@@ -40,6 +43,37 @@ describe("calculateCotiaMatrix", () => {
     expect(result.commissionPerShare).toBe(600);
     expect(result.opexMonthly).toBe(60_000);
     expect(result.paymentMix).toBe(100);
+  });
+
+  it("separa estoque fisico, bloqueado e vendavel sem permitir estoque negativo", () => {
+    const result = calculateCotiaMatrix({
+      valorCota: "28.000,00",
+      cotasPorApartamento: "52",
+      totalApartamentos: "60",
+      cotasBloqueadas: "120",
+      cotasVendidasMes: "100",
+    });
+
+    expect(result.physicalShares).toBe(3120);
+    expect(result.blockedShares).toBe(120);
+    expect(result.totalShares).toBe(3000);
+    expect(result.grossValue).toBe(84_000_000);
+    expect(result.monthsOfOperation).toBe(30);
+    expect(result.inventoryViolation).toBeNull();
+
+    const invalid = calculateCotiaMatrix({
+      cotasPorApartamento: "52", totalApartamentos: "1", cotasBloqueadas: "53",
+    });
+    expect(invalid.totalShares).toBe(0);
+    expect(invalid.inventoryViolation).toContain("exceder o estoque fisico");
+
+    const existing = calculateCotiaMatrix({
+      cotasPorApartamento: "52", totalApartamentos: "60", cotasBloqueadas: "20",
+      cotasVendidasAcumuladas: "100", cotasRetornadas: "10", cotasVendidasMes: "100",
+    });
+    expect(existing.activeSoldShares).toBe(90);
+    expect(existing.availableInventory).toBe(3010);
+    expect(existing.monthsOfOperation).toBeCloseTo(30.1);
   });
 
   it("calcula a capacidade e o investimento de captação em separado da folha da sala", () => {

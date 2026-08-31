@@ -7,9 +7,37 @@ import {
   SALES_ROOM_INVESTMENTS,
 } from "./cotiaInvestmentCatalog";
 
+export function normalizeBrazilianDecimal(value: string | undefined) {
+  const cleaned = (value ?? "")
+    .trim()
+    .replace(/^R\$\s?/, "")
+    .replace(/%$/, "")
+    .replace(/\s/g, "");
+  if (!cleaned) return null;
+  const comma = cleaned.lastIndexOf(",");
+  const dot = cleaned.lastIndexOf(".");
+  let normalized = cleaned;
+  if (comma >= 0 && dot >= 0) {
+    const decimalSeparator = comma > dot ? "," : ".";
+    const thousandsSeparator = decimalSeparator === "," ? "." : ",";
+    normalized = cleaned
+      .replace(new RegExp(`\\${thousandsSeparator}`, "g"), "")
+      .replace(decimalSeparator, ".");
+  } else if (comma >= 0) {
+    normalized = cleaned.replace(/\./g, "").replace(",", ".");
+  } else if (dot >= 0) {
+    const parts = cleaned.split(".");
+    const looksLikeBrazilianThousands =
+      parts.length > 2 ||
+      (parts.length === 2 && parts[0] !== "0" && parts[1]?.length === 3 && parts[0]!.length <= 3);
+    if (looksLikeBrazilianThousands) normalized = parts.join("");
+  }
+  return /^-?\d+(?:\.\d+)?$/.test(normalized) ? normalized : null;
+}
+
 export function parseBrazilianDecimal(value: string | undefined) {
-  const normalized = (value ?? "").replace(/\./g, "").replace(",", ".");
-  const parsed = Number(normalized);
+  const normalized = normalizeBrazilianDecimal(value);
+  const parsed = normalized === null ? Number.NaN : Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -50,7 +78,24 @@ export function calculateCotiaMatrix(values: CotiaMatrixValues) {
     "boleto",
   ];
 
-  const totalShares = n("cotasPorApartamento") * n("totalApartamentos");
+  const physicalShares = Math.max(0, n("cotasPorApartamento") * n("totalApartamentos"));
+  const blockedShares = Math.max(0, n("cotasBloqueadas"));
+  const grossSoldShares = Math.max(0, n("cotasVendidasAcumuladas"));
+  const returnedShares = Math.max(0, n("cotasRetornadas"));
+  const activeSoldShares = Math.max(0, grossSoldShares - returnedShares);
+  const totalShares = Math.max(0, physicalShares - blockedShares);
+  const availableInventory = Math.max(0, totalShares - activeSoldShares);
+  const inventoryViolation = n("cotasBloqueadas") < 0
+    ? "Cotas bloqueadas nao podem ser negativas."
+    : n("cotasVendidasAcumuladas") < 0 || n("cotasRetornadas") < 0
+      ? "Vendas e devolucoes acumuladas nao podem ser negativas."
+      : returnedShares > grossSoldShares
+        ? "Cotas retornadas nao podem exceder as vendas acumuladas."
+    : blockedShares > physicalShares
+      ? "Cotas bloqueadas nao podem exceder o estoque fisico."
+      : activeSoldShares + blockedShares > physicalShares
+        ? "Vendas ativas e bloqueios nao podem exceder o estoque fisico."
+      : null;
   const commissionPerShare = commissionRoles.reduce(
     (total, role) => total + n(`${role}Valor`) * n(`${role}Quantidade`),
     0
@@ -154,11 +199,19 @@ export function calculateCotiaMatrix(values: CotiaMatrixValues) {
     entryInstallmentValue: n("parcelasEntrada")
       ? n("valorEntrada") / n("parcelasEntrada")
       : 0,
+    physicalShares,
+    blockedShares,
+    grossSoldShares,
+    returnedShares,
+    activeSoldShares,
+    availableInventory,
+    sellableShares: totalShares,
     totalShares,
+    inventoryViolation,
     grossValue: totalShares * n("valorCota"),
     entrancePotential: totalShares * n("valorEntrada"),
     monthsOfOperation: n("cotasVendidasMes")
-      ? totalShares / n("cotasVendidasMes")
+      ? availableInventory / n("cotasVendidasMes")
       : 0,
     commissionPerShare,
     postSalesMonthly,

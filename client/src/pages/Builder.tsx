@@ -15,6 +15,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
+import {
+  buildCotiaAuthoritativePayload,
+  evaluateCotiaAssemblyCompleteness,
+  hydrateCotiaAssemblyDraft,
+} from "@shared/financial/cotiaAuthoritativeAdapter";
 import { buildCotiaFinancialMappings } from "@shared/financial/cotiaFinancialAdapter";
 import { getStudyImpacts } from "@shared/financial/impactMap";
 import {
@@ -386,6 +391,11 @@ export default function Builder() {
       }
     >
   >({});
+  const assemblyHydrationRef = useRef({
+    versionId: "",
+    dirty: false,
+    recordSignature: "",
+  });
   const pendingAssemblyRef = useRef<PendingAssembly | null>(null);
   const contextQuery = trpc.igr.projectContext.useQuery(
     { projectId: activeProjectId },
@@ -436,6 +446,20 @@ export default function Builder() {
           ...pendingAssembly,
           sourceType: "current_decision",
         });
+        const authoritative = buildCotiaAuthoritativePayload(
+          pendingAssembly.payload,
+          pendingAssembly.sourceRef ?? ""
+        );
+        if (authoritative.commercialModel)
+          saveCommercialModel.mutate({
+            versionId: result.versionId,
+            ...authoritative.commercialModel,
+          });
+        if (authoritative.receivablesPolicy)
+          upsertReceivablesPolicy.mutate({
+            versionId: result.versionId,
+            ...authoritative.receivablesPolicy,
+          });
         pendingAssemblyRef.current = null;
       }
       toast.success("Projeto criado com trilha de auditoria.", {
@@ -470,6 +494,25 @@ export default function Builder() {
     },
     onError: error =>
       toast.error("Não foi possível registrar o bloco.", {
+        description: error.message,
+      }),
+  });
+  const saveCommercialModel = trpc.igr.saveCommercialModel.useMutation({
+    onSuccess: async () => {
+      await utils.igr.productCatalog.invalidate();
+      await utils.igr.commercialConditions.invalidate();
+    },
+    onError: error =>
+      toast.error("Não foi possível registrar produto e condição.", {
+        description: error.message,
+      }),
+  });
+  const upsertReceivablesPolicy = trpc.igr.upsertReceivablesPolicy.useMutation({
+    onSuccess: async () => {
+      await utils.igr.receivablesPolicy.invalidate();
+    },
+    onError: error =>
+      toast.error("Não foi possível registrar política de carteira.", {
         description: error.message,
       }),
   });
@@ -526,11 +569,23 @@ export default function Builder() {
   const registerAssembly = () => {
     const draft = getDraft(assemblyDomain);
     const filledMappings = buildCotiaFinancialMappings(draft.values);
-    const assemblyStatus = filledMappings.length ? "provided" : draft.status;
+    const sourcedMappings = draft.sourceRef.trim().length >= 2 ? filledMappings : [];
+    let authoritative: ReturnType<typeof buildCotiaAuthoritativePayload>;
+    try {
+      authoritative = buildCotiaAuthoritativePayload(
+        draft.values,
+        draft.sourceRef.trim()
+      );
+    } catch (error) {
+      return toast.error("Página 1 Cotia não pôde ser reconciliada.", {
+        description: error instanceof Error ? error.message : "Revise as premissas estruturadas.",
+      });
+    }
+    const assemblyStatus = authoritative.completion.status;
     if (assemblyStatus === "provided" && draft.sourceRef.trim().length < 2)
       return toast.error("Alavanca financeira informada exige fonte, ata ou responsável.");
     const nextInputs = { ...inputs };
-    for (const mapping of filledMappings) {
+    for (const mapping of sourcedMappings) {
       nextInputs[mapping.inputKey] = {
         status: "provided",
         value: mapping.value,
@@ -538,7 +593,7 @@ export default function Builder() {
         sourceRef: `montagem: ${draft.sourceRef.trim()}`,
       };
     }
-    if (activeVersionId && filledMappings.length) {
+    if (activeVersionId && sourcedMappings.length) {
       setInputs(nextInputs);
       updateInputs.mutate({ versionId: activeVersionId, inputs: nextInputs });
     }
@@ -561,6 +616,16 @@ export default function Builder() {
         ...assemblyRecord,
         sourceType: "current_decision",
       });
+      if (authoritative.commercialModel)
+        saveCommercialModel.mutate({
+          versionId: activeVersionId,
+          ...authoritative.commercialModel,
+        });
+      if (authoritative.receivablesPolicy)
+        upsertReceivablesPolicy.mutate({
+          versionId: activeVersionId,
+          ...authoritative.receivablesPolicy,
+        });
       return;
     }
     const assemblyProjectName = draft.values.nomeProjeto?.trim() || projectName.trim();
@@ -570,24 +635,66 @@ export default function Builder() {
     createProject.mutate({ name: assemblyProjectName, inputs: nextInputs });
   };
   const assemblyDraft = getDraft(assemblyDomain);
+  const assemblyCompletion = evaluateCotiaAssemblyCompleteness(assemblyDraft.values);
+  const assemblyDisplayStatus =
+    assemblyCompletion.status === "provided" && assemblyDraft.sourceRef.trim().length >= 2
+      ? "provided"
+      : "pending";
   const assemblyRecords =
     componentsQuery.data?.filter(
       record => record.componentType === "project_assembly"
     ) ?? [];
+  useEffect(() => {
+    if (!activeVersionId || !componentsQuery.data) return;
+    const savedSignature = signature(assemblyRecords[0] ?? null);
+    const hydration = assemblyHydrationRef.current;
+    if (
+      hydration.versionId === activeVersionId &&
+      (hydration.dirty || hydration.recordSignature === savedSignature)
+    ) return;
+    const result = hydrateCotiaAssemblyDraft({
+      activeVersionId,
+      hydratedVersionId: hydration.versionId,
+      dirty: hydration.versionId === activeVersionId && hydration.dirty,
+      currentDraft: getDraft(assemblyDomain),
+      records: assemblyRecords,
+    });
+    assemblyHydrationRef.current = {
+      versionId: result.hydratedVersionId,
+      dirty: false,
+      recordSignature: savedSignature,
+    };
+    setDomainDrafts(current => ({
+      ...current,
+      [assemblyDomain.type]: result.draft,
+    }));
+  }, [activeVersionId, componentsQuery.data]);
   return (
     <div className="mx-auto max-w-6xl space-y-6 pb-10">
       <CotiaProjectMatrix
         values={assemblyDraft.values}
         sourceRef={assemblyDraft.sourceRef}
-        status={assemblyDraft.status}
-        disabled={upsertComponent.isPending}
-        saving={upsertComponent.isPending || createProject.isPending}
-        onChange={(key, value) =>
+        status={assemblyDisplayStatus}
+        disabled={upsertComponent.isPending || saveCommercialModel.isPending || upsertReceivablesPolicy.isPending}
+        saving={upsertComponent.isPending || saveCommercialModel.isPending || upsertReceivablesPolicy.isPending || createProject.isPending}
+        onChange={(key, value) => {
+          assemblyHydrationRef.current = {
+            ...assemblyHydrationRef.current,
+            versionId: activeVersionId,
+            dirty: true,
+          };
           patchDraft(assemblyDomain, {
             values: { ...assemblyDraft.values, [key]: value },
-          })
-        }
-        onSourceChange={value => patchDraft(assemblyDomain, { sourceRef: value })}
+          });
+        }}
+        onSourceChange={value => {
+          assemblyHydrationRef.current = {
+            ...assemblyHydrationRef.current,
+            versionId: activeVersionId,
+            dirty: true,
+          };
+          patchDraft(assemblyDomain, { sourceRef: value });
+        }}
         onStatusChange={value => patchDraft(assemblyDomain, { status: value })}
         onSave={registerAssembly}
       />

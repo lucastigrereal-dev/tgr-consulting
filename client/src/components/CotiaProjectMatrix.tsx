@@ -69,16 +69,49 @@ const paymentMethods: CostLine[] = [
   { key: "boleto", label: "Boleto" },
 ];
 
-function money(value: number) {
-  return value
+function money(value: number, known = value !== 0) {
+  return known && Number.isFinite(value)
     ? value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
     : "—";
 }
 
-function number(value: number, digits = 0) {
-  return value
+function number(value: number, digits = 0, known = value !== 0) {
+  return known && Number.isFinite(value)
     ? value.toLocaleString("pt-BR", { maximumFractionDigits: digits })
     : "—";
+}
+
+const fieldLabels: Record<string, string> = {
+  nomeProjeto: "Nome do projeto",
+  nomeProduto: "Nome do produto",
+  praca: "Praça / cidade",
+  dataBase: "Data-base",
+  inicioOperacao: "Início da operação",
+  horizonteMeses: "Horizonte em meses",
+  valorCota: "Valor da cota",
+  valorEntrada: "Valor da entrada",
+  parcelasEntrada: "Parcelas da entrada",
+  primeiroVencimentoEntradaMes: "Primeiro vencimento da entrada",
+  parcelasSaldo: "Parcelas do saldo",
+  carenciaSaldoMeses: "Carência do saldo",
+  primeiroVencimentoSaldoMes: "Primeiro vencimento do saldo",
+  cotasPorApartamento: "Cotas por apartamento",
+  totalApartamentos: "Total de apartamentos",
+  cotasBloqueadas: "Cotas bloqueadas",
+  cotasVendidasAcumuladas: "Cotas vendidas acumuladas",
+  cotasRetornadas: "Cotas retornadas ao estoque",
+  descontoComercial: "Desconto comercial",
+  encargosExplicitos: "Encargos explícitos",
+  toleranciaMaterialidade: "Tolerância de materialidade",
+  politicaCarteiraVersao: "Versão da política de carteira",
+  inadimplencia: "Taxa de inadimplência",
+  writeOffAposDias: "Write-off após dias",
+};
+
+function humanizeField(key: string) {
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, character => character.toUpperCase());
 }
 
 function MatrixSection({
@@ -110,17 +143,22 @@ export function CotiaProjectMatrix({
   onSave,
 }: CotiaProjectMatrixProps) {
   const v = (key: string) => values[key] ?? "";
-  const field = (key: string, placeholder = "PENDENTE", mode = "decimal") => (
+  const field = (key: string, placeholder = "PENDENTE", mode = "decimal", label?: string) => (
     <Input
+      id={`cotia-${key}`}
+      name={key}
+      aria-label={label ?? fieldLabels[key] ?? humanizeField(key)}
+      title={`Premissa editável: ${label ?? fieldLabels[key] ?? humanizeField(key)}. Campo vazio permanece PENDENTE.`}
       disabled={disabled}
       inputMode={mode === "text" ? "text" : "decimal"}
       value={v(key)}
       onChange={event => onChange(key, event.target.value)}
       placeholder={placeholder}
-      className="h-8 min-w-0 border-0 bg-transparent px-2 text-right text-sm font-semibold text-slate-900 shadow-none focus-visible:ring-1 focus-visible:ring-amber-500"
+      className="h-9 min-w-0 border-0 bg-amber-50/60 px-2 text-right text-sm font-semibold text-slate-900 shadow-none focus-visible:ring-2 focus-visible:ring-amber-500"
     />
   );
   const calculations = calculateCotiaMatrix(values);
+  const has = (...keys: string[]) => keys.every(key => Boolean(v(key).trim()));
 
   return (
     <div className="space-y-5 text-slate-900">
@@ -145,13 +183,15 @@ export function CotiaProjectMatrix({
         <div className="grid border-collapse sm:grid-cols-2 lg:grid-cols-4">
           {[
             ["nomeProjeto", "Nome do projeto", "Novo projeto", "text"],
+            ["nomeProduto", "Nome do produto", "Cota / UH", "text"],
             ["praca", "Praça / cidade", "Cidade / UF", "text"],
             ["dataBase", "Data-base", "MM/AAAA", "text"],
             ["inicioOperacao", "Início da operação", "MM/AAAA", "text"],
+            ["horizonteMeses", "Horizonte", "120", "decimal"],
           ].map(([key, label, placeholder, mode]) => (
             <div className="border-b border-r border-slate-900/20 p-2" key={key}>
-              <Label className="text-[10px] font-black uppercase tracking-wide text-slate-600">{label}</Label>
-              {field(key, placeholder, mode)}
+              <Label htmlFor={`cotia-${key}`} className="text-[10px] font-black uppercase tracking-wide text-slate-600">{label}</Label>
+              {field(key, placeholder, mode, label)}
             </div>
           ))}
         </div>
@@ -163,10 +203,22 @@ export function CotiaProjectMatrix({
             <tbody>
               {[
                 ["valorCota", "Valor da cota", "R$"],
+                ["descontoComercial", "Desconto comercial", "R$"],
                 ["valorEntrada", "Valor da entrada", "R$"],
                 ["parcelasEntrada", "Parcelas da entrada", "Qtd."],
+                ["primeiroVencimentoEntradaMes", "Primeiro vencimento entrada", "Mês"],
+                ["parcelasSaldo", "Parcelas do saldo", "Qtd."],
+                ["carenciaSaldoMeses", "Carência saldo", "Meses"],
+                ["primeiroVencimentoSaldoMes", "Primeiro vencimento saldo", "Mês"],
+                ["encargosExplicitos", "Encargos explícitos", "R$"],
+                ["taxaCorrecao", "Correção contratual", "% a.m."],
+                ["taxaJuros", "Juros / spread", "% a.m."],
+                ["toleranciaMaterialidade", "Tolerância materialidade", "R$"],
                 ["cotasPorApartamento", "Cotas por apartamento", "Qtd."],
                 ["totalApartamentos", "Total de apartamentos", "Qtd."],
+                ["cotasBloqueadas", "Cotas bloqueadas", "Qtd."],
+                ["cotasVendidasAcumuladas", "Cotas vendidas acumuladas", "Qtd."],
+                ["cotasRetornadas", "Cotas retornadas ao estoque", "Qtd."],
                 ["eficiencia", "Eficiência comercial", "%"],
                 ["valorCortesia", "Valor da cortesia", "R$"],
                 ["taxaCancelamento", "Taxa de cancelamento", "%"],
@@ -175,24 +227,64 @@ export function CotiaProjectMatrix({
                 <tr className="border-b border-slate-900/20" key={key}>
                   <td className="w-[48%] bg-slate-50 px-3 py-1.5 font-bold">{label}</td>
                   <td className="w-[12%] border-l border-slate-900/20 px-2 text-center text-xs text-slate-500">{unit}</td>
-                  <td className="border-l border-slate-900/20">{field(key)}</td>
+                  <td className="border-l border-slate-900/20">{field(key, "PENDENTE", "decimal", label)}</td>
                   <td className="w-[25%] border-l border-slate-900/20 px-3 text-right text-xs text-slate-500">Premissa da operação</td>
                 </tr>
               ))}
               {[
-                ["Valor da parcela da entrada", money(calculations.entryInstallmentValue)],
-                ["Total de cotas", number(calculations.totalShares)],
-                ["VGV potencial", money(calculations.grossValue)],
-                ["Entrada potencial", money(calculations.entrancePotential)],
-                ["Meses de operação", number(calculations.monthsOfOperation, 1)],
+                ["Valor da parcela da entrada", money(calculations.entryInstallmentValue, has("valorEntrada", "parcelasEntrada"))],
+                ["Estoque físico", number(calculations.physicalShares, 0, has("cotasPorApartamento", "totalApartamentos"))],
+                ["Cotas bloqueadas", number(calculations.blockedShares, 0, has("cotasBloqueadas"))],
+                ["Estoque vendável", number(calculations.sellableShares, 0, has("cotasPorApartamento", "totalApartamentos", "cotasBloqueadas"))],
+                ["Vendas ativas acumuladas", number(calculations.activeSoldShares, 0, has("cotasVendidasAcumuladas", "cotasRetornadas"))],
+                ["Estoque disponível hoje", number(calculations.availableInventory, 0, has("cotasPorApartamento", "totalApartamentos", "cotasBloqueadas", "cotasVendidasAcumuladas", "cotasRetornadas"))],
+                ["Saldo nominal por cota", money(Math.max(0, parseBrazilianDecimal(v("valorCota")) - parseBrazilianDecimal(v("descontoComercial")) - parseBrazilianDecimal(v("valorEntrada")) - parseBrazilianDecimal(v("encargosExplicitos"))), has("valorCota", "descontoComercial", "valorEntrada", "encargosExplicitos"))],
+                ["VGV potencial vendável", money(calculations.grossValue, has("valorCota", "cotasPorApartamento", "totalApartamentos", "cotasBloqueadas"))],
+                ["Entrada potencial", money(calculations.entrancePotential, has("valorEntrada", "cotasPorApartamento", "totalApartamentos", "cotasBloqueadas"))],
+                ["Meses de operação / sell-out", number(calculations.monthsOfOperation, 1, has("cotasVendidasMes", "cotasPorApartamento", "totalApartamentos", "cotasBloqueadas"))],
               ].map(([label, result]) => (
                 <tr className="border-b border-slate-900/20 bg-slate-100" key={label}>
                   <td className="px-3 py-1.5 font-black">{label}</td>
                   <td className="border-l border-slate-900/20" colSpan={3}><p className="px-3 text-right font-black">{result}</p></td>
                 </tr>
               ))}
+              {calculations.inventoryViolation ? (
+                <tr className="border-b border-rose-300 bg-rose-100">
+                  <td className="px-3 py-2 font-black text-rose-900" colSpan={4} role="alert">
+                    {calculations.inventoryViolation}
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
+        </div>
+      </MatrixSection>
+
+      <MatrixSection title="Política explícita de carteira · opcional até ser definida">
+        <div className="border-b border-slate-900/20 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          A política só é autoritativa quando curva cumulativa, inadimplência, cura, write-off e versão estiverem completos. Campo vazio continua PENDENTE; nenhuma regra é inventada.
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ["politicaCarteiraVersao", "Versão da política", "ex.: natal-v1"],
+            ["cancelamentoD7", "Cancelamento acumulado D7", "%"],
+            ["cancelamentoD30", "Cancelamento acumulado D30", "%"],
+            ["cancelamentoD60", "Cancelamento acumulado D60", "%"],
+            ["cancelamentoD90", "Cancelamento acumulado D90", "%"],
+            ["cancelamentoD180", "Cancelamento acumulado D180", "%"],
+            ["cancelamentoLifetime", "Cancelamento vida inteira", "%"],
+            ["inadimplencia", "Inadimplência", "%"],
+            ["curaD1a30", "Cura 1–30 dias", "%"],
+            ["curaD31a60", "Cura 31–60 dias", "%"],
+            ["curaD61a90", "Cura 61–90 dias", "%"],
+            ["curaD90Mais", "Cura 90+ dias", "%"],
+            ["writeOffAposDias", "Write-off após", "mín. 90 dias"],
+          ].map(([key, label, placeholder]) => (
+            <div className="border-b border-r border-slate-900/20 p-2" key={key}>
+              <Label htmlFor={`cotia-${key}`} className="text-[10px] font-black uppercase tracking-wide text-slate-600">{label}</Label>
+              {field(key, placeholder, key === "politicaCarteiraVersao" ? "text" : "decimal", label)}
+            </div>
+          ))}
         </div>
       </MatrixSection>
 
@@ -329,8 +421,8 @@ export function CotiaProjectMatrix({
       <div className="rounded-xl border-2 border-slate-950 bg-[#fff200] p-4 text-slate-950">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div><p className="text-xs font-black uppercase tracking-[0.14em]">Pré-investimento / operação recorrente / entrada líquida</p><p className="mt-1 text-lg font-black">{money(calculations.preOperationalInvestment)} · {money(calculations.recurringOperationMonthly)} · {money(calculations.netEntryMonthly)}</p></div>
-          <div className="w-full sm:w-72"><Label className="text-xs font-black uppercase">Fonte ou responsável pela folha</Label><Input value={sourceRef} onChange={event => onSourceChange(event.target.value)} placeholder="Ata, briefing, responsável" className="mt-1 h-9 border-slate-950/30 bg-white/65 text-slate-950" /></div>
-          <div><Label className="text-xs font-black uppercase">Status</Label><select value={status} onChange={event => onStatusChange(event.target.value as "provided" | "pending")} className="mt-1 h-9 rounded-md border border-slate-950/30 bg-white px-3 text-sm"><option value="pending">PENDENTE</option><option value="provided">INFORMADO</option></select></div>
+          <div className="w-full sm:w-72"><Label htmlFor="cotia-sourceRef" className="text-xs font-black uppercase">Fonte ou responsável pela folha</Label><Input id="cotia-sourceRef" name="sourceRef" aria-label="Fonte ou responsável pela folha" title="Proveniência obrigatória para campos informados." value={sourceRef} onChange={event => onSourceChange(event.target.value)} placeholder="Ata, briefing, responsável" className="mt-1 h-9 border-slate-950/30 bg-white/65 text-slate-950" /></div>
+          <div><Label htmlFor="cotia-status" className="text-xs font-black uppercase">Status calculado</Label><select id="cotia-status" aria-label="Status calculado da Página 1" value={status} onChange={event => onStatusChange(event.target.value as "provided" | "pending")} disabled className="mt-1 h-9 rounded-md border border-slate-950/30 bg-white px-3 text-sm"><option value="pending">PENDENTE</option><option value="provided">INFORMADO</option></select></div>
           <Button disabled={disabled || saving} onClick={onSave} className="bg-slate-950 text-white hover:bg-slate-800"><Save className="mr-2 h-4 w-4" />Registrar Página 1</Button>
         </div>
       </div>

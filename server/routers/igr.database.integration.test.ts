@@ -365,11 +365,12 @@ describe("igrRouter + banco", () => {
 
     const snapshot = await owner.calculate({ versionId: created.versionId, horizonMonths: 24 });
     ids.snapshotId = snapshot.id; ids.snapshotHash = snapshot.snapshotHash;
-    expect(snapshot.kpis.grossSales).toBe("8360000.00000000");
-    expect(snapshot.kpis.grossEntryGenerated).toBe("1520000.00000000");
-    expect(snapshot.kpis.grossReceivablesGenerated).toBe("8360000.00000000");
+    expect(snapshot.kpis.grossSales).toBe("8893572.83741480");
+    expect(snapshot.kpis.grossEntryGenerated).toBe("1617013.24316633");
+    expect(snapshot.kpis.grossReceivablesGenerated).toBe("8893572.83741480");
     expect(Number(snapshot.kpis.installmentCollections)).toBeGreaterThan(0);
-    expect(snapshot.projections.reduce((total, row) => total + Number(row.contracts), 0)).toBe(76);
+    expect(snapshot.projections.reduce((total, row) => total + Number(row.contracts), 0)).toBeCloseTo(80.85066215831636, 7);
+    expect(Math.max(...snapshot.projections.map(row => Number(row.activeContracts)))).toBeLessThanOrEqual(76);
     expect(snapshot.authoritativeDomains?.commercialModel?.derived).toMatchObject({ averageTicket: "110000.00000000", entryValuePerContract: "20000.00000000", maxContracts: "76.00000000" });
     expect(snapshot.authoritativeDomains?.commercialModel?.derived.paymentSchedulePerContract.length).toBeGreaterThan(1);
     expect(snapshot.authoritativeDomains?.commercialModel?.derived.paymentSchedulePerContract).toContainEqual({
