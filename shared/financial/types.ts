@@ -178,7 +178,13 @@ export type ProjectVersionGuard = {
 };
 
 export type GoalSeekResult = {
-  status: "converged" | "unreachable" | "iteration_limit";
+  status:
+    | "converged"
+    | "unreachable"
+    | "iteration_limit"
+    | "unsupported"
+    | "infeasible";
+  targetKpi?: string;
   variableKey: string;
   target: DecimalText;
   result: DecimalText | null;
@@ -187,6 +193,7 @@ export type GoalSeekResult = {
   lowerBound: DecimalText;
   upperBound: DecimalText;
   iterations: number;
+  reason?: string;
 };
 
 export type CapitalEnvelopeResult = {

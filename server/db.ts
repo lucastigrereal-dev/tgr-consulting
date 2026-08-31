@@ -1,5 +1,10 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import type { MySqlTransaction } from "drizzle-orm/mysql-core";
+import {
+  drizzle,
+  type MySql2PreparedQueryHKT,
+  type MySql2QueryResultHKT,
+} from "drizzle-orm/mysql2";
 import { inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
@@ -31,7 +36,13 @@ import { IGR_CORE_FORMULA_SET_V1 } from "../shared/financial/formulas";
 import { calculateAuthoritativeSnapshot } from "./financial/snapshot";
 import {
   calculateCapitalEnvelope,
-  runGoalSeek,
+  GOAL_SEEK_LEVER_KEYS,
+  GOAL_SEEK_LEVERS,
+  GOAL_SEEK_TARGET_KEYS,
+  GOAL_SEEK_TARGETS,
+  runGoalSeekV1,
+  type GoalSeekTargetKey,
+  type GoalSeekVariableKey,
 } from "../shared/financial/goalseek";
 import {
   calculateFinancialProjection,
@@ -72,11 +83,14 @@ import {
   buildBoardroomPptx,
   buildBoardroomXlsx,
   createExportableSnapshot,
+  createScenarioComparisonPayload,
+  type ExportPackScenarioComparisonEntry,
 } from "./financial/export";
 import { storagePut } from "./storage";
 import { ENV } from "./_core/env";
 import {
   FINANCIAL_INPUT_KEYS,
+  type FinancialCalculation,
   type FinancialInputKey,
   type FinancialInputSnapshot,
 } from "../shared/financial/types";
@@ -99,6 +113,32 @@ async function requireDb() {
   const db = await getDb();
   if (!db) throw new Error("Banco de dados indisponível.");
   return db;
+}
+
+type TgrTransaction = MySqlTransaction<
+  MySql2QueryResultHKT,
+  MySql2PreparedQueryHKT,
+  Record<string, unknown>
+>;
+
+async function bumpFinancialRevision(
+  transaction: TgrTransaction,
+  versionId: string,
+  conflictMessage: string
+) {
+  const result = await transaction
+    .update(projectVersions)
+    .set({
+      financialRevision: sql`${projectVersions.financialRevision} + 1`,
+    })
+    .where(
+      and(
+        eq(projectVersions.id, versionId),
+        eq(projectVersions.state, "draft"),
+        eq(projectVersions.isImmutable, false)
+      )
+    );
+  if (result[0].affectedRows !== 1) throw new Error(conflictMessage);
 }
 
 function stableSerialize(value: unknown): string {
@@ -348,7 +388,7 @@ export async function getProjectContextForTenant(
           .select({ id: calculationSnapshots.id })
           .from(calculationSnapshots)
           .where(inArray(calculationSnapshots.projectVersionId, versionIds))
-          .orderBy(desc(calculationSnapshots.createdAt))
+          .orderBy(desc(calculationSnapshots.createdOrdinal))
           .limit(8);
   const snapshotRows = snapshotOrder.length
     ? await db
@@ -451,11 +491,15 @@ export async function getScenarioComparisonForTenant(
     .select()
     .from(scenarioBranches)
     .where(eq(scenarioBranches.projectId, projectId));
-  const snapshots =
+  const snapshotMetadata =
     versionIds.length === 0
       ? []
       : await db
-          .select()
+          .select({
+            id: calculationSnapshots.id,
+            projectVersionId: calculationSnapshots.projectVersionId,
+            createdOrdinal: calculationSnapshots.createdOrdinal,
+          })
           .from(calculationSnapshots)
           .where(
             and(
@@ -463,12 +507,22 @@ export async function getScenarioComparisonForTenant(
               eq(calculationSnapshots.calculationStatus, "valid")
             )
           )
-          .orderBy(desc(calculationSnapshots.createdAt));
-  const latestSnapshotByVersion = new Map<string, (typeof snapshots)[number]>();
-  for (const snapshot of snapshots) {
-    if (!latestSnapshotByVersion.has(snapshot.projectVersionId))
-      latestSnapshotByVersion.set(snapshot.projectVersionId, snapshot);
+          .orderBy(desc(calculationSnapshots.createdOrdinal));
+  const latestSnapshotIdByVersion = new Map<string, string>();
+  for (const snapshot of snapshotMetadata) {
+    if (!latestSnapshotIdByVersion.has(snapshot.projectVersionId))
+      latestSnapshotIdByVersion.set(snapshot.projectVersionId, snapshot.id);
   }
+  const latestSnapshotIds = Array.from(latestSnapshotIdByVersion.values());
+  const snapshots = latestSnapshotIds.length
+    ? await db
+        .select()
+        .from(calculationSnapshots)
+        .where(inArray(calculationSnapshots.id, latestSnapshotIds))
+    : [];
+  const latestSnapshotByVersion = new Map(
+    snapshots.map(snapshot => [snapshot.projectVersionId, snapshot])
+  );
   return context.versions.map(version => {
     const snapshot = latestSnapshotByVersion.get(version.id);
     const branch = branches.find(
@@ -690,6 +744,11 @@ export async function upsertCommercialOperationsForTenant(params: {
           updatedBy: record.updatedBy,
         },
       });
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação das operações comerciais."
+    );
     await transaction.insert(auditEvents).values({
       id: nanoid(),
       tenantId: params.tenantId,
@@ -793,7 +852,13 @@ export async function replaceCapturePointsForTenant(params: {
           eq(projectComponentRecords.componentType, "acquisition_capacity")
         )
       );
-    if (records.length) await transaction.insert(projectComponentRecords).values(records);
+    if (records.length)
+      await transaction.insert(projectComponentRecords).values(records);
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação dos pontos de captação."
+    );
     await transaction.insert(auditEvents).values({
       id: nanoid(),
       tenantId: params.tenantId,
@@ -995,6 +1060,11 @@ export async function replaceProductCatalogForTenant(params: {
           .set({ productSkuId: replacementId })
           .where(eq(commercialConditions.id, condition.id));
     }
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação do catálogo de produto."
+    );
     await transaction.insert(auditEvents).values({
       id: nanoid(),
       tenantId: params.tenantId,
@@ -1190,6 +1260,11 @@ export async function upsertReceivablesPolicyForTenant(params: {
           updatedBy: record.updatedBy,
         },
       });
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação da política de carteira."
+    );
     await transaction.insert(auditEvents).values({
       id: nanoid(),
       tenantId: params.tenantId,
@@ -1313,6 +1388,11 @@ export async function upsertCommercialConditionForTenant(params: {
           updatedBy: record.updatedBy,
         },
       });
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação da condição comercial."
+    );
     await transaction.insert(auditEvents).values({
       id: nanoid(),
       tenantId: params.tenantId,
@@ -1502,6 +1582,12 @@ export async function saveCommercialModelForTenant(params: {
     if (insertedConditions.length)
       await transaction.insert(commercialConditions).values(insertedConditions);
 
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação do modelo comercial."
+    );
+
     await transaction.insert(auditEvents).values({
       id: nanoid(),
       tenantId: params.tenantId,
@@ -1626,10 +1712,24 @@ export async function createDecisionRecordForTenant(params: {
             updatedBy: params.actorId,
           },
         });
-      await transaction
+      const versionUpdate = await transaction
         .update(projectVersions)
-        .set({ inputHash: sha256(nextInputs) })
-        .where(eq(projectVersions.id, version.id));
+        .set({
+          inputHash: sha256(nextInputs),
+          financialRevision: sql`${projectVersions.financialRevision} + 1`,
+        })
+        .where(
+          and(
+            eq(projectVersions.id, version.id),
+            eq(projectVersions.state, "draft"),
+            eq(projectVersions.isImmutable, false),
+            eq(projectVersions.inputHash, version.inputHash)
+          )
+        );
+      if (versionUpdate[0].affectedRows !== 1)
+        throw new Error(
+          "A versão mudou durante a aplicação da decisão; nenhuma alteração foi aplicada."
+        );
     }
   });
   await recordAuditEvent({
@@ -1718,31 +1818,39 @@ export async function upsertBuilderComponentForTenant(params: {
     sourceRef: params.sourceRef ?? null,
     updatedBy: params.actorId,
   };
-  await db
-    .insert(projectComponentRecords)
-    .values(record)
-    .onDuplicateKeyUpdate({
-      set: {
-        status: record.status,
-        payload: record.payload,
-        sourceType: record.sourceType,
-        sourceRef: record.sourceRef,
-        updatedBy: record.updatedBy,
+  await db.transaction(async transaction => {
+    await transaction
+      .insert(projectComponentRecords)
+      .values(record)
+      .onDuplicateKeyUpdate({
+        set: {
+          status: record.status,
+          payload: record.payload,
+          sourceType: record.sourceType,
+          sourceRef: record.sourceRef,
+          updatedBy: record.updatedBy,
+        },
+      });
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação do componente do Builder."
+    );
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "project_component",
+      entityId: record.id,
+      action: "builder_component.upserted",
+      actorId: params.actorId,
+      beforeHash: before[0] ? sha256(before[0]) : null,
+      afterHash: sha256(record),
+      metadata: {
+        versionId: version.id,
+        componentType: params.componentType,
+        status: params.status,
       },
     });
-  await recordAuditEvent({
-    tenantId: params.tenantId,
-    entityType: "project_component",
-    entityId: record.id,
-    action: "builder_component.upserted",
-    actorId: params.actorId,
-    beforeHash: before[0] ? sha256(before[0]) : null,
-    afterHash: sha256(record),
-    metadata: {
-      versionId: version.id,
-      componentType: params.componentType,
-      status: params.status,
-    },
   });
   return record;
 }
@@ -1791,20 +1899,28 @@ export async function createCostCatalogItemForTenant(params: {
     sourceRef: params.sourceRef ?? null,
     updatedBy: params.actorId,
   };
-  await db.insert(costCatalogItems).values(record);
-  await recordAuditEvent({
-    tenantId: params.tenantId,
-    entityType: "cost_catalog_item",
-    entityId: record.id,
-    action: "cost_catalog_item.created",
-    actorId: params.actorId,
-    afterHash: sha256(record),
-    metadata: {
-      versionId: version.id,
-      category: record.category,
-      frequency: record.frequency,
-      status: record.status,
-    },
+  await db.transaction(async transaction => {
+    await transaction.insert(costCatalogItems).values(record);
+    await bumpFinancialRevision(
+      transaction,
+      version.id,
+      "A versão mudou durante a gravação do custo."
+    );
+    await transaction.insert(auditEvents).values({
+      id: nanoid(),
+      tenantId: params.tenantId,
+      entityType: "cost_catalog_item",
+      entityId: record.id,
+      action: "cost_catalog_item.created",
+      actorId: params.actorId,
+      afterHash: sha256(record),
+      metadata: {
+        versionId: version.id,
+        category: record.category,
+        frequency: record.frequency,
+        status: record.status,
+      },
+    });
   });
   return record;
 }
@@ -1902,10 +2018,24 @@ export async function updateInputsForTenant(params: {
           },
         });
     }
-    await transaction
+    const versionUpdate = await transaction
       .update(projectVersions)
-      .set({ inputHash })
-      .where(eq(projectVersions.id, version.id));
+      .set({
+        inputHash,
+        financialRevision: sql`${projectVersions.financialRevision} + 1`,
+      })
+      .where(
+        and(
+          eq(projectVersions.id, version.id),
+          eq(projectVersions.state, "draft"),
+          eq(projectVersions.isImmutable, false),
+          eq(projectVersions.inputHash, version.inputHash)
+        )
+      );
+    if (versionUpdate[0].affectedRows !== 1)
+      throw new Error(
+        "A versão mudou durante a gravação dos inputs; nenhuma alteração foi aplicada."
+      );
   });
   await recordAuditEvent({
     tenantId: params.tenantId,
@@ -2248,6 +2378,7 @@ export async function createCalculationSnapshot(params: {
       projectVersionId: version.id,
       formulaSetVersionId: version.formulaSetVersionId,
       horizonMonths: params.horizonMonths,
+      asOfMonth: params.asOfMonth ?? 0,
       inputHash: context.authoritativeInputHash,
       snapshotHash: calculation.snapshotHash,
       calculationStatus: calculation.status,
@@ -2301,6 +2432,7 @@ export async function createCalculationSnapshot(params: {
         versionId: version.id,
         status: calculation.status,
         horizonMonths: params.horizonMonths,
+        asOfMonth: params.asOfMonth ?? 0,
       },
     });
   });
@@ -2842,20 +2974,24 @@ export async function calculateCapitalEnvelopeForTenant(params: {
   );
 }
 
-export type ProjectGoalSeekVariable =
-  | "qualifiedCouplesMonth1"
-  | "conversionRate";
-export type ProjectGoalSeekKpi = "npv" | "totalOperatingCashFlow" | "healthyD90";
+export type ProjectGoalSeekVariable = GoalSeekVariableKey;
+export type ProjectGoalSeekKpi = GoalSeekTargetKey;
+export const PROJECT_GOAL_SEEK_VARIABLES = GOAL_SEEK_LEVER_KEYS;
+export const PROJECT_GOAL_SEEK_KPIS = GOAL_SEEK_TARGET_KEYS;
 
 export async function applyGoalSeekToScenarioForTenant(params: {
   tenantId: number;
   actorId: number;
   targetVersionId: string;
   sourceVersionId: string;
+  horizonMonths?: number;
+  asOfMonth?: number;
   variableKey: ProjectGoalSeekVariable;
   value: string;
   targetKpi: ProjectGoalSeekKpi;
   target: string;
+  lowerBound?: string;
+  upperBound?: string;
   objectiveValue: string;
   residual: string;
   iterations: number;
@@ -2871,36 +3007,65 @@ export async function applyGoalSeekToScenarioForTenant(params: {
     throw new Error("Goal Seek só pode alterar branch de cenário em rascunho.");
   if (!Number.isInteger(params.iterations) || params.iterations < 1)
     throw new Error("Goal Seek aplicado exige número positivo de iterações.");
+  const horizonMonths = params.horizonMonths ?? 120;
+  if (!Number.isInteger(horizonMonths) || horizonMonths < 1 || horizonMonths > 120)
+    throw new Error("Goal Seek aplicado exige horizonte entre 1 e 120 meses.");
+  const asOfMonth = params.asOfMonth ?? 0;
+  if (!Number.isInteger(asOfMonth) || asOfMonth < 0 || asOfMonth > 1200)
+    throw new Error("Goal Seek aplicado exige mês de referência válido.");
 
   const value = new FinanceDecimal(params.value);
   const target = new FinanceDecimal(params.target);
+  const lowerBound = new FinanceDecimal(
+    params.lowerBound ?? GOAL_SEEK_LEVERS[params.variableKey].lowerBound
+  );
+  const upperBound = new FinanceDecimal(
+    params.upperBound ?? GOAL_SEEK_LEVERS[params.variableKey].upperBound
+  );
   const objective = new FinanceDecimal(params.objectiveValue);
   const residual = new FinanceDecimal(params.residual);
-  if (![value, target, objective, residual].every(decimal => decimal.isFinite()))
+  if (
+    ![value, target, lowerBound, upperBound, objective, residual].every(decimal =>
+      decimal.isFinite()
+    )
+  )
     throw new Error("Goal Seek aplicado exige valores decimais finitos.");
   if (value.isNegative())
     throw new Error("O valor aplicado pelo Goal Seek deve ser decimal não negativo.");
-  if (params.variableKey === "conversionRate" && value.gt(1))
-    throw new Error("A conversão aplicada pelo Goal Seek deve ficar entre 0 e 1.");
+  const lever = GOAL_SEEK_LEVERS[params.variableKey];
+  if (value.lt(lever.lowerBound) || value.gt(lever.upperBound))
+    throw new Error(
+      `O valor aplicado pelo Goal Seek para ${params.variableKey} deve ficar entre ${lever.lowerBound} e ${lever.upperBound}.`
+    );
 
   const normalizedValue = value.toFixed(8);
   const normalizedTarget = target.toFixed(8);
+  const normalizedLowerBound = lowerBound.toFixed(8);
+  const normalizedUpperBound = upperBound.toFixed(8);
   const normalizedObjective = objective.toFixed(8);
   const normalizedResidual = residual.toFixed(8);
   const operationHash = sha256({
     targetVersionId: targetVersion.id,
     sourceVersionId: sourceVersion.id,
+    horizonMonths,
+    asOfMonth,
     variableKey: params.variableKey,
     value: normalizedValue,
     targetKpi: params.targetKpi,
     target: normalizedTarget,
+    lowerBound: normalizedLowerBound,
+    upperBound: normalizedUpperBound,
     objectiveValue: normalizedObjective,
     residual: normalizedResidual,
     iterations: params.iterations,
   });
   const decisionId = `goal_${operationHash.slice(0, 48)}`;
   const sourceRef = `goal_seek:${operationHash}`;
-  const existingDecision = await db.select({ id: decisionRecords.id }).from(decisionRecords).where(eq(decisionRecords.id, decisionId)).limit(1);
+  const existingDecision = await db
+    .select({ id: decisionRecords.id })
+    .from(decisionRecords)
+    .where(eq(decisionRecords.id, decisionId))
+    .limit(1);
   if (existingDecision[0]) {
     return {
       applied: false as const,
@@ -2910,8 +3075,59 @@ export async function applyGoalSeekToScenarioForTenant(params: {
       inputHash: targetVersion.inputHash,
     };
   }
-
   const previousInputs = await getInputsForVersion(targetVersion.id);
+  const sourceInputs = targetVersion.id === sourceVersion.id
+    ? previousInputs
+    : await getInputsForVersion(sourceVersion.id);
+  const solverInputIdentity = (inputs: FinancialInputSnapshot) =>
+    Object.fromEntries(
+      FINANCIAL_INPUT_KEYS.map(key => [
+        key,
+        { status: inputs[key].status, value: inputs[key].value },
+      ])
+    );
+  const targetIsSolverSource = targetVersion.id === sourceVersion.id;
+  const targetIsUnchangedClone =
+    targetVersion.parentVersionId === sourceVersion.id &&
+    stableSerialize(solverInputIdentity(previousInputs)) ===
+      stableSerialize(solverInputIdentity(sourceInputs));
+  if (!targetIsSolverSource && !targetIsUnchangedClone)
+    throw new Error(
+      "A branch-alvo divergiu da fonte do Goal Seek; execute novamente sobre a própria branch."
+    );
+  const serverResult = await runProjectGoalSeekForTenant({
+    tenantId: params.tenantId,
+    versionId: targetVersion.id,
+    horizonMonths,
+    asOfMonth,
+    targetKpi: params.targetKpi,
+    variableKey: params.variableKey,
+    target: normalizedTarget,
+    lowerBound: normalizedLowerBound,
+    upperBound: normalizedUpperBound,
+  });
+  if (
+    serverResult.status !== "converged" ||
+    !serverResult.result ||
+    !serverResult.objectiveValue ||
+    serverResult.residual === null
+  )
+    throw new Error("Goal Seek aplicado exige resultado convergido calculado no servidor.");
+  const serverResultValue = new FinanceDecimal(serverResult.result).toFixed(8);
+  const serverObjective = new FinanceDecimal(serverResult.objectiveValue).toFixed(8);
+  const serverResidual = new FinanceDecimal(serverResult.residual).toFixed(8);
+  if (
+    serverResultValue !== normalizedValue ||
+    serverObjective !== normalizedObjective ||
+    serverResidual !== normalizedResidual ||
+    serverResult.iterations !== params.iterations ||
+    serverResult.target !== normalizedTarget ||
+    serverResult.lowerBound !== normalizedLowerBound ||
+    serverResult.upperBound !== normalizedUpperBound ||
+    serverResult.variableKey !== params.variableKey ||
+    serverResult.targetKpi !== params.targetKpi
+  )
+    throw new Error("Payload do Goal Seek diverge do resultado recalculado no servidor.");
   const nextInputs: FinancialInputSnapshot = {
     ...previousInputs,
     [params.variableKey]: {
@@ -2943,6 +3159,58 @@ export async function applyGoalSeekToScenarioForTenant(params: {
   };
 
   await db.transaction(async transaction => {
+    const lockedTargetRows = await transaction
+      .select()
+      .from(projectVersions)
+      .where(eq(projectVersions.id, targetVersion.id))
+      .for("update")
+      .limit(1);
+    const lockedTarget = lockedTargetRows[0];
+    if (!lockedTarget)
+      throw new Error("A branch-alvo deixou de existir durante a aplicação do Goal Seek.");
+    if (
+      lockedTarget.kind !== "scenario" ||
+      lockedTarget.state !== "draft" ||
+      lockedTarget.isImmutable
+    )
+      throw new Error("A branch-alvo deixou de estar editável durante a aplicação do Goal Seek.");
+    if (
+      lockedTarget.inputHash !== targetVersion.inputHash ||
+      lockedTarget.financialRevision !== targetVersion.financialRevision
+    )
+      throw new Error(
+        "A branch-alvo mudou durante o Goal Seek; execute novamente sobre o estado atual."
+      );
+    const lockedInputRows = await transaction
+      .select()
+      .from(inputValues)
+      .where(eq(inputValues.versionId, targetVersion.id))
+      .for("update");
+    const lockedSavedInputs = Object.fromEntries(
+      lockedInputRows.map(row => [
+        row.key,
+        {
+          status: row.status,
+          value: row.valueText ?? undefined,
+          sourceType: row.sourceType,
+          sourceRef: row.sourceRef ?? undefined,
+          updatedBy: String(row.updatedBy),
+        },
+      ])
+    );
+    const lockedInputs = Object.fromEntries(
+      FINANCIAL_INPUT_KEYS.map(key => [
+        key,
+        lockedSavedInputs[key] ?? {
+          status: "pending",
+          sourceType: "current_decision",
+        },
+      ])
+    ) as FinancialInputSnapshot;
+    if (stableSerialize(lockedInputs) !== stableSerialize(previousInputs))
+      throw new Error(
+        "Os inputs da branch-alvo mudaram durante o Goal Seek; execute novamente."
+      );
     await transaction.insert(decisionRecords).values(decision);
     await transaction.insert(inputValues).values({
       id: nanoid(),
@@ -2960,11 +3228,28 @@ export async function applyGoalSeekToScenarioForTenant(params: {
       sourceRef,
       updatedBy: params.actorId,
     } });
-    await transaction.update(projectVersions).set({ inputHash }).where(and(
-      eq(projectVersions.id, targetVersion.id),
-      eq(projectVersions.state, "draft"),
-      eq(projectVersions.isImmutable, false),
-    ));
+    const updateResult = await transaction
+      .update(projectVersions)
+      .set({
+        inputHash,
+        financialRevision: sql`${projectVersions.financialRevision} + 1`,
+      })
+      .where(
+        and(
+          eq(projectVersions.id, targetVersion.id),
+          eq(projectVersions.state, "draft"),
+          eq(projectVersions.isImmutable, false),
+          eq(projectVersions.inputHash, targetVersion.inputHash),
+          eq(
+            projectVersions.financialRevision,
+            targetVersion.financialRevision
+          )
+        )
+      );
+    if (updateResult[0].affectedRows !== 1)
+      throw new Error(
+        "A branch-alvo mudou durante a gravação do Goal Seek; nenhuma alteração foi aplicada."
+      );
     await transaction.insert(workflowEvents).values({
       id: `gwf_${operationHash.slice(0, 48)}`,
       projectId: targetVersion.projectId,
@@ -2989,6 +3274,8 @@ export async function applyGoalSeekToScenarioForTenant(params: {
           targetVersionId: targetVersion.id,
           variableKey: params.variableKey,
           targetKpi: params.targetKpi,
+          financialRevisionBefore: targetVersion.financialRevision,
+          financialRevisionAfter: targetVersion.financialRevision + 1,
         },
       },
       {
@@ -3005,6 +3292,8 @@ export async function applyGoalSeekToScenarioForTenant(params: {
           source: "goal_seek",
           sourceVersionId: sourceVersion.id,
           decisionId,
+          financialRevisionBefore: targetVersion.financialRevision,
+          financialRevisionAfter: targetVersion.financialRevision + 1,
         },
       },
     ]);
@@ -3032,13 +3321,21 @@ export async function runProjectGoalSeekForTenant(params: {
 }) {
   const lowerBound = new FinanceDecimal(params.lowerBound);
   const upperBound = new FinanceDecimal(params.upperBound);
-  if (lowerBound.isNegative() || upperBound.isNegative())
-    throw new Error("Os limites do Goal Seek não podem ser negativos.");
-  if (
-    params.variableKey === "conversionRate" &&
-    (lowerBound.gt(1) || upperBound.gt(1))
-  )
-    throw new Error("Os limites de conversão devem ficar entre 0 e 1.");
+  if (!lowerBound.isFinite() || !upperBound.isFinite())
+    throw new Error("Os limites do Goal Seek devem ser decimais finitos.");
+  await getVersionForTenant(params.versionId, params.tenantId);
+  if (!GOAL_SEEK_TARGETS[params.targetKpi].supported) {
+    return runGoalSeekV1({
+      targetKpi: params.targetKpi,
+      variableKey: params.variableKey,
+      target: params.target,
+      lowerBound: params.lowerBound,
+      upperBound: params.upperBound,
+      evaluate: () => {
+        throw new Error("Target sem suporte não deve consultar a versão.");
+      },
+    });
+  }
   const context = await getAuthoritativeCalculationContext({
     tenantId: params.tenantId,
     versionId: params.versionId,
@@ -3053,7 +3350,8 @@ export async function runProjectGoalSeekForTenant(params: {
     throw new Error(
       "Goal Seek exige todas as premissas obrigatórias informadas na versão selecionada."
     );
-  return runGoalSeek({
+  return runGoalSeekV1({
+    targetKpi: params.targetKpi,
     variableKey: params.variableKey,
     target: params.target,
     lowerBound: params.lowerBound,
@@ -3075,12 +3373,7 @@ export async function runProjectGoalSeekForTenant(params: {
       );
       if (calculation.status !== "valid")
         throw new Error("A variável escolhida produziu cálculo bloqueado.");
-      const value = calculation.kpis[params.targetKpi];
-      if (value === null)
-        throw new Error(
-          `KPI ${params.targetKpi} não é calculável para esta versão.`
-        );
-      return new FinanceDecimal(value);
+      return calculation;
     },
   });
 }
@@ -3121,6 +3414,118 @@ export async function getExportEligibilityForTenant(
   };
 }
 
+async function getExportScenarioComparisonEntries(params: {
+  projectId: string;
+  baseVersionId: string;
+  baseVersion: {
+    id: string;
+    kind: "working" | "scenario" | "approval" | "baseline";
+    state: "draft" | "in_review" | "approved" | "baseline";
+    isImmutable: boolean;
+  };
+  baseSnapshot: {
+    id: string;
+    snapshotHash: string;
+    horizonMonths: number;
+    asOfMonth: number;
+    payload: unknown;
+  };
+}): Promise<ExportPackScenarioComparisonEntry[]> {
+  const db = await requireDb();
+  const branches = (
+    await db
+      .select()
+      .from(scenarioBranches)
+      .where(
+        and(
+          eq(scenarioBranches.projectId, params.projectId),
+          eq(scenarioBranches.baseVersionId, params.baseVersionId)
+        )
+      )
+  ).sort((left, right) =>
+    left.name.localeCompare(right.name) ||
+    left.branchVersionId.localeCompare(right.branchVersionId)
+  );
+  const scenarioVersionIds = branches.map(branch => branch.branchVersionId);
+  const scenarioVersions = scenarioVersionIds.length
+    ? await db
+        .select()
+        .from(projectVersions)
+        .where(inArray(projectVersions.id, scenarioVersionIds))
+    : [];
+  const scenarioSnapshotMetadata = scenarioVersionIds.length
+    ? await db
+        .select({
+          id: calculationSnapshots.id,
+          projectVersionId: calculationSnapshots.projectVersionId,
+          createdOrdinal: calculationSnapshots.createdOrdinal,
+        })
+        .from(calculationSnapshots)
+        .where(
+          and(
+            inArray(calculationSnapshots.projectVersionId, scenarioVersionIds),
+            eq(calculationSnapshots.calculationStatus, "valid"),
+            eq(calculationSnapshots.horizonMonths, params.baseSnapshot.horizonMonths),
+            eq(calculationSnapshots.asOfMonth, params.baseSnapshot.asOfMonth)
+          )
+        )
+        .orderBy(desc(calculationSnapshots.createdOrdinal))
+    : [];
+  const versionById = new Map(scenarioVersions.map(version => [version.id, version]));
+  const latestSnapshotIdByVersion = new Map<string, string>();
+  for (const snapshot of scenarioSnapshotMetadata) {
+    if (!latestSnapshotIdByVersion.has(snapshot.projectVersionId))
+      latestSnapshotIdByVersion.set(snapshot.projectVersionId, snapshot.id);
+  }
+  const latestSnapshotIds = Array.from(latestSnapshotIdByVersion.values());
+  const scenarioSnapshots = latestSnapshotIds.length
+    ? await db
+        .select()
+        .from(calculationSnapshots)
+        .where(inArray(calculationSnapshots.id, latestSnapshotIds))
+    : [];
+  const latestSnapshotByVersion = new Map(
+    scenarioSnapshots.map(snapshot => [snapshot.projectVersionId, snapshot])
+  );
+  const baseCalculation = params.baseSnapshot.payload as FinancialCalculation;
+  return [
+    {
+      versionId: params.baseVersion.id,
+      kind: params.baseVersion.kind,
+      state: params.baseVersion.state,
+      isImmutable: params.baseVersion.isImmutable,
+      label: params.baseVersion.kind === "baseline" ? "Baseline" : "Base aprovada",
+      reason: null,
+      snapshotId: params.baseSnapshot.id,
+      snapshotHash: params.baseSnapshot.snapshotHash,
+      comparisonStatus: "comparable" as const,
+      horizonMonths: params.baseSnapshot.horizonMonths,
+      asOfMonth: params.baseSnapshot.asOfMonth,
+      kpis: baseCalculation.kpis,
+    },
+    ...branches.flatMap(branch => {
+      const version = versionById.get(branch.branchVersionId);
+      if (!version) return [];
+      const scenarioSnapshot = latestSnapshotByVersion.get(version.id);
+      const calculation = scenarioSnapshot?.payload as FinancialCalculation | undefined;
+      return [{
+        versionId: version.id,
+        kind: version.kind,
+        state: version.state,
+        isImmutable: version.isImmutable,
+        label: branch.name,
+        reason: branch.reason,
+        snapshotId: scenarioSnapshot?.id ?? null,
+        snapshotHash: scenarioSnapshot?.snapshotHash ?? null,
+        comparisonStatus: scenarioSnapshot ? "comparable" as const : "not_comparable" as const,
+        horizonMonths: scenarioSnapshot?.horizonMonths ?? null,
+        asOfMonth: scenarioSnapshot?.asOfMonth ?? null,
+        kpis: calculation?.kpis ?? null,
+      }];
+    }),
+  ];
+}
+
 export async function generateAuthorizedExportForTenant(params: {
   tenantId: number;
   actorId: number;
@@ -3134,7 +3539,10 @@ export async function generateAuthorizedExportForTenant(params: {
     .where(eq(calculationSnapshots.id, params.snapshotId))
     .limit(1);
   if (!snapshotRows[0]) throw new Error("Snapshot não encontrado.");
-  await getVersionForTenant(snapshotRows[0].projectVersionId, params.tenantId);
+  const exportVersion = await getVersionForTenant(
+    snapshotRows[0].projectVersionId,
+    params.tenantId
+  );
   const approvals = await db
     .select()
     .from(approvalDecisions)
@@ -3159,8 +3567,17 @@ export async function generateAuthorizedExportForTenant(params: {
     generatedBy: params.actorId,
   });
   const snapshot = createExportableSnapshot(
-    snapshotRows[0].payload as unknown as import("../shared/financial/types").FinancialCalculation,
+    snapshotRows[0].payload as unknown as FinancialCalculation,
     snapshotRows[0].snapshotHash,
+    createScenarioComparisonPayload({
+      baseSnapshotHash: snapshotRows[0].snapshotHash,
+      entries: await getExportScenarioComparisonEntries({
+        projectId: exportVersion.projectId,
+        baseVersionId: exportVersion.id,
+        baseVersion: exportVersion,
+        baseSnapshot: snapshotRows[0],
+      }),
+    }),
   );
   let stored: Awaited<ReturnType<typeof storagePut>>;
   try {
@@ -3176,7 +3593,7 @@ export async function generateAuthorizedExportForTenant(params: {
         ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     stored = await storagePut(
-      `igr/${params.tenantId}/exports/${params.snapshotId}_${snapshot.snapshotHash.slice(0, 12)}.${extension}`,
+      `igr/${params.tenantId}/exports/${params.snapshotId}_${snapshot.exportPackHash.slice(0, 12)}.${extension}`,
       data,
       mimeType
     );
@@ -3214,9 +3631,17 @@ export async function generateAuthorizedExportForTenant(params: {
         snapshotId: params.snapshotId,
         format: params.format,
         snapshotHash: snapshot.snapshotHash,
+        exportPackHash: snapshot.exportPackHash,
+        scenarioSelectionHash: snapshot.scenarioComparison?.selectionHash,
+        scenarioEntryCount: snapshot.scenarioComparison?.entries.length ?? 0,
         storageKey: stored.key,
       },
     });
   });
-  return { artifactId, snapshotHash: snapshot.snapshotHash, url: stored.url };
+  return {
+    artifactId,
+    snapshotHash: snapshot.snapshotHash,
+    exportPackHash: snapshot.exportPackHash,
+    url: stored.url,
+  };
 }

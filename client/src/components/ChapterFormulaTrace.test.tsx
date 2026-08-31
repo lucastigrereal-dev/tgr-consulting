@@ -17,13 +17,13 @@ describe("ChapterFormulaTrace", () => {
     const calculation = calculateFinancialProjection(inputs, 24);
     expect(calculation.status).toBe("valid");
     if (calculation.status !== "valid") return;
-    const sales = getChapterFormulaTrace("#study-sales", calculation.memory);
+    const sales = getChapterFormulaTrace("#study-captation", calculation.memory);
     const salesHtml = renderToStaticMarkup(<ChapterFormulaTrace source={sales.source} memory={sales.formulas} />);
     expect(salesHtml).toContain('data-testid="chapter-formula-trace"');
     expect(salesHtml).toContain("gross-sales");
     expect(salesHtml).toContain("v1.2.0");
 
-    const assumptions = getChapterFormulaTrace("#study-assumptions", calculation.memory);
+    const assumptions = getChapterFormulaTrace("#study-product-inventory", calculation.memory);
     const assumptionsHtml = renderToStaticMarkup(<ChapterFormulaTrace source={assumptions.source} memory={assumptions.formulas} />);
     expect(assumptionsHtml).toContain("ficha-mãe");
   });

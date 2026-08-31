@@ -3,25 +3,18 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { COOKIE_NAME } from "../shared/const";
 import { sdk } from "../server/_core/sdk";
+import { LIVE_DOCUMENT_CHAPTERS } from "../client/src/lib/liveDocumentStructure";
 
 const baseUrl = process.env.SMOKE_BASE_URL ?? "http://127.0.0.1:3000";
 const openId = process.env.OWNER_OPEN_ID;
 const ownerName = process.env.OWNER_NAME ?? "IGR Smoke Owner";
 const screenshotDir = process.env.SMOKE_SCREENSHOT_DIR;
 const routes = ["/", "/builder", "/study", "/costs", "/decisions", "/scenarios", "/governance"];
-const chapterLinks = [
-  { name: "Montagem", expectedPath: "/builder", expectedHash: "" },
-  { name: "Premissas", expectedPath: "/study", expectedHash: "#study-assumptions" },
-  { name: "Produto", expectedPath: "/study", expectedHash: "#study-product" },
-  { name: "Vendas", expectedPath: "/study", expectedHash: "#study-sales" },
-  { name: "Receita", expectedPath: "/study", expectedHash: "#study-revenue" },
-  { name: "Custos", expectedPath: "/study", expectedHash: "#study-costs" },
-  { name: "Operação", expectedPath: "/study", expectedHash: "#study-operation" },
-  { name: "Caixa", expectedPath: "/study", expectedHash: "#study-cashflow" },
-  { name: "Cenários", expectedPath: "/study", expectedHash: "#study-scenarios" },
-  { name: "Indicadores", expectedPath: "/study", expectedHash: "#study-impact" },
-  { name: "Conclusão", expectedPath: "/study", expectedHash: "#study-conclusion" },
-];
+const chapterLinks = LIVE_DOCUMENT_CHAPTERS.map(chapter => ({
+  name: chapter.title,
+  expectedPath: "/study",
+  expectedHash: chapter.href,
+}));
 const viewports = [
   { name: "desktop", width: 1280, height: 720 },
   { name: "presentation", width: 1920, height: 1080 },

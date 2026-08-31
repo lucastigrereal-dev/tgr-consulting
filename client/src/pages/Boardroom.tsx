@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { BoardroomPremiumShell } from "@/components/boardroom/BoardroomPremiumShell";
 import { Badge } from "@/components/ui/badge";
 import { ChapterFormulaTrace } from "@/components/ChapterFormulaTrace";
 import { Button } from "@/components/ui/button";
@@ -6,16 +7,23 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { formatKpi } from "@/lib/financialPresentation";
+import { formatKpi, isDecimal, normalizeDecimalInput } from "@/lib/financialPresentation";
 import { getChapterFormulaTrace } from "@/lib/chapterFormulaTrace";
 import { LIVE_DOCUMENT_CHAPTERS } from "@/lib/liveDocumentStructure";
 import { trpc } from "@/lib/trpc";
 import { getStudyImpacts } from "@shared/financial/impactMap";
 import {
+  GOAL_SEEK_LEVERS,
+  GOAL_SEEK_TARGETS,
+  type GoalSeekTargetKey,
+  type GoalSeekVariableKey,
+} from "@shared/financial/goalseek";
+import {
   FINANCIAL_INPUT_KEYS,
   type FinancialCalculation,
   type FinancialInputKey,
   type FinancialInputSnapshot,
+  type GoalSeekResult,
 } from "@shared/financial/types";
 import {
   AlertTriangle,
@@ -26,11 +34,13 @@ import {
   ExternalLink,
   FileCheck2,
   FileOutput,
+  GitBranch,
   LockKeyhole,
   Loader2,
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Target,
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -63,6 +73,31 @@ function MetricCard({
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+function EmptyBoardroomChapter({
+  id,
+  title,
+  description,
+}: {
+  id: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <section id={id} className="scroll-mt-24">
+      <Card className="border-dashed border-white/15 bg-white/[0.025] shadow-none">
+        <CardContent className="p-5">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
+            {title}
+          </p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {description}
+          </p>
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
@@ -117,28 +152,6 @@ const inputLabels: Partial<Record<FinancialInputKey, string>> = {
 };
 
 
-function LiveDocumentNavigator() {
-  return (
-    <nav className="sticky top-3 z-20 overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/85 p-2 shadow-xl backdrop-blur-xl">
-      <div className="flex min-w-max gap-1">
-        {LIVE_DOCUMENT_CHAPTERS.map(page =>
-          "external" in page && page.external ? (
-            <Link key={page.number} href={page.href} className="group flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-slate-300 transition hover:bg-white/[0.07] hover:text-white">
-              <span className="font-mono text-[10px] text-amber-200/75">{page.number}</span>
-              <span className="font-medium">{page.title}</span>
-            </Link>
-          ) : (
-            <a key={page.number} href={page.href} className="group flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-slate-300 transition hover:bg-white/[0.07] hover:text-white">
-              <span className="font-mono text-[10px] text-amber-200/75">{page.number}</span>
-              <span className="font-medium">{page.title}</span>
-            </a>
-          )
-        )}
-      </div>
-    </nav>
-  );
-}
-
 function formatDelta(
   key: (typeof comparisonKpis)[number]["key"],
   current: string | null | undefined,
@@ -157,6 +170,95 @@ function formatDelta(
   return `${signal} ${formatKpi(key, Math.abs(delta).toString())}`;
 }
 
+export type BoardroomGoalSeekSelection = {
+  targetKpi: GoalSeekTargetKey;
+  variableKey: GoalSeekVariableKey;
+  target: string;
+  lowerBound: string;
+  upperBound: string;
+};
+
+export type BoardroomGoalSeekResult = GoalSeekResult;
+
+type BoardroomGoalSeekRunContext = {
+  versionId: string;
+  horizonMonths: number;
+  asOfMonth: number;
+};
+
+function decimalTextEquals(left: string, right: string) {
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  return (
+    Number.isFinite(leftNumber) &&
+    Number.isFinite(rightNumber) &&
+    leftNumber === rightNumber
+  );
+}
+
+export function boardroomGoalSeekResultMatchesSelection(
+  result:
+    | Pick<GoalSeekResult, "targetKpi" | "variableKey" | "target" | "lowerBound" | "upperBound">
+    | null
+    | undefined,
+  selection: BoardroomGoalSeekSelection
+) {
+  return (
+    Boolean(result) &&
+    result?.targetKpi === selection.targetKpi &&
+    result?.variableKey === selection.variableKey &&
+    decimalTextEquals(result.target, selection.target) &&
+    decimalTextEquals(result.lowerBound, selection.lowerBound) &&
+    decimalTextEquals(result.upperBound, selection.upperBound)
+  );
+}
+
+export function canApplyBoardroomGoalSeekResult(
+  result: GoalSeekResult | null | undefined,
+  selection: BoardroomGoalSeekSelection
+) {
+  return (
+    Boolean(result) &&
+    result?.status === "converged" &&
+    Boolean(result.result) &&
+    Boolean(result.objectiveValue) &&
+    result.residual !== null &&
+    boardroomGoalSeekResultMatchesSelection(result, selection)
+  );
+}
+
+export function createBoardroomGoalSeekApplyPayload({
+  targetVersionId,
+  sourceVersionId,
+  horizonMonths,
+  asOfMonth,
+  selection,
+  result,
+}: {
+  targetVersionId: string;
+  sourceVersionId: string;
+  horizonMonths: number;
+  asOfMonth: number;
+  selection: BoardroomGoalSeekSelection;
+  result: GoalSeekResult & { result: string; objectiveValue: string; residual: string };
+}) {
+  return {
+    targetVersionId,
+    sourceVersionId,
+    variableKey: selection.variableKey,
+    value: result.result,
+    targetKpi: selection.targetKpi,
+    target: result.target,
+    objectiveValue: result.objectiveValue,
+    residual: result.residual,
+    iterations: result.iterations,
+    horizonMonths,
+    asOfMonth,
+    lowerBound: result.lowerBound,
+    upperBound: result.upperBound,
+  };
+}
+
 export default function Boardroom() {
   const utils = trpc.useUtils();
   const { user } = useAuth();
@@ -172,6 +274,19 @@ export default function Boardroom() {
   const [payrollMonthlyDelta, setPayrollMonthlyDelta] = useState("0");
   const [variableCostMonthlyDelta, setVariableCostMonthlyDelta] = useState("0");
   const [capexInitialDelta, setCapexInitialDelta] = useState("0");
+  const [goal, setGoal] = useState<BoardroomGoalSeekSelection>({
+    targetKpi: "npv",
+    variableKey: "qualifiedCouplesMonth1",
+    target: "0",
+    lowerBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.lowerBound,
+    upperBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.upperBound,
+  });
+  const [goalRunContext, setGoalRunContext] =
+    useState<BoardroomGoalSeekRunContext | null>(null);
+  const [goalBranchName, setGoalBranchName] = useState("Boardroom Goal Seek");
+  const [goalBranchReason, setGoalBranchReason] = useState(
+    "Aplicar ajuste de Goal Seek validado em reunião executiva."
+  );
   useEffect(() => {
     if (!activeProjectId && projectsQuery.data?.[0])
       setActiveProjectId(projectsQuery.data[0].id);
@@ -244,6 +359,22 @@ export default function Boardroom() {
     onError: error =>
       toast.error("A simulação não pôde rodar.", { description: error.message }),
   });
+  const goalSeek = trpc.igr.goalSeek.useMutation({
+    onError: error =>
+      toast.error("Goal Seek recusado.", { description: error.message }),
+  });
+  const createGoalSeekBranch = trpc.igr.createScenario.useMutation({
+    onError: error =>
+      toast.error("Não foi possível abrir a branch auditável.", {
+        description: error.message,
+      }),
+  });
+  const applyGoalSeek = trpc.igr.applyGoalSeek.useMutation({
+    onError: error =>
+      toast.error("Não foi possível aplicar o Goal Seek.", {
+        description: error.message,
+      }),
+  });
 
   const kpis = calculation?.kpis;
   const versionInputs = versionInputsQuery.data as FinancialInputSnapshot | undefined;
@@ -279,6 +410,84 @@ export default function Boardroom() {
     FINANCIAL_INPUT_KEYS.includes(key as FinancialInputKey)
   );
   const impactedChapters = getStudyImpacts(changedInputKeys);
+  const goalSeekResult = goalSeek.data as GoalSeekResult | undefined;
+  const goalResultMatchesSelection = boardroomGoalSeekResultMatchesSelection(
+    goalSeekResult,
+    goal
+  );
+  const goalReady =
+    isDecimal(goal.target) &&
+    isDecimal(goal.lowerBound) &&
+    isDecimal(goal.upperBound) &&
+    Boolean(snapshot?.projectVersionId);
+  const canApplyGoalSeek = canApplyBoardroomGoalSeekResult(goalSeekResult, goal);
+  const selectedGoalTarget = GOAL_SEEK_TARGETS[goal.targetKpi];
+  const selectedGoalLever = GOAL_SEEK_LEVERS[goal.variableKey];
+  const allowedGoalLevers = selectedGoalTarget.allowedVariables;
+  const goalStatusLabel =
+    goalSeekResult?.status === "converged"
+      ? "CONVERGIU"
+      : goalSeekResult?.status
+        ? goalSeekResult.status.toUpperCase().replaceAll("_", " ")
+        : "SEM EXECUÇÃO";
+  const resetBoardroomGoalSeek = () => {
+    goalSeek.reset?.();
+    setGoalRunContext(null);
+  };
+  const runBoardroomGoalSeek = () => {
+    if (!snapshot?.projectVersionId || !goalReady) return;
+    const runContext = {
+      versionId: snapshot.projectVersionId,
+      horizonMonths: snapshot.horizonMonths,
+      asOfMonth: calculation?.authoritativeDomains?.asOfMonth ?? 0,
+    };
+    setGoalRunContext(runContext);
+    goalSeek.mutate({
+      versionId: runContext.versionId,
+      horizonMonths: runContext.horizonMonths,
+      asOfMonth: runContext.asOfMonth,
+      targetKpi: goal.targetKpi,
+      variableKey: goal.variableKey,
+      target: goal.target,
+      lowerBound: goal.lowerBound,
+      upperBound: goal.upperBound,
+    });
+  };
+  const applyBoardroomGoalSeek = async () => {
+    if (!snapshot?.projectVersionId || !canApplyGoalSeek || !goalSeekResult?.result || !goalSeekResult.objectiveValue || goalSeekResult.residual === null) {
+      return;
+    }
+    try {
+      const branch = await createGoalSeekBranch.mutateAsync({
+        baseVersionId: snapshot.projectVersionId,
+        name: goalBranchName.trim(),
+        reason: goalBranchReason.trim(),
+      });
+      const goalSeekApplyPayload = createBoardroomGoalSeekApplyPayload({
+        targetVersionId: branch.versionId,
+        sourceVersionId: goalRunContext?.versionId || snapshot.projectVersionId,
+        horizonMonths: goalRunContext?.horizonMonths ?? snapshot.horizonMonths,
+        asOfMonth:
+          goalRunContext?.asOfMonth ??
+          calculation?.authoritativeDomains?.asOfMonth ??
+          0,
+        selection: goal,
+        result: goalSeekResult as GoalSeekResult & {
+          result: string;
+          objectiveValue: string;
+          residual: string;
+        },
+      });
+      const applied = await applyGoalSeek.mutateAsync(goalSeekApplyPayload);
+      await contextQuery.refetch();
+      await eligibilityQuery.refetch();
+      toast.success("Goal Seek aplicado em branch auditável.", {
+        description: `Versão ${(applied.versionId ?? branch.versionId).slice(0, 12)} pronta para revisar.`,
+      });
+    } catch {
+      // onError das mutations mostra o motivo específico; este catch evita rejeição não tratada no handler.
+    }
+  };
   const studyConclusion = !snapshot
     ? "Preencha as premissas essenciais para o TGR montar a primeira leitura de viabilidade."
     : !snapshot.isAuthoritative
@@ -330,8 +539,40 @@ export default function Boardroom() {
   }), { qualifiedCouples: 0, contracts: 0, grossSales: 0, grossEntryGenerated: 0, grossEntrySettled: 0, grossReceivablesGenerated: 0, grossReceivablesSettled: 0, installmentCollections: 0, canceledReceivables: 0, curedCollections: 0, writtenOffBalance: 0, healthyD90: 0, paymentFees: 0, netCollections: 0, variableCosts: 0, fixedCosts: 0, payroll: 0, preOperationalInvestment: 0 });
   const formatCount = (value: number) => new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(value);
   const chapterFormulaMemory = (href: (typeof LIVE_DOCUMENT_CHAPTERS)[number]["href"]) => getChapterFormulaTrace(href, calculation?.memory ?? []).formulas;
+  const projectSelector = (
+    <div className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.03] px-2 py-1">
+      <Label htmlFor="tgr-project" className="whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.11em] text-amber-200/80">
+        Abrir estudo
+      </Label>
+      <select
+        id="tgr-project"
+        className="h-8 min-w-40 rounded-md border-0 bg-transparent px-2 text-sm text-slate-200 outline-none"
+        value={activeProjectId}
+        onChange={event => {
+          setActiveProjectId(event.target.value);
+          setExportUrl(null);
+        }}
+        disabled={projectsQuery.isLoading}
+      >
+        <option value="">
+          {projectsQuery.isLoading ? "Carregando..." : "Selecionar estudo"}
+        </option>
+        {projectsQuery.data?.map(project => (
+          <option value={project.id} key={project.id}>
+            {project.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+  const snapshotBadge = snapshot ? (
+    <Badge variant="outline" className="border-white/15 bg-white/5 px-3 py-1.5 text-slate-200">
+      Versão {snapshot.snapshotHash.slice(0, 12).toUpperCase()}
+    </Badge>
+  ) : null;
 
   return (
+    <BoardroomPremiumShell projectSelector={projectSelector} snapshotBadge={snapshotBadge}>
     <div className="mx-auto max-w-7xl space-y-6 pb-10">
       <section className="relative overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_85%_15%,rgba(181,145,75,0.16),transparent_30%),linear-gradient(135deg,rgba(18,29,49,0.96),rgba(8,14,27,0.98))] px-6 py-7 shadow-2xl sm:px-8">
         <div className="absolute right-6 top-5 hidden items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-200/80 sm:flex">
@@ -356,48 +597,12 @@ export default function Boardroom() {
               className="bg-amber-400 text-slate-950 hover:bg-amber-300"
             >
               <Link href="/builder">
-                Montar estudo <ArrowUpRight className="ml-2 h-4 w-4" />
+                Reset / editar baseline <ArrowUpRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
-            <div className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.03] px-2 py-1">
-              <Label htmlFor="tgr-project" className="whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.11em] text-amber-200/80">
-                Abrir estudo
-              </Label>
-              <select
-                id="tgr-project"
-                className="h-8 min-w-40 rounded-md border-0 bg-transparent px-2 text-sm text-slate-200 outline-none"
-                value={activeProjectId}
-                onChange={event => {
-                  setActiveProjectId(event.target.value);
-                  setExportUrl(null);
-                }}
-                disabled={projectsQuery.isLoading}
-              >
-                <option value="">
-                  {projectsQuery.isLoading
-                    ? "Carregando…"
-                    : "Selecionar estudo"}
-                </option>
-                {projectsQuery.data?.map(project => (
-                  <option value={project.id} key={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {snapshot ? (
-              <Badge
-                variant="outline"
-                className="border-white/15 bg-white/5 px-3 py-1.5 text-slate-200"
-              >
-                Versão {snapshot.snapshotHash.slice(0, 12).toUpperCase()}
-              </Badge>
-            ) : null}
           </div>
         </div>
       </section>
-
-      <LiveDocumentNavigator />
 
       {hasError ? (
         <Card className="border-red-400/20 bg-red-400/[0.04]">
@@ -421,12 +626,12 @@ export default function Boardroom() {
         </Card>
       ) : null}
 
-      <section id="study-summary" className="scroll-mt-24">
+      <section id="study-executive-summary" className="scroll-mt-24">
         <div className="mb-3 flex items-end justify-between gap-4">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 07 · Indicadores</p>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 01 · Executive Summary</p>
             <p className="mt-1 text-sm text-muted-foreground">A síntese executiva que as páginas anteriores calculam.</p>
-            <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-impact")} />
+            <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-executive-summary")} />
           </div>
           {snapshot ? <Badge variant="outline" className="border-white/15 bg-white/[0.03] text-slate-200">Snapshot vivo</Badge> : null}
         </div>
@@ -455,35 +660,41 @@ export default function Boardroom() {
       </section>
 
       {snapshot && versionInputs ? (
-        <section id="study-assumptions" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 01 · Premissas</p><p className="mt-1 text-sm text-muted-foreground">O que a ficha-mãe decidiu e o que ainda está pendente antes de a operação começar.</p><ChapterFormulaTrace source="ficha_mae" memory={[]} /></div>
+        <section id="study-commercial-condition" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 03 · Commercial Condition</p><p className="mt-1 text-sm text-muted-foreground">O que a ficha-mãe decidiu e o que ainda está pendente antes de a operação começar.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-commercial-condition")} /></div>
           <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[860px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Premissa</th><th className="px-5 py-3 font-medium">Valor</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 font-medium">Origem</th></tr></thead><tbody>{(["averageTicket", "entryValuePerContract", "collectionRate", "cancellationRate", "preOperationMonths", "fixedCostMonthly", "payrollMonthly", "capexInitial"] as const).map(key => { const input = versionInputs[key]; return <tr className="border-b border-white/[0.06] text-slate-200 last:border-0" key={key}><td className="px-5 py-3 font-medium">{inputLabels[key]}</td><td className="px-5 py-3">{input?.value ? formatKpi(key, input.value) : "PENDENTE"}</td><td className="px-5 py-3"><Badge variant="outline" className={input?.status === "provided" ? "border-emerald-300/25 text-emerald-200" : "border-amber-200/25 text-amber-200"}>{input?.status === "provided" ? "INFORMADO" : "PENDENTE"}</Badge></td><td className="px-5 py-3 text-xs text-muted-foreground">{input?.sourceRef ?? "Sem fonte"}</td></tr>; })}</tbody></table></CardContent></Card>
         </section>
       ) : null}
 
+      <EmptyBoardroomChapter
+        id="study-market-icp"
+        title="Página 04 · Market / ICP"
+        description="Market / ICP sem componente autoritativo neste snapshot. O Boardroom mantém o capítulo visível sem inventar segmentação, praça ou ICP."
+      />
+
       {snapshot && calculation && documentTotals ? (
-        <section id="study-product" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 03 · Produto</p><p className="mt-1 text-sm text-muted-foreground">O produto definido na ficha-mãe antes de qualquer promessa de venda.</p><ChapterFormulaTrace source="ficha_mae" memory={[]} /></div>
+        <section id="study-product-inventory" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 02 · Product & Inventory</p><p className="mt-1 text-sm text-muted-foreground">O produto definido na ficha-mãe antes de qualquer promessa de venda.</p><ChapterFormulaTrace source="ficha_mae" memory={[]} /></div>
           <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[840px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Projeto</th><th className="px-5 py-3 font-medium">Praça</th><th className="px-5 py-3 font-medium">Início</th><th className="px-5 py-3 font-medium">Apartamentos</th><th className="px-5 py-3 font-medium">Cotas / apartamento</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-4 font-medium">{assemblyValue("nomeProjeto")}</td><td className="px-5 py-4">{assemblyValue("praca")}</td><td className="px-5 py-4">{assemblyValue("inicioOperacao")}</td><td className="px-5 py-4">{assemblyValue("totalApartamentos")}</td><td className="px-5 py-4">{assemblyValue("cotasPorApartamento")}</td></tr></tbody></table></CardContent></Card>
         </section>
       ) : null}
 
       {snapshot && calculation && documentTotals ? (
-        <section id="study-sales" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 04 · Vendas</p><p className="mt-1 text-sm text-muted-foreground">A capacidade comercial que a matriz e os canais precisam transformar em contrato.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-sales")} /></div>
+        <section id="study-captation" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 05 · Captation</p><p className="mt-1 text-sm text-muted-foreground">A capacidade comercial que a matriz e os canais precisam transformar em contrato.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-captation")} /></div>
           <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[760px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Qualificados</th><th className="px-5 py-3 font-medium">Contratos</th><th className="px-5 py-3 font-medium">Conversão realizada</th><th className="px-5 py-3 font-medium">Venda bruta</th><th className="px-5 py-3 font-medium">Ticket médio</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5 font-mono">{formatCount(documentTotals.qualifiedCouples)}</td><td className="px-5 py-5 font-mono">{formatCount(documentTotals.contracts)}</td><td className="px-5 py-5">{documentTotals.qualifiedCouples ? `${(documentTotals.contracts / documentTotals.qualifiedCouples * 100).toFixed(2)}%` : "PENDENTE"}</td><td className="px-5 py-5 text-amber-200">{formatKpi("grossSales", String(documentTotals.grossSales))}</td><td className="px-5 py-5">{documentTotals.contracts ? formatKpi("averageTicket", String(documentTotals.grossSales / documentTotals.contracts)) : "PENDENTE"}</td></tr></tbody></table></CardContent></Card>
         </section>
       ) : null}
 
       {snapshot && calculation?.pointEconomics ? (
         <section
-          id="point-economics"
+          id="study-point-economics"
           className="scroll-mt-24 space-y-4"
           data-incremental-contribution={calculation.pointEconomics.totals.value.incrementalNetContribution}
         >
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
-              Point Economics
+              Página 06 · Point Economics
             </p>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
               Capacidade, custo e valor incremental de cada ponto de captação,
@@ -562,11 +773,17 @@ export default function Boardroom() {
             })}
           </div>
         </section>
+      ) : snapshot ? (
+        <EmptyBoardroomChapter
+          id="study-point-economics"
+          title="Página 06 · Point Economics"
+          description="Point Economics ainda não informado neste snapshot. A reunião pode continuar, mas sem decisão por ponto de captação."
+        />
       ) : null}
 
       {snapshot && calculation?.commercialOperations ? (
         <section
-          id="commercial-operations"
+          id="study-sales-room"
           className="scroll-mt-24 space-y-4"
           data-commercial-operations-cost={calculation.projections[0]?.commercialOperationsCosts}
           data-commission-payments={calculation.projections[0]?.commissionPayments}
@@ -574,14 +791,15 @@ export default function Boardroom() {
         >
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
-              Commercial Operations
+              Página 07 · Sales Room
             </p>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
               Capacidade da sala, força produtiva, treinamento e comissões
-              confrontados com a produção e o caixa do snapshot.
+              Commercial Operations confronta capacidade da sala, força produtiva, treinamento e comissões com a produção e o caixa do snapshot.
             </p>
           </div>
 
+          <section id="study-workforce" className="scroll-mt-24 space-y-4">
           <Card className="border-white/10 bg-card/80 shadow-none">
             <CardHeader className="pb-3">
               <CardTitle className="text-xl">Capacidade da sala</CardTitle>
@@ -663,27 +881,48 @@ export default function Boardroom() {
               </CardContent>
             </Card>
           </div>
+          </section>
         </section>
+      ) : snapshot ? (
+        <>
+          <EmptyBoardroomChapter
+            id="study-sales-room"
+            title="Página 07 · Sales Room"
+            description="Sales Room ainda não informado neste snapshot. Capacidade física, gargalos e fila permanecem fora da decisão."
+          />
+          <EmptyBoardroomChapter
+            id="study-workforce"
+            title="Página 08 · Workforce"
+            description="Workforce ainda não informado neste snapshot. Headcount, treinamento e comissão não foram separados do caixa."
+          />
+        </>
       ) : null}
 
       {snapshot && calculation && documentTotals ? (
-        <section id="study-revenue" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 05 · Receita</p><p className="mt-1 text-sm text-muted-foreground">Da entrada contratada ao saldo parcelado e ao dinheiro líquido, respeitando calendário, prazo e MDR.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-revenue")} /></div>
+        <section id="study-payment-mix" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 10 · Payment Mix</p><p className="mt-1 text-sm text-muted-foreground">Da entrada contratada ao saldo parcelado e ao dinheiro líquido, respeitando calendário, prazo e MDR.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-payment-mix")} /></div>
           <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[980px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Entrada gerada</th><th className="px-5 py-3 font-medium">Recebíveis gerados</th><th className="px-5 py-3 font-medium">Recebíveis liquidados</th><th className="px-5 py-3 font-medium">Parcelas líquidas</th><th className="px-5 py-3 font-medium">Taxas / MDR</th><th className="px-5 py-3 font-medium">Recebimentos líquidos</th><th className="px-5 py-3 font-medium">Liquidação líquida</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5">{formatKpi("grossEntryGenerated", String(documentTotals.grossEntryGenerated))}</td><td className="px-5 py-5">{formatKpi("grossReceivablesGenerated", String(documentTotals.grossReceivablesGenerated))}</td><td className="px-5 py-5">{formatKpi("grossReceivablesSettled", String(documentTotals.grossReceivablesSettled))}</td><td className="px-5 py-5">{formatKpi("installmentCollections", String(documentTotals.installmentCollections))}</td><td className="px-5 py-5 text-rose-200">{formatKpi("paymentFees", String(documentTotals.paymentFees))}</td><td className="px-5 py-5 text-emerald-200">{formatKpi("netCollections", String(documentTotals.netCollections))}</td><td className="px-5 py-5">{documentTotals.grossReceivablesSettled ? `${((documentTotals.netCollections / documentTotals.grossReceivablesSettled) * 100).toFixed(2)}%` : "PENDENTE"}</td></tr></tbody></table></CardContent></Card>
           <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[900px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Cancelados antes do vencimento</th><th className="px-5 py-3 font-medium">Saldo inadimplente</th><th className="px-5 py-3 font-medium">Curas</th><th className="px-5 py-3 font-medium">Write-off</th><th className="px-5 py-3 font-medium">Healthy D90</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5 text-rose-200">{formatKpi("canceledReceivables", calculation.kpis.canceledReceivables)}</td><td className="px-5 py-5 text-amber-200">{formatKpi("delinquentBalance", calculation.kpis.delinquentBalance)}</td><td className="px-5 py-5 text-emerald-200">{formatKpi("curedCollections", calculation.kpis.curedCollections)}</td><td className="px-5 py-5 text-rose-200">{formatKpi("writtenOffBalance", calculation.kpis.writtenOffBalance)}</td><td className="px-5 py-5 font-mono">{formatCount(Number(calculation.kpis.healthyD90 ?? "0"))}</td></tr></tbody></table></CardContent></Card>
         </section>
       ) : null}
 
+      {snapshot && calculation ? (
+        <section id="study-portfolio-d90" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 11 · Portfolio / D90</p><p className="mt-1 text-sm text-muted-foreground">Aging, cancelamento, curas, write-off e Healthy D90 calculados pelo snapshot aprovado.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-portfolio-d90")} /></div>
+          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-5">{[["Cancelados", calculation.kpis.canceledReceivables], ["Inadimplente", calculation.kpis.delinquentBalance], ["Curas", calculation.kpis.curedCollections], ["Write-off", calculation.kpis.writtenOffBalance], ["Healthy D90", calculation.kpis.healthyD90]].map(([label, value]) => <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.025] p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 font-mono text-sm text-slate-100">{formatKpi("totalOperatingCashFlow", value)}</p></div>)}</CardContent></Card>
+        </section>
+      ) : null}
+
       {snapshot && calculation && documentTotals ? (
         <section id="study-costs" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 06 · Custos</p><p className="mt-1 text-sm text-muted-foreground">A estrutura recorrente que consome caixa enquanto a operação vende.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-costs")} /></div>
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 09 · Costs</p><p className="mt-1 text-sm text-muted-foreground">A estrutura recorrente que consome caixa enquanto a operação vende.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-costs")} /></div>
           <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[680px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Custo variável</th><th className="px-5 py-3 font-medium">Custo fixo</th><th className="px-5 py-3 font-medium">Folha</th><th className="px-5 py-3 font-medium">Custo operacional</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.variableCosts))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.fixedCosts))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.payroll))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.variableCosts + documentTotals.fixedCosts + documentTotals.payroll))}</td></tr></tbody></table></CardContent></Card>
         </section>
       ) : null}
 
       {snapshot && calculation && documentTotals ? (
-        <section id="study-operation" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 07 · Operação</p><p className="mt-1 text-sm text-muted-foreground">A transição da implantação para a operação: capital inicial, entrada de clientes e caixa em funcionamento.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-operation")} /></div>
+        <section id="study-capital" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 13 · Capital</p><p className="mt-1 text-sm text-muted-foreground">A transição da implantação para a operação: capital inicial, entrada de clientes e caixa em funcionamento.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-capital")} /></div>
           <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="grid gap-3 p-5 sm:grid-cols-3"><div><p className="text-xs text-muted-foreground">Pré-investimento</p><p className="mt-2 font-medium text-amber-200">{formatKpi("preOperationalInvestment", String(documentTotals.preOperationalInvestment))}</p></div><div><p className="text-xs text-muted-foreground">Meses de pré-operação</p><p className="mt-2 font-medium">{versionInputs?.preOperationMonths.value ?? "PENDENTE"}</p></div><div><p className="text-xs text-muted-foreground">Caixa operacional acumulado</p><p className="mt-2 font-medium">{formatKpi("totalOperatingCashFlow", kpis?.totalOperatingCashFlow)}</p></div></CardContent></Card>
         </section>
       ) : null}
@@ -697,7 +936,7 @@ export default function Boardroom() {
                   Impacto entre versões
                 </p>
                 <CardTitle className="mt-2 text-xl">
-                  O que mudou no estudo
+                  Impact waterfall · o que mudou no estudo
                 </CardTitle>
               </div>
               <Badge
@@ -897,6 +1136,216 @@ export default function Boardroom() {
               </div>
               </>
             ) : null}
+            <div className="rounded-2xl border border-amber-200/20 bg-amber-100/[0.035] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/90">
+                    Goal Seek de reunião
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    Encontre a alavanca necessária para uma meta de KPI usando o engine real. A aplicação só fica disponível quando o cálculo converge e cria uma branch auditável.
+                  </p>
+                </div>
+                <Badge variant="outline" className="border-amber-200/25 text-amber-100">
+                  {goalStatusLabel}
+                </Badge>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <Label htmlFor="boardroom-goal-target">KPI-meta</Label>
+                  <select
+                    id="boardroom-goal-target"
+                    value={goal.targetKpi}
+                    onChange={event => {
+                      const targetKpi = event.target.value as GoalSeekTargetKey;
+                      const nextTarget = GOAL_SEEK_TARGETS[targetKpi];
+                      const nextAllowedVariables =
+                        nextTarget.allowedVariables as readonly GoalSeekVariableKey[];
+                      const nextVariable =
+                        nextAllowedVariables.includes(goal.variableKey)
+                          ? goal.variableKey
+                          : nextAllowedVariables[0] ?? goal.variableKey;
+                      setGoal(previous => ({
+                        ...previous,
+                        targetKpi,
+                        variableKey: nextVariable,
+                        lowerBound: GOAL_SEEK_LEVERS[nextVariable].lowerBound,
+                        upperBound: GOAL_SEEK_LEVERS[nextVariable].upperBound,
+                      }));
+                      resetBoardroomGoalSeek();
+                    }}
+                    className="mt-1.5 h-10 w-full rounded-md border border-white/10 bg-slate-950/80 px-3 text-sm text-slate-100 outline-none focus:border-amber-200"
+                  >
+                    {Object.entries(GOAL_SEEK_TARGETS).map(([key, target]) => (
+                      <option key={key} value={key} disabled={!target.supported}>
+                        {target.label}{target.supported ? "" : " · indisponível"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor="boardroom-goal-lever">Alavanca</Label>
+                  <select
+                    id="boardroom-goal-lever"
+                    value={goal.variableKey}
+                    onChange={event => {
+                      const variableKey = event.target.value as GoalSeekVariableKey;
+                      setGoal(previous => ({
+                        ...previous,
+                        variableKey,
+                        lowerBound: GOAL_SEEK_LEVERS[variableKey].lowerBound,
+                        upperBound: GOAL_SEEK_LEVERS[variableKey].upperBound,
+                      }));
+                      resetBoardroomGoalSeek();
+                    }}
+                    className="mt-1.5 h-10 w-full rounded-md border border-white/10 bg-slate-950/80 px-3 text-sm text-slate-100 outline-none focus:border-amber-200"
+                  >
+                    {allowedGoalLevers.map(key => (
+                      <option key={key} value={key}>
+                        {GOAL_SEEK_LEVERS[key].label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor="boardroom-goal-target-value">Objetivo</Label>
+                  <Input
+                    id="boardroom-goal-target-value"
+                    inputMode="decimal"
+                    value={goal.target}
+                    onChange={event => {
+                      setGoal(previous => ({
+                        ...previous,
+                        target: normalizeDecimalInput(event.target.value),
+                      }));
+                      resetBoardroomGoalSeek();
+                    }}
+                    className="mt-1.5 bg-white/[0.03]"
+                  />
+                </div>
+                <div className="rounded-xl border border-white/8 bg-black/10 p-3">
+                  <p className="text-xs text-muted-foreground">Contrato usado</p>
+                  <p className="mt-2 text-sm font-medium text-slate-100">
+                    {selectedGoalTarget.label} por {selectedGoalLever.label}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Engine compartilhado de Scenarios, sem cálculo duplicado.
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="boardroom-goal-lower">Limite mínimo</Label>
+                  <Input
+                    id="boardroom-goal-lower"
+                    inputMode="decimal"
+                    value={goal.lowerBound}
+                    onChange={event => {
+                      setGoal(previous => ({
+                        ...previous,
+                        lowerBound: normalizeDecimalInput(event.target.value),
+                      }));
+                      resetBoardroomGoalSeek();
+                    }}
+                    className="mt-1.5 bg-white/[0.03]"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="boardroom-goal-upper">Limite máximo</Label>
+                  <Input
+                    id="boardroom-goal-upper"
+                    inputMode="decimal"
+                    value={goal.upperBound}
+                    onChange={event => {
+                      setGoal(previous => ({
+                        ...previous,
+                        upperBound: normalizeDecimalInput(event.target.value),
+                      }));
+                      resetBoardroomGoalSeek();
+                    }}
+                    className="mt-1.5 bg-white/[0.03]"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="boardroom-goal-branch">Branch auditável</Label>
+                  <Input
+                    id="boardroom-goal-branch"
+                    value={goalBranchName}
+                    onChange={event => setGoalBranchName(event.target.value)}
+                    className="mt-1.5 bg-white/[0.03]"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="boardroom-goal-reason">Racional</Label>
+                  <Input
+                    id="boardroom-goal-reason"
+                    value={goalBranchReason}
+                    onChange={event => setGoalBranchReason(event.target.value)}
+                    className="mt-1.5 bg-white/[0.03]"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  className="border-amber-200/30 bg-amber-200/[0.08] text-amber-100 hover:bg-amber-200/[0.15]"
+                  disabled={goalSeek.isPending || !goalReady || !selectedGoalTarget.supported}
+                  onClick={runBoardroomGoalSeek}
+                >
+                  {goalSeek.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Target className="mr-2 h-4 w-4" />}
+                  Executar Goal Seek
+                </Button>
+                <Button
+                  variant="outline"
+                  className="border-white/15 bg-white/[0.04] text-slate-100"
+                  onClick={resetBoardroomGoalSeek}
+                >
+                  Resetar Goal Seek
+                </Button>
+                {canApplyGoalSeek ? (
+                  <Button
+                    variant="outline"
+                    className="border-emerald-300/30 bg-emerald-300/[0.08] text-emerald-100 hover:bg-emerald-300/[0.15]"
+                    disabled={applyGoalSeek.isPending || createGoalSeekBranch.isPending || goalBranchName.trim().length < 3 || goalBranchReason.trim().length < 3}
+                    onClick={applyBoardroomGoalSeek}
+                  >
+                    {applyGoalSeek.isPending || createGoalSeekBranch.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitBranch className="mr-2 h-4 w-4" />}
+                    Aplicar em branch auditável
+                  </Button>
+                ) : null}
+              </div>
+
+              {goalSeekResult ? (
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="rounded-xl border border-white/8 bg-black/10 p-3">
+                    <p className="text-xs text-muted-foreground">Status</p>
+                    <p className="mt-2 font-medium text-slate-100">{goalStatusLabel}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/8 bg-black/10 p-3">
+                    <p className="text-xs text-muted-foreground">Resultado da alavanca</p>
+                    <p className="mt-2 font-mono text-sm text-slate-100">{goalSeekResult.result ?? "—"}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/8 bg-black/10 p-3">
+                    <p className="text-xs text-muted-foreground">Objetivo alcançado</p>
+                    <p className="mt-2 text-sm text-slate-100">{formatKpi(goal.targetKpi, goalSeekResult.objectiveValue)}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/8 bg-black/10 p-3">
+                    <p className="text-xs text-muted-foreground">Residual</p>
+                    <p className="mt-2 font-mono text-sm text-slate-100">{goalSeekResult.residual ?? "—"}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/8 bg-black/10 p-3">
+                    <p className="text-xs text-muted-foreground">Iterações</p>
+                    <p className="mt-2 font-mono text-sm text-slate-100">{goalSeekResult.iterations}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/8 bg-black/10 p-3 md:col-span-2 xl:col-span-5">
+                    <p className="text-xs text-muted-foreground">Reason</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-100">
+                      {goalSeekResult.reason ?? (goalResultMatchesSelection ? "Resultado consistente com a seleção atual." : "Resultado pertence a uma seleção anterior; execute novamente antes de aplicar.")}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -916,7 +1365,7 @@ export default function Boardroom() {
       ) : null}
 
       {snapshot && calculation ? (
-        <Card id="study-cashflow" className="scroll-mt-24 border-white/10 bg-card/80 shadow-none">
+        <Card id="study-cash" className="scroll-mt-24 border-white/10 bg-card/80 shadow-none">
           <CardHeader className="flex-row items-start justify-between space-y-0">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
@@ -925,7 +1374,7 @@ export default function Boardroom() {
               <CardTitle className="mt-2 text-xl">
                 Implantação, entrada líquida e caixa — primeiros 12 meses
               </CardTitle>
-              <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-cashflow")} />
+              <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-cash")} />
             </div>
             <Badge variant="outline" className="border-white/15 bg-white/[0.03] text-slate-200">
               Snapshot {snapshot.snapshotHash.slice(0, 8).toUpperCase()}
@@ -976,17 +1425,46 @@ export default function Boardroom() {
       ) : null}
 
       {snapshot && calculation ? (
-        <section id="study-conclusion" className="scroll-mt-24 grid gap-6 lg:grid-cols-[1.35fr_.65fr]">
+        <section id="study-risks" className="scroll-mt-24">
+          <Card className="border-amber-200/20 bg-amber-100/[0.025] shadow-none">
+            <CardHeader>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
+                Página 15 · Risks
+              </p>
+              <CardTitle className="mt-2 text-xl">Risk panel</CardTitle>
+              <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-risks")} />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {missingInputKeys.length || domainIssues.length ? (
+                <div className="rounded-xl border border-amber-200/15 bg-black/10 p-3 text-xs text-amber-100">
+                  <p className="font-medium">Pendências críticas</p>
+                  <p className="mt-1 leading-5">{[...missingInputKeys, ...domainIssues].join(" · ")}</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-emerald-300/15 bg-emerald-300/[0.05] p-3 text-xs text-emerald-100">
+                  Sem bloqueios críticos no snapshot autoritativo atual.
+                </div>
+              )}
+              <p className="text-xs leading-5 text-muted-foreground">
+                Riscos operacionais opcionais permanecem explícitos no capítulo onde faltam Market / ICP, Point Economics, Sales Room ou Workforce.
+              </p>
+            </CardContent>
+          </Card>
+        </section>
+      ) : null}
+
+      {snapshot && calculation ? (
+        <section id="study-decisions" className="scroll-mt-24 grid gap-6 lg:grid-cols-[1.35fr_.65fr]">
           <Card className="border-white/10 bg-card/80 shadow-none">
             <CardHeader className="flex-row items-start justify-between space-y-0 pb-2">
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
-                  Como o estudo chegou aqui
+                  Página 16 · Decisions
                 </p>
                 <CardTitle className="mt-2 text-xl">
-                  {activeProject?.name ?? "Estudo"}
+                  Decision panel · {activeProject?.name ?? "Estudo"}
                 </CardTitle>
-                <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-conclusion")} />
+                <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-decisions")} />
               </div>
               <Badge
                 className={
@@ -1211,5 +1689,6 @@ export default function Boardroom() {
         </Card>
       </section>
     </div>
+    </BoardroomPremiumShell>
   );
 }

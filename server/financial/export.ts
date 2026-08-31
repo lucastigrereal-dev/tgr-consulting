@@ -1,7 +1,13 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import JSZip from "jszip";
 import Decimal from "decimal.js";
-import type { FinancialCalculation } from "../../shared/financial/types";
+import { createHash } from "node:crypto";
+import {
+  FINANCIAL_INPUT_KEYS,
+  type FinancialCalculation,
+  type FinancialInput,
+  type FinancialInputSnapshot,
+} from "../../shared/financial/types";
 
 const NAVY = "0B1220";
 const PANEL = "111C2F";
@@ -10,21 +16,133 @@ const LIGHT = "E8EDF5";
 const MUTED = "93A0B4";
 const EMU = 914400;
 
+export type ExportPackScenarioComparisonEntry = {
+  versionId: string;
+  kind: "working" | "scenario" | "approval" | "baseline";
+  state: "draft" | "in_review" | "approved" | "baseline";
+  isImmutable: boolean;
+  label: string;
+  reason: string | null;
+  snapshotId: string | null;
+  snapshotHash: string | null;
+  comparisonStatus: "comparable" | "not_comparable";
+  horizonMonths: number | null;
+  asOfMonth: number | null;
+  kpis: FinancialCalculation["kpis"] | null;
+};
+
+export type ExportPackScenarioComparison = {
+  source: "persisted_scenario_snapshots.v1";
+  baseSnapshotHash: string;
+  selectionHash: string;
+  entries: ExportPackScenarioComparisonEntry[];
+};
+
 export type ExportableSnapshot = FinancialCalculation & {
   snapshotHash: string;
+  exportPackHash: string;
+  effectiveInputs?: FinancialInputSnapshot;
+  authoritativeDomains?: Record<string, unknown>;
+  domainBlockers?: string[];
+  domainInvalidities?: string[];
+  scenarioComparison?: ExportPackScenarioComparison;
 };
+
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+    .join(",")}}`;
+}
+
+function sha256(value: unknown): string {
+  return createHash("sha256").update(stableSerialize(value)).digest("hex");
+}
+
+export function createScenarioComparisonPayload(params: {
+  baseSnapshotHash: string;
+  entries: ExportPackScenarioComparisonEntry[];
+}): ExportPackScenarioComparison {
+  if (!params.baseSnapshotHash)
+    throw new Error("Comparação de cenários exige hash do snapshot-base.");
+  const entries = [...params.entries]
+    .map(entry => ({
+      ...entry,
+      reason: entry.reason ?? null,
+      snapshotId: entry.snapshotId ?? null,
+      snapshotHash: entry.snapshotHash ?? null,
+      comparisonStatus: entry.comparisonStatus,
+      horizonMonths: entry.horizonMonths ?? null,
+      asOfMonth: entry.asOfMonth ?? null,
+      kpis: entry.kpis ?? null,
+    }))
+    .sort((left, right) => {
+      const leftIsBase = left.snapshotHash === params.baseSnapshotHash ? 0 : 1;
+      const rightIsBase = right.snapshotHash === params.baseSnapshotHash ? 0 : 1;
+      return (
+        leftIsBase - rightIsBase ||
+        left.kind.localeCompare(right.kind) ||
+        left.label.localeCompare(right.label) ||
+        left.versionId.localeCompare(right.versionId)
+      );
+    });
+  const selectionHash = sha256({
+    source: "persisted_scenario_snapshots.v1",
+    baseSnapshotHash: params.baseSnapshotHash,
+    entries: entries.map(entry => ({
+      versionId: entry.versionId,
+      kind: entry.kind,
+      state: entry.state,
+      label: entry.label,
+      snapshotId: entry.snapshotId,
+      snapshotHash: entry.snapshotHash,
+      comparisonStatus: entry.comparisonStatus,
+      horizonMonths: entry.horizonMonths,
+      asOfMonth: entry.asOfMonth,
+    })),
+  });
+  return {
+    source: "persisted_scenario_snapshots.v1",
+    baseSnapshotHash: params.baseSnapshotHash,
+    selectionHash,
+    entries,
+  };
+}
+
+export function createExportPackHash(params: {
+  snapshotHash: string;
+  scenarioComparison?: ExportPackScenarioComparison;
+}): string {
+  return sha256({
+    source: "investor_export_pack.v1",
+    snapshotHash: params.snapshotHash,
+    scenarioSelectionHash: params.scenarioComparison?.selectionHash ?? null,
+  });
+}
 
 export function createExportableSnapshot(
   calculation: FinancialCalculation,
-  snapshotHash: string
+  snapshotHash: string,
+  scenarioComparison?: ExportPackScenarioComparison
 ): ExportableSnapshot {
   if (!snapshotHash)
     throw new Error("Snapshot autoritativo sem hash não pode ser exportado.");
-  return { ...calculation, snapshotHash };
+  return {
+    ...calculation,
+    snapshotHash,
+    scenarioComparison,
+    exportPackHash: createExportPackHash({ snapshotHash, scenarioComparison }),
+  };
 }
 
 function shortHash(hash: string) {
   return hash.slice(0, 12).toUpperCase();
+}
+function displayHash(hash: string | null | undefined): string {
+  return hash ? shortHash(hash) : "SEM HASH";
 }
 function display(value: string | null): string {
   return value ?? "N/D";
@@ -64,6 +182,86 @@ function xlsxNumberCell(
 
 function xlsxRow(index: number, cells: string[]): string {
   return `<row r="${index}">${cells.join("")}</row>`;
+}
+
+const KPI_ROWS: Array<[string, keyof ExportableSnapshot["kpis"]]> = [
+  ["Venda bruta", "grossSales"],
+  ["Entrada bruta gerada", "grossEntryGenerated"],
+  ["Recebíveis brutos gerados", "grossReceivablesGenerated"],
+  ["Recebíveis brutos liquidados", "grossReceivablesSettled"],
+  ["Parcelas líquidas recebidas", "installmentCollections"],
+  ["Recebíveis cancelados", "canceledReceivables"],
+  ["Saldo inadimplente", "delinquentBalance"],
+  ["Recebimentos recuperados", "curedCollections"],
+  ["Saldo baixado para perda", "writtenOffBalance"],
+  ["Healthy D90 esperado", "healthyD90"],
+  ["Receita reconhecida", "recognizedRevenue"],
+  ["Taxas de pagamento", "paymentFees"],
+  ["Investimento pre-operacional", "preOperationalInvestment"],
+  ["Caixa operacional", "totalOperatingCashFlow"],
+  ["VPL", "npv"],
+  ["TIR anual", "irrAnnual"],
+  ["Payback em meses", "paybackMonths"],
+];
+
+function inputPayload(snapshot: ExportableSnapshot) {
+  return snapshot.effectiveInputs;
+}
+
+function textValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "N/D";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function domainRecords(snapshot: ExportableSnapshot) {
+  const domains = snapshot.authoritativeDomains ?? {};
+  const rows: Array<[string, string, string, string, string]> = [
+    ["snapshot", "hash", snapshot.status, "snapshot", snapshot.snapshotHash],
+    ["snapshot", "formulaSet", snapshot.status, "formula", snapshot.formulaSetVersion],
+    ["snapshot", "engine", snapshot.status, "engine", snapshot.engineVersion],
+  ];
+  const pushRecord = (domain: string, label: string, record: Record<string, unknown>) => {
+    rows.push([
+      domain,
+      label,
+      textValue(record.status),
+      textValue(record.sourceType),
+      textValue(record.sourceRef),
+    ]);
+  };
+  const productCatalog = domains.productCatalog as { records?: Array<Record<string, unknown>> } | undefined;
+  productCatalog?.records?.forEach(record =>
+    pushRecord("product_catalog", textValue(record.skuCode), record)
+  );
+  const commercialConditions = domains.commercialConditions as Array<Record<string, unknown>> | undefined;
+  commercialConditions?.forEach(record =>
+    pushRecord("commercial_conditions", textValue(record.productSkuCode), record)
+  );
+  const receivablesPolicy = domains.receivablesPolicy as Record<string, unknown> | null | undefined;
+  if (receivablesPolicy) pushRecord("receivables_policy", "policy", receivablesPolicy);
+  const capturePoints = domains.capturePoints as { definitions?: Array<Record<string, unknown>> } | undefined;
+  capturePoints?.definitions?.forEach(record => {
+    const definition = record.definition as Record<string, unknown> | undefined;
+    pushRecord("capture_points", textValue(definition?.pointId ?? definition?.name), record);
+  });
+  const commercialOperations = domains.commercialOperations as Record<string, unknown> | null | undefined;
+  if (commercialOperations) pushRecord("commercial_operations", "operations", commercialOperations);
+  return rows;
+}
+
+function scenarioComparisonRows(snapshot: ExportableSnapshot) {
+  const comparison = snapshot.scenarioComparison;
+  if (!comparison || comparison.entries.length === 0) {
+    return ["Snapshot sem cenários anexados", "Sem comparação fabricada."];
+  }
+  return [
+    `Pack ${displayHash(snapshot.exportPackHash)} · seleção ${displayHash(comparison.selectionHash)}`,
+    ...comparison.entries.map(entry =>
+      `${entry.label} · ${entry.kind}/${entry.state} · ${entry.comparisonStatus} · horizonte ${entry.horizonMonths ?? "N/D"} · data-base M${entry.asOfMonth ?? "N/D"} · snapshot ${displayHash(entry.snapshotHash)} · VPL ${display(entry.kpis?.npv ?? null)} · caixa ${display(entry.kpis?.totalOperatingCashFlow ?? null)}`
+    ),
+  ];
 }
 
 function shape(
@@ -219,6 +417,89 @@ export async function buildBoardroomPdf(
   page.drawText(
     "TGR Consulting · Este arquivo não substitui as premissas e a decisão aprovada no sistema.",
     { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71) }
+  );
+  const addChapterPage = (
+    title: string,
+    subtitle: string,
+    rows: string[],
+  ) => {
+    const chapter = pdf.addPage([842, 595]);
+    chapter.drawRectangle({
+      x: 0,
+      y: 0,
+      width: 842,
+      height: 595,
+      color: rgb(0.043, 0.071, 0.125),
+    });
+    chapter.drawText(title, {
+      x: 44,
+      y: 538,
+      size: 10,
+      font: bold,
+      color: rgb(0.91, 0.74, 0.35),
+    });
+    chapter.drawText(subtitle, {
+      x: 44,
+      y: 504,
+      size: 21,
+      font: bold,
+      color: rgb(0.91, 0.93, 0.96),
+      maxWidth: 740,
+    });
+    rows.slice(0, 11).forEach((row, index) => {
+      chapter.drawText(row, {
+        x: 54,
+        y: 452 - index * 36,
+        size: 9,
+        font: index === 0 ? bold : regular,
+        color: index === 0 ? rgb(0.91, 0.93, 0.96) : rgb(0.58, 0.63, 0.71),
+        maxWidth: 730,
+      });
+    });
+    chapter.drawText(`HASH ${shortHash(snapshot.snapshotHash)}`, {
+      x: 44,
+      y: 28,
+      size: 8,
+      font: bold,
+      color: rgb(0.91, 0.74, 0.35),
+    });
+  };
+  const inputs = inputPayload(snapshot);
+  addChapterPage(
+    "INPUTS E PROVENIÊNCIA",
+    "Premissas, status e fontes carregadas pelo snapshot",
+    inputs
+      ? FINANCIAL_INPUT_KEYS.slice(0, 10).map(key => {
+          const input = inputs[key];
+          return `${key}: ${input.status === "provided" ? display(input.value ?? null) : "PENDENTE"} · ${input.sourceType} · ${input.sourceRef ?? "sem fonte"}`;
+        })
+      : ["Snapshot sem input payload", "O exportador não inventa premissas ausentes."],
+  );
+  addChapterPage(
+    "PROJEÇÃO MENSAL",
+    "Primeiros meses reconciliados com a projeção do snapshot",
+    snapshot.projections.length
+      ? snapshot.projections.slice(0, 10).map(row =>
+          `M${row.month}: vendas ${row.grossSales} · caixa ${row.operatingCashFlow} · acumulado ${row.cumulativeCashFlow}`
+        )
+      : ["Snapshot sem projeção mensal carregada."],
+  );
+  addChapterPage(
+    "CENÁRIOS",
+    "Estado dos cenários anexados ao snapshot",
+    scenarioComparisonRows(snapshot),
+  );
+  addChapterPage(
+    "FÓRMULAS E OUTPUTS",
+    "Memória de cálculo e KPIs autoritativos",
+    [
+      ...snapshot.memory.slice(0, 5).map(memory =>
+        `${memory.formulaId}@${memory.formulaVersion}: ${memory.label} = ${display(memory.value)}`
+      ),
+      ...KPI_ROWS.slice(0, 5).map(([label, key]) =>
+        `${label}: ${display(snapshot.kpis[key])}`
+      ),
+    ],
   );
   if (snapshot.pointEconomics) {
     const pointsPage = pdf.addPage([842, 595]);
@@ -468,6 +749,64 @@ export async function buildBoardroomPptx(
       ),
   ].join("");
   const slide = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${slideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
+  const chapterSlide = (title: string, subtitle: string, rows: string[]) => {
+    const shapes = [
+      shape(2, "Background", 0, 0, 13.333, 7.5, NAVY),
+      shape(3, "Title", 0.55, 0.45, 8.5, 0.55, NAVY, title, { color: LIGHT, size: 2500, bold: true, margin: 0 }),
+      shape(4, "Subtitle", 0.55, 1.08, 10.5, 0.3, NAVY, subtitle, { color: MUTED, size: 980, margin: 0 }),
+      ...rows.slice(0, 8).map((row, index) =>
+        shape(
+          5 + index,
+          `${title} row ${index + 1}`,
+          0.55,
+          1.72 + index * 0.55,
+          12.22,
+          0.42,
+          PANEL,
+          row,
+          { color: index === 0 ? LIGHT : MUTED, size: 760, margin: 0.07, line: "263750" }
+        )
+      ),
+      shape(20, "Hash", 0.55, 6.95, 8, 0.2, NAVY, `HASH ${shortHash(snapshot.snapshotHash)}`, { color: GOLD, size: 700, bold: true, margin: 0 }),
+    ].join("");
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${shapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
+  };
+  const inputs = inputPayload(snapshot);
+  const supplementalSlides = [
+    chapterSlide(
+      "Inputs e Proveniência",
+      "Status, fonte e valor do snapshot exportado",
+      inputs
+        ? FINANCIAL_INPUT_KEYS.slice(0, 8).map(key => {
+            const input = inputs[key];
+            return `${key}: ${input.status === "provided" ? display(input.value ?? null) : "PENDENTE"} | ${input.sourceType} | ${input.sourceRef ?? "sem fonte"}`;
+          })
+        : ["Snapshot sem input payload", "Sem premissas fabricadas no artefato."],
+    ),
+    chapterSlide(
+      "Monthly Projection",
+      "Primeiros meses carregados do snapshot",
+      snapshot.projections.length
+        ? snapshot.projections.slice(0, 8).map(row =>
+            `M${row.month}: vendas ${row.grossSales} | caixa ${row.operatingCashFlow} | acumulado ${row.cumulativeCashFlow}`
+          )
+        : ["Snapshot sem projeção mensal carregada."],
+    ),
+    chapterSlide(
+      "Scenarios",
+      "Cenários anexados ou estado honesto de ausência",
+      scenarioComparisonRows(snapshot),
+    ),
+    chapterSlide(
+      "Formulas",
+      "Memória versionada de cálculo",
+      snapshot.memory.length
+        ? snapshot.memory.slice(0, 8).map(memory =>
+            `${memory.formulaId}@${memory.formulaVersion} | ${memory.label}: ${display(memory.value)}`
+          )
+        : ["Snapshot sem memória de fórmulas carregada."],
+    ),
+  ];
   const pointSlideShapes = snapshot.pointEconomics
     ? [
         shape(2, "Background", 0, 0, 13.333, 7.5, NAVY),
@@ -504,7 +843,8 @@ export async function buildBoardroomPptx(
   const pointSlide = pointSlideShapes
     ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${pointSlideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
     : null;
-  const operationsSlideNumber = pointSlide ? 3 : 2;
+  const pointSlideNumber = supplementalSlides.length + 2;
+  const operationsSlideNumber = pointSlide ? pointSlideNumber + 1 : pointSlideNumber;
   const operationsSlideShapes = snapshot.commercialOperations
     ? [
         shape(2, "Background", 0, 0, 13.333, 7.5, NAVY),
@@ -554,10 +894,22 @@ export async function buildBoardroomPptx(
   const operationsSlide = operationsSlideShapes
     ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${operationsSlideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
     : null;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>${pointSlide ? '<Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>' : ""}${operationsSlide ? `<Override PartName="/ppt/slides/slide${operationsSlideNumber}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>` : ""}<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
+  const slideFiles = [slide, ...supplementalSlides];
+  if (pointSlide) slideFiles.push(pointSlide);
+  if (operationsSlide) slideFiles.push(operationsSlide);
+  const slideContentTypes = slideFiles
+    .map((_, index) => `<Override PartName="/ppt/slides/slide${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`)
+    .join("");
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>${slideContentTypes}<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
   const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`;
-  const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/>${pointSlide ? '<p:sldId id="257" r:id="rId6"/>' : ""}${operationsSlide ? '<p:sldId id="258" r:id="rId7"/>' : ""}</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/><p:defaultTextStyle/></p:presentation>`;
-  const presentationRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>${pointSlide ? '<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>' : ""}${operationsSlide ? `<Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${operationsSlideNumber}.xml"/>` : ""}</Relationships>`;
+  const presentationSlideIds = slideFiles
+    .map((_, index) => `<p:sldId id="${256 + index}" r:id="rId${index + 2}"/>`)
+    .join("");
+  const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst>${presentationSlideIds}</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/><p:defaultTextStyle/></p:presentation>`;
+  const presentationSlideRels = slideFiles
+    .map((_, index) => `<Relationship Id="rId${index + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${index + 1}.xml"/>`)
+    .join("");
+  const presentationRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>${presentationSlideRels}<Relationship Id="rId${slideFiles.length + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/><Relationship Id="rId${slideFiles.length + 3}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/><Relationship Id="rId${slideFiles.length + 4}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/></Relationships>`;
   const bareSpTree = `<p:spTree>${groups}</p:spTree>`;
   const master = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld name="TGR Master">${bareSpTree}</p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="1" r:id="rId1"/></p:sldLayoutIdLst><p:txStyles/></p:sldMaster>`;
   const layout = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1"><p:cSld name="Blank">${bareSpTree}</p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
@@ -569,16 +921,10 @@ export async function buildBoardroomPptx(
   zip.file("_rels/.rels", rootRels);
   zip.file("ppt/presentation.xml", presentation);
   zip.file("ppt/_rels/presentation.xml.rels", presentationRels);
-  zip.file("ppt/slides/slide1.xml", slide);
-  zip.file("ppt/slides/_rels/slide1.xml.rels", slideRels);
-  if (pointSlide) {
-    zip.file("ppt/slides/slide2.xml", pointSlide);
-    zip.file("ppt/slides/_rels/slide2.xml.rels", slideRels);
-  }
-  if (operationsSlide) {
-    zip.file(`ppt/slides/slide${operationsSlideNumber}.xml`, operationsSlide);
-    zip.file(`ppt/slides/_rels/slide${operationsSlideNumber}.xml.rels`, slideRels);
-  }
+  slideFiles.forEach((file, index) => {
+    zip.file(`ppt/slides/slide${index + 1}.xml`, file);
+    zip.file(`ppt/slides/_rels/slide${index + 1}.xml.rels`, slideRels);
+  });
   zip.file("ppt/slideMasters/slideMaster1.xml", master);
   zip.file("ppt/slideMasters/_rels/slideMaster1.xml.rels", masterRels);
   zip.file("ppt/slideLayouts/slideLayout1.xml", layout);
@@ -611,77 +957,54 @@ export async function buildBoardroomXlsx(
   snapshot: ExportableSnapshot
 ): Promise<Buffer> {
   const zip = new JSZip();
-  const kpiRows: Array<[string, string | null | undefined]> = [
-    ["Venda bruta", snapshot.kpis.grossSales],
-    ["Entrada bruta gerada", snapshot.kpis.grossEntryGenerated],
-    ["Recebíveis brutos gerados", snapshot.kpis.grossReceivablesGenerated],
-    ["Recebíveis brutos liquidados", snapshot.kpis.grossReceivablesSettled],
-    ["Parcelas líquidas recebidas", snapshot.kpis.installmentCollections],
-    ["Recebíveis cancelados", snapshot.kpis.canceledReceivables],
-    ["Saldo inadimplente", snapshot.kpis.delinquentBalance],
-    ["Recebimentos recuperados", snapshot.kpis.curedCollections],
-    ["Saldo baixado para perda", snapshot.kpis.writtenOffBalance],
-    ["Healthy D90 esperado", snapshot.kpis.healthyD90],
-    ["Receita reconhecida", snapshot.kpis.recognizedRevenue],
-    ["Taxas de pagamento", snapshot.kpis.paymentFees],
-    ["Investimento pre-operacional", snapshot.kpis.preOperationalInvestment],
-    ["Caixa operacional", snapshot.kpis.totalOperatingCashFlow],
-    ["VPL", snapshot.kpis.npv],
-    ["TIR anual", snapshot.kpis.irrAnnual],
-    ["Payback em meses", snapshot.kpis.paybackMonths],
-  ];
-  const summaryRows = [
-    xlsxRow(1, [xlsxTextCell("A1", "TGR Consulting - Snapshot autoritativo")]),
-    xlsxRow(2, [
-      xlsxTextCell("A2", "Snapshot hash"),
-      xlsxTextCell("B2", snapshot.snapshotHash),
-    ]),
-    xlsxRow(3, [
-      xlsxTextCell("A3", "Formula set"),
-      xlsxTextCell("B3", snapshot.formulaSetVersion),
-    ]),
-    xlsxRow(4, [
-      xlsxTextCell("A4", "Engine"),
-      xlsxTextCell("B4", snapshot.engineVersion),
-    ]),
-    xlsxRow(5, [
-      xlsxTextCell("A5", "Status"),
-      xlsxTextCell("B5", snapshot.status),
-    ]),
-    xlsxRow(6, [
-      xlsxTextCell("A6", "Horizonte (meses)"),
-      xlsxNumberCell("B6", snapshot.horizonMonths),
-    ]),
-    xlsxRow(8, [
-      xlsxTextCell("A8", "KPI"),
-      xlsxTextCell("B8", "Valor autoritativo"),
-    ]),
-    ...kpiRows.map(([label, value], offset) => {
-      const row = offset + 9;
-      return xlsxRow(row, [
-        xlsxTextCell(`A${row}`, label),
-        xlsxNumberCell(`B${row}`, value),
-      ]);
-    }),
-  ].join("");
-  const memoryRows = [
+  const columnName = (index: number) => String.fromCharCode(65 + index);
+  const inputs = inputPayload(snapshot);
+  const inputsRows = [
     xlsxRow(1, [
-      xlsxTextCell("A1", "KPI"),
-      xlsxTextCell("B1", "Valor"),
-      xlsxTextCell("C1", "Formula"),
-      xlsxTextCell("D1", "Expressao"),
-      xlsxTextCell("E1", "Dependencias"),
-      xlsxTextCell("F1", "Explicacao"),
+      xlsxTextCell("A1", "Input"),
+      xlsxTextCell("B1", "Status"),
+      xlsxTextCell("C1", "Valor"),
+      xlsxTextCell("D1", "Tipo de fonte"),
+      xlsxTextCell("E1", "Fonte"),
     ]),
-    ...snapshot.memory.map((memory, offset) => {
+    ...(inputs
+      ? FINANCIAL_INPUT_KEYS.map((key, offset) => {
+          const row = offset + 2;
+          const input: FinancialInput = inputs[key];
+          return xlsxRow(row, [
+            xlsxTextCell(`A${row}`, key),
+            xlsxTextCell(`B${row}`, input.status),
+            input.status === "provided"
+              ? xlsxNumberCell(`C${row}`, input.value)
+              : xlsxTextCell(`C${row}`, "PENDENTE"),
+            xlsxTextCell(`D${row}`, input.sourceType),
+            xlsxTextCell(`E${row}`, input.sourceRef ?? "N/D"),
+          ]);
+        })
+      : [
+          xlsxRow(2, [
+            xlsxTextCell("A2", "Snapshot sem input payload"),
+            xlsxTextCell("B2", snapshot.status),
+            xlsxTextCell("E2", "Sem premissas fabricadas"),
+          ]),
+        ]),
+  ].join("");
+  const provenanceRows = [
+    xlsxRow(1, [
+      xlsxTextCell("A1", "Domínio"),
+      xlsxTextCell("B1", "Registro"),
+      xlsxTextCell("C1", "Status"),
+      xlsxTextCell("D1", "Tipo de fonte"),
+      xlsxTextCell("E1", "Fonte / evidência"),
+    ]),
+    ...domainRecords(snapshot).map(([domain, label, status, sourceType, sourceRef], offset) => {
       const row = offset + 2;
       return xlsxRow(row, [
-        xlsxTextCell(`A${row}`, memory.label),
-        xlsxNumberCell(`B${row}`, memory.value),
-        xlsxTextCell(`C${row}`, `${memory.formulaId}@${memory.formulaVersion}`),
-        xlsxTextCell(`D${row}`, memory.expression),
-        xlsxTextCell(`E${row}`, memory.dependencies.join(", ")),
-        xlsxTextCell(`F${row}`, memory.explanation),
+        xlsxTextCell(`A${row}`, domain),
+        xlsxTextCell(`B${row}`, label),
+        xlsxTextCell(`C${row}`, status),
+        xlsxTextCell(`D${row}`, sourceType),
+        xlsxTextCell(`E${row}`, sourceRef),
       ]);
     }),
   ].join("");
@@ -715,7 +1038,6 @@ export async function buildBoardroomXlsx(
     ["cumulativeCashFlow", "Caixa acumulado"],
     ["discountedCashFlow", "Fluxo descontado"],
   ];
-  const columnName = (index: number) => String.fromCharCode(65 + index);
   const projectionRows = [
     xlsxRow(
       1,
@@ -731,6 +1053,116 @@ export async function buildBoardroomXlsx(
           xlsxNumberCell(`${columnName(index)}${row}`, projection[key])
         )
       );
+    }),
+  ].join("");
+  const comparison = snapshot.scenarioComparison;
+  const scenarioRows = [
+    xlsxRow(1, [
+      xlsxTextCell("A1", "Cenário"),
+      xlsxTextCell("B1", "Tipo"),
+      xlsxTextCell("C1", "Estado"),
+      xlsxTextCell("D1", "Snapshot ID"),
+      xlsxTextCell("E1", "Snapshot Hash"),
+      xlsxTextCell("F1", "VPL"),
+      xlsxTextCell("G1", "Caixa operacional"),
+      xlsxTextCell("H1", "Fonte / seleção"),
+      xlsxTextCell("I1", "Comparabilidade"),
+      xlsxTextCell("J1", "Horizonte"),
+      xlsxTextCell("K1", "Data-base"),
+    ]),
+    ...(comparison && comparison.entries.length
+      ? [
+          xlsxRow(2, [
+            xlsxTextCell("A2", "Export pack hash"),
+            xlsxTextCell("B2", snapshot.exportPackHash),
+            xlsxTextCell("C2", "Scenario selection hash"),
+            xlsxTextCell("D2", comparison.selectionHash),
+            xlsxTextCell("E2", comparison.baseSnapshotHash),
+            xlsxTextCell("H2", comparison.source),
+          ]),
+          ...comparison.entries.map((entry, offset) => {
+            const row = offset + 3;
+            return xlsxRow(row, [
+              xlsxTextCell(`A${row}`, entry.label),
+              xlsxTextCell(`B${row}`, entry.kind),
+              xlsxTextCell(`C${row}`, entry.state),
+              xlsxTextCell(`D${row}`, entry.snapshotId ?? "SEM SNAPSHOT"),
+              xlsxTextCell(`E${row}`, entry.snapshotHash ?? "SEM HASH"),
+              xlsxNumberCell(`F${row}`, entry.kpis?.npv),
+              xlsxNumberCell(`G${row}`, entry.kpis?.totalOperatingCashFlow),
+              xlsxTextCell(`H${row}`, entry.reason ?? "Snapshot persistido"),
+              xlsxTextCell(`I${row}`, entry.comparisonStatus),
+              xlsxNumberCell(`J${row}`, entry.horizonMonths),
+              xlsxNumberCell(`K${row}`, entry.asOfMonth),
+            ]);
+          }),
+        ]
+      : [
+          xlsxRow(2, [
+            xlsxTextCell("A2", "Snapshot sem cenários anexados"),
+            xlsxTextCell("B2", "sem_dados"),
+            xlsxTextCell("H2", "Sem cenário inventado"),
+          ]),
+        ]),
+  ].join("");
+  const formulaRows = [
+    xlsxRow(1, [
+      xlsxTextCell("A1", "KPI"),
+      xlsxTextCell("B1", "Valor"),
+      xlsxTextCell("C1", "Formula"),
+      xlsxTextCell("D1", "Expressao"),
+      xlsxTextCell("E1", "Dependencias"),
+      xlsxTextCell("F1", "Explicacao"),
+    ]),
+    ...(snapshot.memory.length
+      ? snapshot.memory.map((memory, offset) => {
+          const row = offset + 2;
+          return xlsxRow(row, [
+            xlsxTextCell(`A${row}`, memory.label),
+            xlsxNumberCell(`B${row}`, memory.value),
+            xlsxTextCell(`C${row}`, `${memory.formulaId}@${memory.formulaVersion}`),
+            xlsxTextCell(`D${row}`, memory.expression),
+            xlsxTextCell(`E${row}`, memory.dependencies.join(", ")),
+            xlsxTextCell(`F${row}`, memory.explanation),
+          ]);
+        })
+      : [
+          xlsxRow(2, [
+            xlsxTextCell("A2", "Snapshot sem memória de fórmulas carregada"),
+          ]),
+        ]),
+  ].join("");
+  const outputRows = [
+    xlsxRow(1, [
+      xlsxTextCell("A1", "Output"),
+      xlsxTextCell("B1", "Valor"),
+      xlsxTextCell("C1", "Status do snapshot"),
+      xlsxTextCell("D1", "Hash"),
+      xlsxTextCell("E1", "Observação"),
+    ]),
+    ...KPI_ROWS.map(([label, key], offset) => {
+      const row = offset + 2;
+      return xlsxRow(row, [
+        xlsxTextCell(`A${row}`, label),
+        xlsxNumberCell(`B${row}`, snapshot.kpis[key]),
+        xlsxTextCell(`C${row}`, snapshot.status),
+        xlsxTextCell(`D${row}`, snapshot.snapshotHash),
+        xlsxTextCell(`E${row}`, snapshot.missingInputKeys.join(", ")),
+      ]);
+    }),
+    ...(snapshot.domainBlockers ?? []).map((blocker, offset) => {
+      const row = KPI_ROWS.length + offset + 2;
+      return xlsxRow(row, [
+        xlsxTextCell(`A${row}`, "Domain blocker"),
+        xlsxTextCell(`E${row}`, blocker),
+      ]);
+    }),
+    ...(snapshot.domainInvalidities ?? []).map((invalidity, offset) => {
+      const row = KPI_ROWS.length + (snapshot.domainBlockers?.length ?? 0) + offset + 2;
+      return xlsxRow(row, [
+        xlsxTextCell(`A${row}`, "Domain invalidity"),
+        xlsxTextCell(`E${row}`, invalidity),
+      ]);
     }),
   ].join("");
   const pointHeaders = [
@@ -962,35 +1394,31 @@ export async function buildBoardroomXlsx(
   const operationsRowsXml = operationsRows.join("");
   const worksheet = (rows: string, maxColumn: string, maxRow: number) =>
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${maxColumn}${Math.max(1, maxRow)}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/><sheetData>${rows}</sheetData></worksheet>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet5.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  const sheets = [
+    { name: "Inputs", rows: inputsRows, maxColumn: "E", maxRow: inputs ? FINANCIAL_INPUT_KEYS.length + 1 : 2 },
+    { name: "Statuses &amp; Sources", rows: provenanceRows, maxColumn: "E", maxRow: domainRecords(snapshot).length + 1 },
+    { name: "Monthly Projection", rows: projectionRows, maxColumn: "Z", maxRow: snapshot.projections.length + 1 },
+    { name: "Scenarios", rows: scenarioRows, maxColumn: "H", maxRow: comparison && comparison.entries.length ? comparison.entries.length + 2 : 2 },
+    { name: "Formulas", rows: formulaRows, maxColumn: "F", maxRow: Math.max(2, snapshot.memory.length + 1) },
+    { name: "Outputs", rows: outputRows, maxColumn: "E", maxRow: KPI_ROWS.length + (snapshot.domainBlockers?.length ?? 0) + (snapshot.domainInvalidities?.length ?? 0) + 1 },
+    { name: "Point Economics", rows: pointRows, maxColumn: "S", maxRow: (snapshot.pointEconomics?.points.length ?? 0) + 2 },
+    { name: "Commercial Operations", rows: operationsRowsXml, maxColumn: "P", maxRow: operationsRowIndex - 1 },
+  ];
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
   const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
-  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Resumo" sheetId="1" r:id="rId1"/><sheet name="Memoria de calculo" sheetId="2" r:id="rId2"/><sheet name="Projecao mensal" sheetId="3" r:id="rId3"/><sheet name="Point Economics" sheetId="4" r:id="rId4"/><sheet name="Commercial Operations" sheetId="5" r:id="rId5"/></sheets></workbook>`;
-  const workbookRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet4.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet5.xml"/><Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sheet, index) => `<sheet name="${sheet.name}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets></workbook>`;
+  const workbookRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Aptos"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>`;
   zip.file("[Content_Types].xml", contentTypes);
   zip.file("_rels/.rels", rootRels);
   zip.file("xl/workbook.xml", workbook);
   zip.file("xl/_rels/workbook.xml.rels", workbookRels);
   zip.file("xl/styles.xml", styles);
-  zip.file(
-    "xl/worksheets/sheet1.xml",
-    worksheet(summaryRows, "B", kpiRows.length + 8)
-  );
-  zip.file(
-    "xl/worksheets/sheet2.xml",
-    worksheet(memoryRows, "F", snapshot.memory.length + 1)
-  );
-  zip.file(
-    "xl/worksheets/sheet3.xml",
-    worksheet(projectionRows, "Z", snapshot.projections.length + 1)
-  );
-  zip.file(
-    "xl/worksheets/sheet4.xml",
-    worksheet(pointRows, "S", (snapshot.pointEconomics?.points.length ?? 0) + 2)
-  );
-  zip.file(
-    "xl/worksheets/sheet5.xml",
-    worksheet(operationsRowsXml, "P", operationsRowIndex - 1)
-  );
+  sheets.forEach((sheet, index) => {
+    zip.file(
+      `xl/worksheets/sheet${index + 1}.xml`,
+      worksheet(sheet.rows, sheet.maxColumn, sheet.maxRow)
+    );
+  });
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 }

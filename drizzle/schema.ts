@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   int,
@@ -83,6 +84,7 @@ export const projectVersions = mysqlTable(
     state: mysqlEnum("state", ["draft", "in_review", "approved", "baseline"]).default("draft").notNull(),
     isImmutable: boolean("isImmutable").default(false).notNull(),
     inputHash: varchar("inputHash", { length: 64 }).notNull(),
+    financialRevision: int("financialRevision").default(0).notNull(),
     createdBy: int("createdBy").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -330,6 +332,7 @@ export const calculationSnapshots = mysqlTable(
     projectVersionId: varchar("projectVersionId", { length: 64 }).notNull(),
     formulaSetVersionId: varchar("formulaSetVersionId", { length: 64 }).notNull(),
     horizonMonths: int("horizonMonths").notNull(),
+    asOfMonth: int("asOfMonth").default(0).notNull(),
     inputHash: varchar("inputHash", { length: 64 }).notNull(),
     snapshotHash: varchar("snapshotHash", { length: 64 }).notNull(),
     calculationStatus: mysqlEnum("calculationStatus", ["valid", "blocked_by_pending_inputs", "invalid"]).notNull(),
@@ -337,10 +340,14 @@ export const calculationSnapshots = mysqlTable(
     isAuthoritative: boolean("isAuthoritative").default(false).notNull(),
     payload: json("payload").notNull(),
     createdBy: int("createdBy").notNull(),
+    createdOrdinal: bigint("createdOrdinal", { mode: "number", unsigned: true })
+      .autoincrement()
+      .notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => [
     uniqueIndex("calculation_snapshots_hash_unique").on(table.snapshotHash),
+    uniqueIndex("calculation_snapshots_created_ordinal_unique").on(table.createdOrdinal),
     index("calculation_snapshots_version_idx").on(table.projectVersionId),
     index("calculation_snapshots_authority_idx").on(table.isAuthoritative, table.validationStatus),
   ],

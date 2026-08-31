@@ -23,6 +23,8 @@ import {
   getProjectForTenant,
   getScenarioComparisonForTenant,
   getInputsForVersion,
+  PROJECT_GOAL_SEEK_KPIS,
+  PROJECT_GOAL_SEEK_VARIABLES,
   listBuilderComponentsForTenant,
   listCostCatalogForTenant,
   listCommercialConditionsForTenant,
@@ -40,6 +42,8 @@ import {
   upsertBuilderComponentForTenant,
   upsertCommercialConditionForTenant,
   upsertReceivablesPolicyForTenant,
+  type ProjectGoalSeekKpi,
+  type ProjectGoalSeekVariable,
 } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 
@@ -47,6 +51,8 @@ const tenantIdFromUser = (userId: number) => userId;
 const provenanceSourceSchema = z.enum(["current_decision", "current_document", "historical_primary", "derived_analysis", "external_benchmark", "assumption"]);
 const builderComponentSchema = z.enum(["project_assembly", "product_stock", "pricing_payments", "acquisition_capacity", "costs_workforce", "commissions_partners", "receivables_losses", "capex_opex"]);
 const costCategorySchema = z.enum(["payroll", "occupancy", "technology", "marketing", "partner", "legal", "operations", "other"]);
+const goalSeekTargetSchema = z.enum(PROJECT_GOAL_SEEK_KPIS as [ProjectGoalSeekKpi, ...ProjectGoalSeekKpi[]]);
+const goalSeekVariableSchema = z.enum(PROJECT_GOAL_SEEK_VARIABLES as [ProjectGoalSeekVariable, ...ProjectGoalSeekVariable[]]);
 
 const nonNegativeDecimalSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
 const unitRateSchema = nonNegativeDecimalSchema.refine(value => Number(value) <= 1, {
@@ -563,16 +569,20 @@ export const igrRouter = router({
     .input(z.object({ snapshotId: z.string().min(1), format: z.enum(["pdf", "pptx", "xlsx"]) }))
     .mutation(({ ctx, input }) => generateAuthorizedExportForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   goalSeek: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: z.enum(["npv", "totalOperatingCashFlow", "healthyD90"]), variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate"]), target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: goalSeekTargetSchema, variableKey: goalSeekVariableSchema, target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
     .mutation(({ ctx, input }) => runProjectGoalSeekForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
   applyGoalSeek: protectedProcedure
     .input(z.object({
       targetVersionId: z.string().min(1),
       sourceVersionId: z.string().min(1),
-      variableKey: z.enum(["qualifiedCouplesMonth1", "conversionRate"]),
+      horizonMonths: z.number().int().min(1).max(120).default(120),
+      asOfMonth: z.number().int().min(0).max(1200).default(0),
+      variableKey: goalSeekVariableSchema,
       value: nonNegativeDecimalSchema,
-      targetKpi: z.enum(["npv", "totalOperatingCashFlow", "healthyD90"]),
+      targetKpi: goalSeekTargetSchema,
       target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/),
+      lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(),
+      upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(),
       objectiveValue: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/),
       residual: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/),
       iterations: z.number().int().min(1).max(1000),

@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Request, Response } from "express";
+import { EventEmitter } from "node:events";
 import { OAUTH_STATE_COOKIE } from "@shared/const";
 import {
   createRateLimitMiddleware,
+  createRequestIdMiddleware,
+  createRequestLoggingMiddleware,
+  createSecurityHeadersMiddleware,
   getDefaultBodyLimit,
+  getTrustProxySetting,
 } from "./index";
 import {
   DEV_OAUTH_STATE_COOKIE,
@@ -33,9 +38,11 @@ function response() {
     body: undefined as unknown,
     redirectedTo: "",
   };
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
+    statusCode: 200,
     status(code: number) {
       result.statusCode = code;
+      res.statusCode = code;
       return res;
     },
     set(name: string, value: string) {
@@ -55,14 +62,211 @@ function response() {
       result.redirectedTo = url;
       return res;
     },
-  } as unknown as Response;
+  }) as unknown as Response;
   return { res, result };
 }
 
 describe("security hardening", () => {
+  it("não confia em proxy por padrão e não deixa X-Forwarded-For burlar rate limit", () => {
+    expect(getTrustProxySetting({})).toBe(false);
+    expect(getTrustProxySetting({ TRUST_PROXY: "1" })).toBe(1);
+    expect(getTrustProxySetting({ TRUST_PROXY: "loopback" })).toBe("loopback");
+
+    const middleware = createRateLimitMiddleware({
+      maxRequests: 1,
+      windowMs: 10_000,
+      now: () => 1_000,
+    });
+    const next = vi.fn();
+
+    middleware(
+      request({
+        headers: { "x-forwarded-for": "198.51.100.1" },
+        socket: { remoteAddress: "203.0.113.10" } as Request["socket"],
+        ip: undefined,
+      }),
+      response().res,
+      next
+    );
+    const second = response();
+    middleware(
+      request({
+        headers: { "x-forwarded-for": "198.51.100.2" },
+        socket: { remoteAddress: "203.0.113.10" } as Request["socket"],
+        ip: undefined,
+      }),
+      second.res,
+      next
+    );
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(second.result.statusCode).toBe(429);
+  });
+
   it("usa limite global de body pequeno por padrão", () => {
     expect(getDefaultBodyLimit()).toBe("1mb");
   });
+
+  it("aplica headers mínimos de segurança e HSTS só quando HTTPS em produção", () => {
+    const middleware = createSecurityHeadersMiddleware({ isProduction: true });
+    const secure = response();
+    middleware(request({ protocol: "https", secure: true }), secure.res, vi.fn());
+
+    expect(secure.result.headers["Content-Security-Policy"]).toContain("default-src 'self'");
+    expect(secure.result.headers["X-Content-Type-Options"]).toBe("nosniff");
+    expect(secure.result.headers["Referrer-Policy"]).toBe("strict-origin-when-cross-origin");
+    expect(secure.result.headers["X-Frame-Options"]).toBe("SAMEORIGIN");
+    expect(secure.result.headers["Strict-Transport-Security"]).toContain("max-age=31536000");
+
+    const local = response();
+    middleware(request({ protocol: "http", secure: false }), local.res, vi.fn());
+    expect(local.result.headers["Strict-Transport-Security"]).toBeUndefined();
+  });
+
+  it("mantém CSP de produção sem scripts inline e compatível com Google Fonts", () => {
+    const middleware = createSecurityHeadersMiddleware({ isProduction: true });
+    const secure = response();
+
+    middleware(request({ protocol: "https", secure: true }), secure.res, vi.fn());
+
+    const csp = secure.result.headers["Content-Security-Policy"];
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(csp).toContain(
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
+    );
+    expect(csp).toContain("font-src 'self' data: https://fonts.gstatic.com");
+  });
+
+  it("valida ou gera correlation id e devolve no header", () => {
+    const middleware = createRequestIdMiddleware();
+    const next = vi.fn();
+    const valid = response();
+    const req = request({ headers: { "x-request-id": "req_ABC-123.def" } });
+
+    middleware(req, valid.res, next);
+
+    expect(req.requestId).toBe("req_ABC-123.def");
+    expect(valid.result.headers["X-Request-Id"]).toBe("req_ABC-123.def");
+    expect(next).toHaveBeenCalledTimes(1);
+
+    const invalid = response();
+    const reqWithInvalidId = request({ headers: { "x-request-id": "Bearer secret-token" } });
+    middleware(reqWithInvalidId, invalid.res, vi.fn());
+
+    expect(reqWithInvalidId.requestId).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    expect(reqWithInvalidId.requestId).not.toBe("Bearer secret-token");
+    expect(invalid.result.headers["X-Request-Id"]).toBe(reqWithInvalidId.requestId);
+  });
+
+  it("emite logs estruturados com request id sem expor segredos", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const error = vi.fn();
+    const middleware = createRequestLoggingMiddleware({
+      logger: { info, warn, error },
+      now: () => 1_000,
+    });
+    const req = request({
+      method: "POST",
+      originalUrl: "/api/trpc/igr.calculate?token=secret-token",
+      requestId: "req-safe",
+      headers: { authorization: "Bearer secret-token" },
+    });
+    const { res } = response();
+    const next = vi.fn();
+
+    middleware(req, res, next);
+    res.emit("finish");
+
+    expect(next).toHaveBeenCalledTimes(1);
+    const payload = info.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      event: "request.completed",
+      requestId: "req-safe",
+      method: "POST",
+      statusCode: 200,
+    });
+    expect(payload.route).toBe("/api/trpc/igr.calculate");
+    expect(JSON.stringify(payload)).not.toContain("secret-token");
+    expect(JSON.stringify(payload)).not.toContain("authorization");
+  });
+
+  it("não emite logs ruidosos para assets estáticos ou healthcheck", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const error = vi.fn();
+    const middleware = createRequestLoggingMiddleware({
+      logger: { info, warn, error },
+      now: () => 1_000,
+    });
+
+    const staticAsset = response();
+    middleware(
+      request({ method: "GET", originalUrl: "/assets/index-Bw5qYCYg.js" }),
+      staticAsset.res,
+      vi.fn()
+    );
+    staticAsset.res.emit("finish");
+
+    const health = response();
+    middleware(
+      request({ method: "GET", originalUrl: "/api/trpc/system.health" }),
+      health.res,
+      vi.fn()
+    );
+    health.res.emit("finish");
+
+    const calculation = response();
+    middleware(
+      request({ method: "POST", originalUrl: "/api/trpc/igr.calculate" }),
+      calculation.res,
+      vi.fn()
+    );
+    calculation.res.emit("finish");
+
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]?.[0]).toMatchObject({
+      event: "request.completed",
+      surface: "calculation",
+      route: "/api/trpc/igr.calculate",
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("log de erro de request preserva superfície sem stack e sem segredo", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const error = vi.fn();
+    const middleware = createRequestLoggingMiddleware({
+      logger: { info, warn, error },
+      now: () => 1_000,
+    });
+    const req = request({
+      method: "POST",
+      originalUrl: "/api/trpc/igr.calculate",
+      requestId: "req-error",
+    });
+    const { res } = response();
+    const next = vi.fn();
+
+    middleware(req, res, next);
+    res.emit("error", new Error("boom Bearer secret-token"));
+
+    expect(next).toHaveBeenCalledTimes(1);
+    const payload = error.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      event: "request.error",
+      requestId: "req-error",
+      route: "/api/trpc/igr.calculate",
+    });
+    expect(JSON.stringify(payload)).toContain("[REDACTED]");
+    expect(JSON.stringify(payload)).not.toContain("secret-token");
+    expect(JSON.stringify(payload)).not.toContain("stack");
+  });
+
 
   it("limita requisições por IP com resposta 429 e Retry-After", () => {
     let now = 1_000;
@@ -89,6 +293,31 @@ describe("security hardening", () => {
     const afterWindow = response();
     middleware(request(), afterWindow.res, next);
     expect(next).toHaveBeenCalledTimes(3);
+  });
+
+  it("mantém rate limiter com limite real de buckets e despejo LRU", () => {
+    const middleware = createRateLimitMiddleware({
+      maxRequests: 1,
+      windowMs: 10_000,
+      maxBuckets: 2,
+      now: () => 1_000,
+    });
+    const next = vi.fn();
+
+    middleware(request({ ip: "203.0.113.1" }), response().res, next);
+    middleware(request({ ip: "203.0.113.2" }), response().res, next);
+
+    const refreshFirst = response();
+    middleware(request({ ip: "203.0.113.1" }), refreshFirst.res, next);
+    expect(refreshFirst.result.statusCode).toBe(429);
+
+    middleware(request({ ip: "203.0.113.3" }), response().res, next);
+
+    const evictedSecond = response();
+    middleware(request({ ip: "203.0.113.2" }), evictedSecond.res, next);
+
+    expect(evictedSecond.result.statusCode).toBe(200);
+    expect(next).toHaveBeenCalledTimes(4);
   });
 
   it("usa cookie OAuth __Host seguro em HTTPS e cookie local compatível em HTTP", () => {

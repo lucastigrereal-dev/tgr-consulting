@@ -99,6 +99,20 @@
       "when": 1788123381044,
       "tag": "0013_lifecycle_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1788136759093,
+      "tag": "0014_snapshot_analytical_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1788137422793,
+      "tag": "0015_financial_revision",
+      "breakpoints": true
     }
   ]
 }

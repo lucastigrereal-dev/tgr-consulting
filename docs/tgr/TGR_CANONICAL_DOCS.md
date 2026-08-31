@@ -13,15 +13,15 @@ Em caso de divergência, não se corrige cálculo por texto: primeiro se cria um
 
 | Tema | Autoridade no repositório |
 | --- | --- |
-| Produto e jornada | `docs/igr-spec/03_PRD_V1.md`, `docs/igr-spec/19_TGR_LIVE_DOCUMENT_MODEL.md`, `docs/igr-spec/21_TGR_DOCUMENT_EXPERIENCE.md` |
-| Arquitetura | `docs/igr-spec/02_ARCHITECTURE_DECISION_RECORD.md`, `docs/igr-spec/05_BLUEPRINT.md` |
-| Motor e fórmulas | `shared/financial/formulas.ts`, `shared/financial/engine.ts` e respectivos testes |
-| Dados e lifecycle | `drizzle/schema.ts`, `drizzle/*.sql`, `server/db.ts` e testes de integração |
+| Produto e jornada | `docs/tgr/TGR_PRODUCT_BRD.md` |
+| Arquitetura | `docs/tgr/TGR_ARCHITECTURE.md` |
+| Motor e fórmulas | `docs/tgr/TGR_FORMULA_REGISTRY.md`, `shared/financial/formulas.ts`, `shared/financial/engine.ts` e respectivos testes |
+| Dados e lifecycle | `docs/tgr/TGR_DATA_MODEL.md`, `drizzle/schema.ts`, `drizzle/*.sql`, `server/db.ts` e testes de integração |
 | Point Economics | `shared/financial/pointEconomics.ts` e testes |
 | Operação comercial | `shared/financial/commercialOperations.ts` e testes |
 | E2E | `docs/tgr/TGR_E2E_MATRIX.md` |
-| Segurança | `docs/tgr/TGR_SECURITY_CHECKLIST.md` |
-| Operação | `docs/tgr/TGR_OPERATIONAL_RUNBOOK.md` |
+| Segurança | `docs/tgr/TGR_SECURITY.md`, `docs/tgr/TGR_SECURITY_CHECKLIST.md` |
+| Operação | `docs/tgr/TGR_RUNBOOK.md`, `docs/tgr/TGR_OPERATIONAL_RUNBOOK.md` |
 | Evidência de certificação | `docs/tgr/TGR_VERIFICATION_RECEIPT.md` |
 | Pendências honestas | `docs/tgr/TGR_KNOWN_ISSUES.md` |
 | Receipt | `docs/tgr/TGR_FINAL_DELIVERY.md` |

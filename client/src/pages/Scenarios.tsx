@@ -11,6 +11,13 @@ import {
 } from "@/lib/financialPresentation";
 import { trpc } from "@/lib/trpc";
 import {
+  GOAL_SEEK_LEVERS,
+  GOAL_SEEK_TARGETS,
+  type GoalSeekTargetKey,
+  type GoalSeekVariableKey,
+} from "@shared/financial/goalseek";
+import type { GoalSeekResult } from "@shared/financial/types";
+import {
   AlertTriangle,
   ArrowRight,
   Calculator,
@@ -23,15 +30,9 @@ import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
-const goalVariables = {
-  qualifiedCouplesMonth1: "Casais qualificados — mês 1",
-  conversionRate: "Conversão",
-} as const;
-const goalKpis = {
-  npv: "VPL",
-  totalOperatingCashFlow: "Caixa operacional",
-  healthyD90: "Healthy D90",
-} as const;
+const goalVariables = GOAL_SEEK_LEVERS;
+const goalKpis = GOAL_SEEK_TARGETS;
+const SCENARIO_GOAL_SEEK_HORIZON_MONTHS = 120;
 
 export type ScenarioVersionCandidate = {
   id: string;
@@ -80,17 +81,25 @@ export function coerceAsOfMonthInput(value: string | number) {
 }
 
 export type GoalSeekSelection = {
-  variableKey: keyof typeof goalVariables;
+  targetKpi: GoalSeekTargetKey;
+  variableKey: GoalSeekVariableKey;
   target: string;
   lowerBound: string;
   upperBound: string;
 };
 
 export type GoalSeekResultSelection = {
+  targetKpi?: string;
   variableKey: string;
   target: string;
   lowerBound: string;
   upperBound: string;
+};
+
+type GoalSeekRunContext = {
+  versionId: string;
+  horizonMonths: number;
+  asOfMonth: number;
 };
 
 function decimalTextEquals(left: string, right: string) {
@@ -109,11 +118,44 @@ export function goalSeekResultMatchesSelection(
 ) {
   return (
     Boolean(result) &&
+    result?.targetKpi === selection.targetKpi &&
     result?.variableKey === selection.variableKey &&
     decimalTextEquals(result.target, selection.target) &&
     decimalTextEquals(result.lowerBound, selection.lowerBound) &&
     decimalTextEquals(result.upperBound, selection.upperBound)
   );
+}
+
+export function createScenarioGoalSeekApplyPayload({
+  targetVersionId,
+  sourceVersionId,
+  horizonMonths,
+  asOfMonth,
+  selection,
+  result,
+}: {
+  targetVersionId: string;
+  sourceVersionId: string;
+  horizonMonths: number;
+  asOfMonth: number;
+  selection: GoalSeekSelection;
+  result: GoalSeekResult & { result: string; objectiveValue: string; residual: string };
+}) {
+  return {
+    targetVersionId,
+    sourceVersionId,
+    variableKey: selection.variableKey,
+    value: result.result,
+    targetKpi: selection.targetKpi,
+    target: result.target,
+    objectiveValue: result.objectiveValue,
+    residual: result.residual,
+    iterations: result.iterations,
+    horizonMonths,
+    asOfMonth,
+    lowerBound: result.lowerBound,
+    upperBound: result.upperBound,
+  };
 }
 
 export default function Scenarios() {
@@ -123,16 +165,17 @@ export default function Scenarios() {
   const [reason, setReason] = useState(
     "Testar impacto de premissas comerciais."
   );
-  const [goal, setGoal] = useState({
-    targetKpi: "npv" as keyof typeof goalKpis,
-    variableKey: "qualifiedCouplesMonth1" as keyof typeof goalVariables,
+  const [goal, setGoal] = useState<GoalSeekSelection>({
+    targetKpi: "npv" as GoalSeekTargetKey,
+    variableKey: "qualifiedCouplesMonth1" as GoalSeekVariableKey,
     target: "0",
-    lowerBound: "0",
-    upperBound: "100",
+    lowerBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.lowerBound,
+    upperBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.upperBound,
   });
   const [capital, setCapital] = useState("");
   const [asOfMonth, setAsOfMonth] = useState(0);
-  const [goalRunVersionId, setGoalRunVersionId] = useState("");
+  const [goalRunContext, setGoalRunContext] =
+    useState<GoalSeekRunContext | null>(null);
   const contextQuery = trpc.igr.projectContext.useQuery(
     { projectId },
     { enabled: Boolean(projectId), retry: false }
@@ -166,13 +209,13 @@ export default function Scenarios() {
   });
   const resetGoalSeekResult = () => {
     goalSeek.reset();
-    setGoalRunVersionId("");
+    setGoalRunContext(null);
   };
   const applyGoalSeek = trpc.igr.applyGoalSeek.useMutation();
   const capitalEnvelope = trpc.igr.capitalEnvelope.useQuery(
     {
       versionId: activeVersionId || "placeholder",
-      horizonMonths: 120,
+      horizonMonths: SCENARIO_GOAL_SEEK_HORIZON_MONTHS,
       asOfMonth,
       availableCapital: capital || "0",
     },
@@ -215,17 +258,20 @@ export default function Scenarios() {
         });
         targetVersionId = branch.versionId;
       }
-      const applied = await applyGoalSeek.mutateAsync({
+      const goalSeekApplyPayload = createScenarioGoalSeekApplyPayload({
         targetVersionId,
-        sourceVersionId: goalRunVersionId || activeVersionId,
-        variableKey: goal.variableKey,
-        value: result.result,
-        targetKpi: goal.targetKpi,
-        target: result.target,
-        objectiveValue: result.objectiveValue,
-        residual: result.residual,
-        iterations: result.iterations,
+        sourceVersionId: goalRunContext?.versionId || activeVersionId,
+        horizonMonths:
+          goalRunContext?.horizonMonths ?? SCENARIO_GOAL_SEEK_HORIZON_MONTHS,
+        asOfMonth: goalRunContext?.asOfMonth ?? asOfMonth,
+        selection: goal,
+        result: result as GoalSeekResult & {
+          result: string;
+          objectiveValue: string;
+          residual: string;
+        },
       });
+      const applied = await applyGoalSeek.mutateAsync(goalSeekApplyPayload);
       await Promise.all([contextQuery.refetch(), comparisonQuery.refetch()]);
       toast.success(
         applied.idempotent
@@ -479,13 +525,13 @@ export default function Scenarios() {
                       resetGoalSeekResult();
                       setGoal(current => ({
                         ...current,
-                        targetKpi: event.target.value as keyof typeof goalKpis,
+                        targetKpi: event.target.value as GoalSeekTargetKey,
                       }));
                     }}
                   >
-                    {Object.entries(goalKpis).map(([key, label]) => (
+                    {Object.entries(goalKpis).map(([key, target]) => (
                       <option value={key} key={key}>
-                        {label}
+                        {target.label}
                       </option>
                     ))}
                   </select>
@@ -499,19 +545,19 @@ export default function Scenarios() {
                     onChange={event => {
                       resetGoalSeekResult();
                       const variableKey = event.target
-                        .value as keyof typeof goalVariables;
+                        .value as GoalSeekVariableKey;
+                      const lever = GOAL_SEEK_LEVERS[variableKey];
                       setGoal(current => ({
                         ...current,
                         variableKey,
-                        lowerBound: "0",
-                        upperBound:
-                          variableKey === "conversionRate" ? "1" : "100",
+                        lowerBound: lever.lowerBound,
+                        upperBound: lever.upperBound,
                       }));
                     }}
                   >
-                    {Object.entries(goalVariables).map(([key, label]) => (
+                    {Object.entries(goalVariables).map(([key, variable]) => (
                       <option value={key} key={key}>
-                        {label}
+                        {variable.label}
                       </option>
                     ))}
                   </select>
@@ -546,11 +592,16 @@ export default function Scenarios() {
                   className="bg-amber-400 text-slate-950 hover:bg-amber-300"
                   disabled={goalSeek.isPending || !goalReady}
                   onClick={() => {
-                    setGoalRunVersionId(activeVersionId);
-                    goalSeek.mutate({
+                    const runContext = {
                       versionId: activeVersionId,
-                      horizonMonths: 120,
+                      horizonMonths: SCENARIO_GOAL_SEEK_HORIZON_MONTHS,
                       asOfMonth,
+                    };
+                    setGoalRunContext(runContext);
+                    goalSeek.mutate({
+                      versionId: runContext.versionId,
+                      horizonMonths: runContext.horizonMonths,
+                      asOfMonth: runContext.asOfMonth,
                       ...goal,
                     });
                   }}
@@ -573,8 +624,22 @@ export default function Scenarios() {
                     >
                       {result.status === "converged"
                         ? "CONVERGIU"
-                        : "LIMITE ATINGIDO"}
+                        : result.status === "unsupported"
+                          ? "NÃO SUPORTADO"
+                          : result.status === "infeasible"
+                            ? "INVIÁVEL"
+                            : result.status === "unreachable"
+                              ? "INALCANÇÁVEL"
+                              : "LIMITE ATINGIDO"}
                     </Badge>
+                    {"reason" in result && result.reason ? (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-200/30 text-amber-100"
+                      >
+                        {result.reason}
+                      </Badge>
+                    ) : null}
                     <Badge
                       variant="outline"
                       className="border-white/15 text-slate-200"

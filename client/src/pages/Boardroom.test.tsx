@@ -5,10 +5,24 @@ import { calculateFinancialProjection } from "@shared/financial/engine";
 import { calculateCommercialOperations } from "@shared/financial/commercialOperations";
 import { calculatePointEconomics } from "@shared/financial/pointEconomics";
 import type { FinancialCalculation, FinancialInputSnapshot } from "@shared/financial/types";
+import { LIVE_DOCUMENT_CHAPTERS } from "@/lib/liveDocumentStructure";
 
 const state = vi.hoisted(() => ({
   calculation: null as FinancialCalculation | null,
   workingVersion: { id: "version-1" } as { id: string } | null,
+  goalSeekResult: null as {
+    status: string;
+    targetKpi: string;
+    variableKey: string;
+    target: string;
+    lowerBound: string;
+    upperBound: string;
+    result: string | null;
+    objectiveValue: string | null;
+    residual: string | null;
+    iterations: number;
+    reason?: string | null;
+  } | null,
 }));
 
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "lucas" } }) }));
@@ -48,11 +62,19 @@ vi.mock("@/lib/trpc", () => ({
       freezeBaseline: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
       requestExport: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
       simulateCaptadores: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
+      goalSeek: { useMutation: () => ({ isPending: false, mutate: () => undefined, data: state.goalSeekResult }) },
+      createScenario: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ versionId: "goal-branch-1" }) }) },
+      applyGoalSeek: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ versionId: "goal-branch-1" }) }) },
     },
   },
 }));
 
-import Boardroom from "./Boardroom";
+import Boardroom, {
+  canApplyBoardroomGoalSeekResult,
+  createBoardroomGoalSeekApplyPayload,
+  type BoardroomGoalSeekResult,
+  type BoardroomGoalSeekSelection,
+} from "./Boardroom";
 
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const, sourceRef: "boardroom-ui-test" });
 const pending = () => ({ status: "pending" as const, sourceType: "assumption" as const, sourceRef: "boardroom-ui-test" });
@@ -131,6 +153,7 @@ describe("Boardroom · trilha editorial", () => {
   beforeEach(() => {
     state.calculation = null;
     state.workingVersion = { id: "version-1" };
+    state.goalSeekResult = null;
   });
 
   it("renderiza um snapshot calculado com origem ficha-mãe e fórmulas versionadas nos capítulos do estudo", () => {
@@ -140,23 +163,140 @@ describe("Boardroom · trilha editorial", () => {
     state.calculation = calculation;
 
     const html = renderToStaticMarkup(<Boardroom />);
-    expect(html).toContain("Página 01 · Premissas");
+    expect(html).toContain('data-boardroom-shell="premium"');
+    for (const chapter of LIVE_DOCUMENT_CHAPTERS) {
+      expect(html).toContain(chapter.href.slice(1));
+      expect(html).toContain(chapter.title.replaceAll("&", "&amp;"));
+    }
+    expect(html).toContain("Página 01 · Executive Summary");
     expect(html).toContain("Origem: ficha-mãe e premissas autoritativas");
-    expect(html).toContain("Página 04 · Vendas");
+    expect(html).toContain("Página 05 · Captation");
     expect(html).toContain("gross-sales · v1.2.0");
-    expect(html).toContain("Página 05 · Receita");
+    expect(html).toContain("Página 10 · Payment Mix");
     expect(html).toContain("gross-receivables-generated · v1.0.0");
     expect(html).toContain("installment-collections · v1.1.0");
     expect(html).toContain("healthy-d90 · v1.0.0");
     expect(html).toContain("Saldo inadimplente");
     expect(html).toContain("net-entry-collections · v1.3.0");
-    expect(html).toContain("Página 06 · Custos");
-    expect(html).toContain("Página 07 · Operação");
+    expect(html).toContain("Página 09 · Costs");
+    expect(html).toContain("Página 13 · Capital");
     expect(html).toContain("Demonstrativo vivo");
     expect(html).toContain("Simulação de reunião");
-    expect(html).toContain("Página 07 · Indicadores");
-    expect(html).toContain("Como o estudo chegou aqui");
+    expect(html).toContain("Goal Seek de reunião");
+    expect(html).toContain("Executar Goal Seek");
+    expect(html).toContain("Decision panel");
     expect(html).toContain("operating-cash-flow · v1.2.0");
+  });
+
+  it("só libera aplicação auditável de Goal Seek quando o resultado convergiu e bate com a seleção", () => {
+    const selection: BoardroomGoalSeekSelection = {
+      targetKpi: "npv",
+      variableKey: "qualifiedCouplesMonth1",
+      target: "100000.00000000",
+      lowerBound: "0.00000000",
+      upperBound: "100000.00000000",
+    };
+    const converged: BoardroomGoalSeekResult = {
+      ...selection,
+      status: "converged",
+      result: "120.00000000",
+      objectiveValue: "100000.00000001",
+      residual: "0.00000001",
+      iterations: 14,
+    };
+
+    expect(canApplyBoardroomGoalSeekResult(converged, selection)).toBe(true);
+    expect(canApplyBoardroomGoalSeekResult({ ...converged, status: "infeasible", reason: "Meta fora do intervalo." }, selection)).toBe(false);
+    expect(canApplyBoardroomGoalSeekResult({ ...converged, target: "200000.00000000" }, selection)).toBe(false);
+  });
+
+  it("mostra status, reason e aplicação em branch auditável para Goal Seek convergido", () => {
+    const calculation = calculateFinancialProjection(inputs, 24);
+    expect(calculation.status).toBe("valid");
+    if (calculation.status !== "valid") return;
+    state.calculation = calculation;
+    state.goalSeekResult = {
+      status: "converged",
+      targetKpi: "npv",
+      variableKey: "qualifiedCouplesMonth1",
+      target: "0.00000000",
+      lowerBound: "0.00000000",
+      upperBound: "100000.00000000",
+      result: "120.00000000",
+      objectiveValue: "1.00000000",
+      residual: "0.00000000",
+      iterations: 9,
+      reason: "Convergência encontrada.",
+    };
+
+    const html = renderToStaticMarkup(<Boardroom />);
+
+    expect(html).toContain("Goal Seek de reunião");
+    expect(html).toContain("CONVERGIU");
+    expect(html).toContain("Convergência encontrada.");
+    expect(html).toContain("Casais qualificados - mês 1");
+    expect(html).toContain("120.00000000");
+    expect(html).toContain("Aplicar em branch auditável");
+  });
+
+  it("preserva horizonte do snapshot, mês autoritativo e bounds exatos no payload de aplicação", () => {
+    const payload = createBoardroomGoalSeekApplyPayload({
+      targetVersionId: "boardroom-branch-3",
+      sourceVersionId: "snapshot-version-2",
+      horizonMonths: 37,
+      asOfMonth: 4,
+      selection: {
+        targetKpi: "totalOperatingCashFlow",
+        variableKey: "averageTicket",
+        target: "500000.00000000",
+        lowerBound: "900.00000000",
+        upperBound: "2800.00000000",
+      },
+      result: {
+        status: "converged",
+        targetKpi: "totalOperatingCashFlow",
+        variableKey: "averageTicket",
+        target: "500000.00000000",
+        lowerBound: "900.00000000",
+        upperBound: "2800.00000000",
+        result: "1850.00000000",
+        objectiveValue: "500000.00000002",
+        residual: "0.00000002",
+        iterations: 17,
+      },
+    });
+
+    expect(payload).toEqual({
+      targetVersionId: "boardroom-branch-3",
+      sourceVersionId: "snapshot-version-2",
+      variableKey: "averageTicket",
+      value: "1850.00000000",
+      targetKpi: "totalOperatingCashFlow",
+      target: "500000.00000000",
+      objectiveValue: "500000.00000002",
+      residual: "0.00000002",
+      iterations: 17,
+      horizonMonths: 37,
+      asOfMonth: 4,
+      lowerBound: "900.00000000",
+      upperBound: "2800.00000000",
+    });
+  });
+
+  it("mostra estados vazios honestos para capítulos sem domínio autoritativo", () => {
+    const calculation = calculateFinancialProjection(inputs, 24);
+    expect(calculation.status).toBe("valid");
+    if (calculation.status !== "valid") return;
+    state.calculation = calculation;
+
+    const html = renderToStaticMarkup(<Boardroom />);
+
+    expect(html).toContain("Market / ICP sem componente autoritativo");
+    expect(html).toContain("Point Economics ainda não informado");
+    expect(html).toContain("Sales Room ainda não informado");
+    expect(html).toContain("Workforce ainda não informado");
+    expect(html).toContain("Risk panel");
+    expect(html).toContain("Decision panel");
   });
 
   it("usa a versão do snapshot quando não há working version ativa", () => {
@@ -168,8 +308,8 @@ describe("Boardroom · trilha editorial", () => {
 
     const html = renderToStaticMarkup(<Boardroom />);
 
-    expect(html).toContain("Página 01 · Premissas");
-    expect(html).toContain("Página 03 · Produto");
+    expect(html).toContain("Página 01 · Executive Summary");
+    expect(html).toContain("Página 02 · Product &amp; Inventory");
     expect(html).toContain("Estudo de Teste");
   });
 

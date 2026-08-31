@@ -1,15 +1,27 @@
-export const LIVE_DOCUMENT_CHAPTERS = [
-  { number: "01", title: "Montagem", href: "/builder", external: true, formulaIds: [] },
-  { number: "02", title: "Premissas", href: "#study-assumptions", formulaIds: [] },
-  { number: "03", title: "Produto", href: "#study-product", formulaIds: [] },
-  { number: "04", title: "Vendas", href: "#study-sales", formulaIds: ["gross-sales"] },
-  { number: "05", title: "Receita", href: "#study-revenue", formulaIds: ["gross-entry-generated", "gross-receivables-generated", "canceled-receivables", "delinquent-balance", "cured-collections", "written-off-balance", "healthy-d90", "net-entry-collections", "payment-terms-net-settlement"] },
-  { number: "06", title: "Custos", href: "#study-costs", formulaIds: ["commercial-team-monthly-cost", "operating-cash-flow"] },
-  { number: "07", title: "Operação", href: "#study-operation", formulaIds: ["pre-operational-investment", "commercial-team-monthly-cost", "operating-cash-flow"] },
-  { number: "08", title: "Caixa", href: "#study-cashflow", formulaIds: ["net-entry-collections", "payment-terms-net-settlement", "pre-operational-investment", "commercial-team-monthly-cost", "operating-cash-flow"] },
-  { number: "09", title: "Cenários", href: "#study-scenarios", formulaIds: ["operating-cash-flow", "npv", "irr", "payback"] },
-  { number: "10", title: "Indicadores", href: "#study-impact", formulaIds: ["npv", "irr", "payback"] },
-  { number: "11", title: "Conclusão", href: "#study-conclusion", formulaIds: ["operating-cash-flow", "npv", "irr", "payback"] },
+export type LiveDocumentChapter = {
+  number: string;
+  title: string;
+  href: string;
+  formulaIds: readonly string[];
+};
+
+export const LIVE_DOCUMENT_CHAPTERS: readonly LiveDocumentChapter[] = [
+  { number: "01", title: "Executive Summary", href: "#study-executive-summary", formulaIds: ["npv", "irr", "payback", "operating-cash-flow"] },
+  { number: "02", title: "Product & Inventory", href: "#study-product-inventory", formulaIds: [] },
+  { number: "03", title: "Commercial Condition", href: "#study-commercial-condition", formulaIds: ["gross-entry-generated", "payment-terms-net-settlement"] },
+  { number: "04", title: "Market / ICP", href: "#study-market-icp", formulaIds: [] },
+  { number: "05", title: "Captation", href: "#study-captation", formulaIds: ["gross-sales"] },
+  { number: "06", title: "Point Economics", href: "#study-point-economics", formulaIds: ["gross-sales", "healthy-d90"] },
+  { number: "07", title: "Sales Room", href: "#study-sales-room", formulaIds: ["gross-sales"] },
+  { number: "08", title: "Workforce", href: "#study-workforce", formulaIds: ["commercial-team-monthly-cost"] },
+  { number: "09", title: "Costs", href: "#study-costs", formulaIds: ["commercial-team-monthly-cost", "operating-cash-flow"] },
+  { number: "10", title: "Payment Mix", href: "#study-payment-mix", formulaIds: ["net-entry-collections", "payment-terms-net-settlement"] },
+  { number: "11", title: "Portfolio / D90", href: "#study-portfolio-d90", formulaIds: ["gross-receivables-generated", "canceled-receivables", "delinquent-balance", "cured-collections", "written-off-balance", "healthy-d90"] },
+  { number: "12", title: "Cash", href: "#study-cash", formulaIds: ["net-entry-collections", "pre-operational-investment", "commercial-team-monthly-cost", "operating-cash-flow"] },
+  { number: "13", title: "Capital", href: "#study-capital", formulaIds: ["pre-operational-investment", "operating-cash-flow", "npv"] },
+  { number: "14", title: "Scenarios", href: "#study-scenarios", formulaIds: ["operating-cash-flow", "npv", "irr", "payback"] },
+  { number: "15", title: "Risks", href: "#study-risks", formulaIds: ["operating-cash-flow", "npv"] },
+  { number: "16", title: "Decisions", href: "#study-decisions", formulaIds: ["operating-cash-flow", "npv", "irr", "payback"] },
 ] as const;
 
 export function formulaIdsForChapter(href: (typeof LIVE_DOCUMENT_CHAPTERS)[number]["href"]): readonly string[] {

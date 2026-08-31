@@ -49,6 +49,8 @@ describe("ReceivablesPolicyBuilder", () => {
     expect(html).toContain("cura são condicionais");
     expect(html).toContain("PENDENTE");
     expect(html).not.toContain("POLÍTICA INFORMADA");
+    expect(html).toMatch(/<input[^>]*id="receivables-write-off"[^>]*value=""/);
+    expect(html).not.toContain('value="180"');
   });
 
   it("hidrata política persistida, proveniência e versão no roundtrip", () => {

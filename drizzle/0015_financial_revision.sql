@@ -1,0 +1,1 @@
+ALTER TABLE `project_versions` ADD `financialRevision` int DEFAULT 0 NOT NULL;

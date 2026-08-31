@@ -49,6 +49,7 @@ vi.mock("@/lib/trpc", () => ({
 
 import {
   AuthoritativeCommercialBuilder,
+  createPendingCommercialDraft,
   normalizeCommercialDecimalInput,
   toCommercialModelMutationInput,
 } from "./AuthoritativeCommercialBuilder";
@@ -68,6 +69,19 @@ describe("AuthoritativeCommercialBuilder", () => {
 
     expect(html).toContain("Carregando produto e condições comerciais");
     expect(html).toContain('role="status"');
+  });
+
+  it("inicia um SKU pendente sem inventar produto, quantidades ou preço", () => {
+    const draft = createPendingCommercialDraft(1);
+
+    expect(draft.sku.name).toBe("");
+    expect(draft.sku.unitQuantity).toBe("");
+    expect(draft.sku.sharesPerUnit).toBe("");
+    expect(draft.sku.grossSoldShares).toBe("");
+    expect(draft.sku.returnedShares).toBe("");
+    expect(draft.sku.blockedShares).toBe("");
+    expect(draft.sku.pricePhases[0]?.price).toBe("");
+    expect(draft.condition.listPrice).toBe("");
   });
 
   it("renderiza SKU, condição, fases e bloqueios autoritativos", () => {

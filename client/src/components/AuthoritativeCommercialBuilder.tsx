@@ -112,21 +112,21 @@ const uniqueId = (prefix: string) =>
 function emptyCondition(skuCode: string): ConditionDraft {
   return {
     id: `standard-${skuCode}`,
-    name: "Condição padrão",
-    listPrice: "0",
-    discount: "0",
-    entryTotal: "0",
-    entryInstallments: "1",
-    entryFirstDueMonth: "0",
-    balancePrincipal: "0",
-    balanceInstallments: "1",
-    graceMonths: "0",
-    balanceFirstDueMonth: "1",
-    explicitCharges: "0",
+    name: "",
+    listPrice: "",
+    discount: "",
+    entryTotal: "",
+    entryInstallments: "",
+    entryFirstDueMonth: "",
+    balancePrincipal: "",
+    balanceInstallments: "",
+    graceMonths: "",
+    balanceFirstDueMonth: "",
+    explicitCharges: "",
     explicitChargesDueMonth: "",
-    correctionRate: "0",
-    interestRate: "0",
-    materialityTolerance: "0.01",
+    correctionRate: "",
+    interestRate: "",
+    materialityTolerance: "",
     campaign: "",
     status: "pending",
     sourceType: "current_decision",
@@ -134,22 +134,22 @@ function emptyCondition(skuCode: string): ConditionDraft {
   };
 }
 
-function emptyCommercialDraft(index: number): CommercialDraft {
+export function createPendingCommercialDraft(index: number): CommercialDraft {
   const skuCode = `sku-${index}`;
   return {
     sku: {
       id: skuCode,
-      name: `Produto ${index}`,
-      unitType: "unidade",
-      unitQuantity: "0",
-      sharesPerUnit: "1",
-      grossSoldShares: "0",
-      returnedShares: "0",
-      blockedShares: "0",
+      name: "",
+      unitType: "",
+      unitQuantity: "",
+      sharesPerUnit: "",
+      grossSoldShares: "",
+      returnedShares: "",
+      blockedShares: "",
       status: "pending",
       sourceType: "current_decision",
       sourceRef: "",
-      pricePhases: [{ id: "base", startsAtMonth: "0", price: "0" }],
+      pricePhases: [{ id: "base", startsAtMonth: "", price: "" }],
     },
     condition: emptyCondition(skuCode),
   };
@@ -663,7 +663,7 @@ export function AuthoritativeCommercialBuilder({
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
-            <Button onClick={() => setDrafts([emptyCommercialDraft(1)])}>
+            <Button onClick={() => setDrafts([createPendingCommercialDraft(1)])}>
               <CirclePlus /> Adicionar primeiro SKU
             </Button>
           </EmptyContent>
@@ -1101,7 +1101,7 @@ export function AuthoritativeCommercialBuilder({
           onClick={() =>
             setDrafts(current => [
               ...current,
-              emptyCommercialDraft(current.length + 1),
+              createPendingCommercialDraft(current.length + 1),
             ])
           }
           disabled={isSaving}

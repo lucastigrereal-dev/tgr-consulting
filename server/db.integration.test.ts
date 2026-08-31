@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   approvalDecisions,
   auditEvents,
+  calculationSnapshots,
   exportArtifacts,
   historicalBenchmarks,
   workflowEvents,
@@ -22,6 +23,7 @@ import {
   getInputsForVersion,
   getProductCatalogForTenant,
   getProjectContextForTenant,
+  getScenarioComparisonForTenant,
   getProjectForTenant,
   listCommercialConditionsForTenant,
   listHistoricalBenchmarksForTenant,
@@ -65,6 +67,9 @@ const ids = {
   missingDomainProjectId: "",
   missingDomainVersionId: "",
   missingDomainSnapshotId: "",
+  ordinalProjectId: "",
+  ordinalBaseVersionId: "",
+  ordinalScenarioVersionId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -343,6 +348,9 @@ afterAll(async () => {
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.missingDomainVersionId}`
   );
   await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.ordinalScenarioVersionId}`
+  );
+  await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`
   );
   await db.execute(
@@ -368,6 +376,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE iv FROM input_values iv INNER JOIN project_versions pv ON iv.versionId = pv.id WHERE pv.projectId = ${ids.scenarioRollbackProjectId}`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId IN (${ids.ordinalBaseVersionId}, ${ids.ordinalScenarioVersionId})`
   );
   await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`
@@ -400,6 +411,9 @@ afterAll(async () => {
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.scenarioRollbackProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM scenario_branches WHERE projectId = ${ids.ordinalProjectId}`
+  );
+  await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`
   );
   await db.execute(
@@ -426,6 +440,9 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.missingDomainVersionId}`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id IN (${ids.ordinalScenarioVersionId}, ${ids.ordinalBaseVersionId})`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
@@ -451,9 +468,86 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.missingDomainProjectId}`
   );
+  await db.execute(sql`DELETE FROM projects WHERE id = ${ids.ordinalProjectId}`);
 });
 
 describe("IGR database integration", () => {
+  it("seleciona o snapshot realmente mais recente por ordinal monotônico mesmo no mesmo segundo", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Ordem monotônica de snapshots",
+      inputs,
+    });
+    ids.ordinalProjectId = created.projectId;
+    ids.ordinalBaseVersionId = created.versionId;
+    const scenario = await createScenarioForTenant({
+      tenantId,
+      actorId,
+      baseVersionId: created.versionId,
+      name: "Cenário ordinal",
+      reason: "Provar desempate monotônico no mesmo segundo.",
+    });
+    ids.ordinalScenarioVersionId = scenario.versionId;
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+    const tiedCreatedAt = new Date("2026-08-30T12:00:00.000Z");
+    const payload = (npv: string) => ({
+      status: "valid",
+      horizonMonths: 24,
+      missingInputKeys: [],
+      formulaSetVersion: created.formulaSetVersionId,
+      engineVersion: "integration-test",
+      projections: [],
+      kpis: { npv, totalOperatingCashFlow: npv },
+      memory: [],
+    });
+    await db.insert(calculationSnapshots).values([
+      {
+        id: "ordinal-snapshot-first",
+        projectVersionId: scenario.versionId,
+        formulaSetVersionId: created.formulaSetVersionId,
+        horizonMonths: 24,
+        asOfMonth: 0,
+        inputHash: "1".repeat(64),
+        snapshotHash: "2".repeat(64),
+        calculationStatus: "valid",
+        validationStatus: "valid",
+        isAuthoritative: true,
+        payload: payload("1") as Record<string, unknown>,
+        createdBy: actorId,
+        createdAt: tiedCreatedAt,
+      },
+      {
+        id: "ordinal-snapshot-second",
+        projectVersionId: scenario.versionId,
+        formulaSetVersionId: created.formulaSetVersionId,
+        horizonMonths: 24,
+        asOfMonth: 0,
+        inputHash: "3".repeat(64),
+        snapshotHash: "4".repeat(64),
+        calculationStatus: "valid",
+        validationStatus: "valid",
+        isAuthoritative: true,
+        payload: payload("2") as Record<string, unknown>,
+        createdBy: actorId,
+        createdAt: tiedCreatedAt,
+      },
+    ]);
+
+    const comparison = await getScenarioComparisonForTenant(
+      created.projectId,
+      tenantId
+    );
+    expect(
+      comparison.find(entry => entry.versionId === scenario.versionId)
+    ).toMatchObject({
+      snapshotId: "ordinal-snapshot-second",
+      snapshotHash: "4".repeat(64),
+      kpis: { npv: "2" },
+    });
+  });
+
   it("bloqueia snapshot sem produto e condição comercial estruturados", async () => {
     const created = await createProjectForTenant({
       tenantId,

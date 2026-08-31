@@ -3,13 +3,15 @@ import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import { calculatePointEconomics } from "../../shared/financial/pointEconomics";
 import { calculateCommercialOperations } from "../../shared/financial/commercialOperations";
-import { calculateFinancialProjection } from "../../shared/financial/engine";
-import type { FinancialInputSnapshot } from "../../shared/financial/types";
+import { IGR_CORE_FORMULA_SET_V1 } from "../../shared/financial/formulas";
+import type { FinancialCalculation, FinancialInputSnapshot } from "../../shared/financial/types";
+import { calculateAuthoritativeSnapshot } from "./snapshot";
 import {
   buildBoardroomPdf,
   buildBoardroomPptx,
   buildBoardroomXlsx,
   createExportableSnapshot,
+  createScenarioComparisonPayload,
 } from "./export";
 
 const pointEconomics = calculatePointEconomics({
@@ -57,34 +59,132 @@ const commercialOperations = calculateCommercialOperations({
     commissions: { cashflowTreatment: "incremental", policies: [{ policyId: "closer-fixed", role: "closer", eligibleBase: "fixed", mode: "fixed", fixedAmount: "10", percentageRate: "0", tiers: [], guarantee: "0", cutoffDay: 15, paymentLagMonths: 0, qualityMultiplier: "1", holdbackRate: "0", reversalEnabled: false }] },
   },
 });
-const operationsCalculation = calculateFinancialProjection(inputs, 2, { pointEconomics, commercialOperations });
-if (operationsCalculation.status !== "valid") throw new Error("Fixture operacional inválida.");
-
-const snapshot = {
-  ...operationsCalculation,
-  kpis: {
-    grossSales: "100.00000000",
-    recognizedRevenue: "80.00000000",
-    totalOperatingCashFlow: "50.00000000",
-    npv: "42.00000000",
-    irrAnnual: "0.12000000",
-    paybackMonths: "8.00000000",
+const authoritativeDomains = {
+  asOfMonth: 0,
+  productCatalog: {
+    records: [{
+      skuCode: "studio",
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "Tabela aprovada",
+    }],
   },
-  memory: [
+  commercialConditions: [{
+    productSkuCode: "studio",
+    status: "provided",
+    sourceType: "current_document",
+    sourceRef: "Tabela comercial",
+  }],
+  receivablesPolicy: {
+    status: "provided",
+    sourceType: "current_decision",
+    sourceRef: "Ata de carteira",
+  },
+  capturePoints: {
+    definitions: [{
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "Cadastro de pontos",
+      definition: { pointId: "cotia-mall", name: "Quiosque Cotia Mall" },
+    }],
+  },
+  commercialOperations: {
+    status: "provided",
+    sourceType: "current_document",
+    sourceRef: "Plano de operações",
+  },
+};
+const snapshot = calculateAuthoritativeSnapshot({
+  inputs,
+  calculationInputs: inputs,
+  calculationOptions: { pointEconomics, commercialOperations },
+  authoritativeDomains,
+  horizonMonths: 2,
+  formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id,
+});
+if (snapshot.status !== "valid") throw new Error("Snapshot operacional inválido.");
+const scenarioInputs: FinancialInputSnapshot = {
+  ...inputs,
+  fixedCostMonthly: provided("100"),
+};
+const scenarioSnapshot = calculateAuthoritativeSnapshot({
+  inputs: scenarioInputs,
+  calculationInputs: scenarioInputs,
+  calculationOptions: { pointEconomics, commercialOperations },
+  authoritativeDomains,
+  horizonMonths: 2,
+  formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id,
+});
+if (scenarioSnapshot.status !== "valid") throw new Error("Snapshot de cenário inválido.");
+const scenarioComparison = createScenarioComparisonPayload({
+  baseSnapshotHash: snapshot.snapshotHash,
+  entries: [
     {
-      kpiKey: "npv",
-      label: "Valor presente líquido",
-      value: "42.00000000",
-      formulaId: "npv",
-      formulaVersion: "1.0.0",
-      expression: "Σ",
-      dependencies: ["operating-cash-flow"],
-      explanation: "Valor presente dos fluxos.",
+      versionId: "version-base-approved",
+      kind: "working",
+      state: "approved",
+      isImmutable: true,
+      label: "Base aprovada",
+      reason: null,
+      snapshotId: "snapshot-base-approved",
+      snapshotHash: snapshot.snapshotHash,
+      comparisonStatus: "comparable",
+      horizonMonths: 2,
+      asOfMonth: 0,
+      kpis: snapshot.kpis,
+    },
+    {
+      versionId: "version-scenario-fixed-cost",
+      kind: "scenario",
+      state: "draft",
+      isImmutable: false,
+      label: "Cenário custo fixo",
+      reason: "Validar sensibilidade de custo fixo.",
+      snapshotId: "snapshot-scenario-fixed-cost",
+      snapshotHash: scenarioSnapshot.snapshotHash,
+      comparisonStatus: "comparable",
+      horizonMonths: 2,
+      asOfMonth: 0,
+      kpis: scenarioSnapshot.kpis,
     },
   ],
-  pointEconomics,
-  snapshotHash: "a".repeat(64),
-};
+});
+
+const workbookSheet = async (archive: JSZip, sheetNumber: number) =>
+  archive.file(`xl/worksheets/sheet${sheetNumber}.xml`)?.async("string");
+
+function withoutSnapshotData(overrides: Partial<FinancialCalculation> = {}) {
+  return {
+    status: "blocked_by_pending_inputs" as const,
+    horizonMonths: 12,
+    missingInputKeys: ["averageTicket"] as const,
+    formulaSetVersion: "formula-v-test",
+    engineVersion: "engine-v-test",
+    projections: [],
+    kpis: {
+      grossSales: null,
+      grossEntryGenerated: null,
+      grossReceivablesGenerated: null,
+      grossReceivablesSettled: null,
+      installmentCollections: null,
+      canceledReceivables: null,
+      delinquentBalance: null,
+      curedCollections: null,
+      writtenOffBalance: null,
+      healthyD90: null,
+      recognizedRevenue: null,
+      paymentFees: null,
+      preOperationalInvestment: null,
+      totalOperatingCashFlow: null,
+      npv: null,
+      irrAnnual: null,
+      paybackMonths: null,
+    },
+    memory: [],
+    snapshotHash: "b".repeat(64),
+    ...overrides,
+  };
+}
 
 describe("geradores de artefato Boardroom", () => {
   it("enriquece o payload persistido com o hash autoritativo da linha", () => {
@@ -95,8 +195,43 @@ describe("geradores de artefato Boardroom", () => {
     ).toMatchObject({
       snapshotHash: snapshot.snapshotHash,
       status: "valid",
-      kpis: { npv: "42.00000000" },
+      kpis: { npv: snapshot.kpis.npv },
+      effectiveInputs: {
+        qualifiedCouplesMonth1: inputs.qualifiedCouplesMonth1,
+      },
     });
+  });
+
+  it("anexa comparação canônica de cenários reais ao pack sem recalcular números", async () => {
+    const { snapshotHash: _ignored, ...persistedPayload } = snapshot;
+    const exportable = createExportableSnapshot(
+      persistedPayload,
+      snapshot.snapshotHash,
+      scenarioComparison,
+    );
+
+    expect(exportable.exportPackHash).toBeTruthy();
+    expect(exportable.exportPackHash).not.toBe(snapshot.snapshotHash);
+    expect(exportable.scenarioComparison?.selectionHash).toBe(
+      scenarioComparison.selectionHash
+    );
+
+    const pptx = await JSZip.loadAsync(await buildBoardroomPptx(exportable));
+    const scenarioSlide = await pptx.file("ppt/slides/slide4.xml")?.async("string");
+    expect(scenarioSlide).toContain("Base aprovada");
+    expect(scenarioSlide).toContain("Cenário custo fixo");
+    expect(scenarioSlide).toContain(scenarioComparison.selectionHash.slice(0, 12).toUpperCase());
+
+    const xlsx = await JSZip.loadAsync(await buildBoardroomXlsx(exportable));
+    const scenarios = await workbookSheet(xlsx, 4);
+    expect(scenarios).toContain("Base aprovada");
+    expect(scenarios).toContain(snapshot.snapshotHash);
+    expect(scenarios).toContain(snapshot.kpis.npv);
+    expect(scenarios).toContain("Cenário custo fixo");
+    expect(scenarios).toContain(scenarioSnapshot.snapshotHash);
+    expect(scenarios).toContain(scenarioSnapshot.kpis.npv);
+    expect(scenarios).toContain(exportable.exportPackHash);
+    expect(scenarios).toContain(scenarioComparison.selectionHash);
   });
 
   it("gera PDF com conteúdo a partir de snapshot", async () => {
@@ -104,7 +239,7 @@ describe("geradores de artefato Boardroom", () => {
     expect(bytes.byteLength).toBeGreaterThan(500);
     expect(String.fromCharCode(...bytes.slice(0, 4))).toBe("%PDF");
     const pdf = await PDFDocument.load(bytes);
-    expect(pdf.getPageCount()).toBe(3);
+    expect(pdf.getPageCount()).toBe(7);
     expect(pdf.getSubject()).toContain("Point Economics");
     expect(pdf.getSubject()).toContain(pointEconomics.totals.value.incrementalNetContribution);
     expect(pdf.getKeywords()).toContain("Commercial Operations");
@@ -121,50 +256,71 @@ describe("geradores de artefato Boardroom", () => {
     expect(archive.file("ppt/slides/slide1.xml")).toBeTruthy();
     expect(archive.file("ppt/slides/slide2.xml")).toBeTruthy();
     expect(archive.file("ppt/slides/slide3.xml")).toBeTruthy();
+    expect(archive.file("ppt/slides/slide4.xml")).toBeTruthy();
+    expect(archive.file("ppt/slides/slide5.xml")).toBeTruthy();
+    expect(archive.file("ppt/slides/slide6.xml")).toBeTruthy();
+    expect(archive.file("ppt/slides/slide7.xml")).toBeTruthy();
     expect(
       await archive.file("ppt/slides/slide1.xml")?.async("string")
     ).toContain("TGR Consulting");
-    const pointSlide = await archive.file("ppt/slides/slide2.xml")?.async("string");
+    const inputSlide = await archive.file("ppt/slides/slide2.xml")?.async("string");
+    expect(inputSlide).toContain("Inputs e Proveniência");
+    expect(inputSlide).toContain("qualifiedCouplesMonth1");
+    expect(inputSlide).toContain("export-test");
+    const scenarioSlide = await archive.file("ppt/slides/slide4.xml")?.async("string");
+    expect(scenarioSlide).toContain("Snapshot sem cenários anexados");
+    expect(scenarioSlide).not.toContain("Base aprovada");
+    const formulaSlide = await archive.file("ppt/slides/slide5.xml")?.async("string");
+    expect(formulaSlide).toContain(`${snapshot.memory[0].formulaId}@${snapshot.memory[0].formulaVersion}`);
+    const pointSlide = await archive.file("ppt/slides/slide6.xml")?.async("string");
     expect(pointSlide).toContain("Point Economics");
     expect(pointSlide).toContain("Quiosque Cotia Mall");
     expect(pointSlide).toContain(pointEconomics.totals.value.incrementalNetContribution);
-    const operationsSlide = await archive.file("ppt/slides/slide3.xml")?.async("string");
+    const operationsSlide = await archive.file("ppt/slides/slide7.xml")?.async("string");
     expect(operationsSlide).toContain("Commercial Operations");
     expect(operationsSlide).toContain("academy");
     expect(operationsSlide).toContain(snapshot.commissionLedger!.totals.payable);
   });
 
-  it("gera XLSX reconciliável com KPIs e memória do snapshot", async () => {
+  it("gera XLSX investor pack reconciliável com o snapshot", async () => {
     const buffer = await buildBoardroomXlsx(snapshot);
     expect(buffer.byteLength).toBeGreaterThan(500);
     expect(buffer.slice(0, 2).toString()).toBe("PK");
 
     const archive = await JSZip.loadAsync(buffer);
     const workbook = await archive.file("xl/workbook.xml")?.async("string");
-    const summary = await archive
-      .file("xl/worksheets/sheet1.xml")
-      ?.async("string");
-    const memory = await archive
-      .file("xl/worksheets/sheet2.xml")
-      ?.async("string");
-    const points = await archive
-      .file("xl/worksheets/sheet4.xml")
-      ?.async("string");
-    const operations = await archive
-      .file("xl/worksheets/sheet5.xml")
-      ?.async("string");
-    const projections = await archive
-      .file("xl/worksheets/sheet3.xml")
-      ?.async("string");
+    const inputsSheet = await workbookSheet(archive, 1);
+    const provenanceSheet = await workbookSheet(archive, 2);
+    const projections = await workbookSheet(archive, 3);
+    const scenarios = await workbookSheet(archive, 4);
+    const formulas = await workbookSheet(archive, 5);
+    const outputs = await workbookSheet(archive, 6);
+    const points = await workbookSheet(archive, 7);
+    const operations = await workbookSheet(archive, 8);
 
-    expect(workbook).toContain("Resumo");
-    expect(workbook).toContain("Memoria de calculo");
+    expect(workbook).toContain("Inputs");
+    expect(workbook).toContain("Statuses &amp; Sources");
+    expect(workbook).toContain("Monthly Projection");
+    expect(workbook).toContain("Scenarios");
+    expect(workbook).toContain("Formulas");
+    expect(workbook).toContain("Outputs");
     expect(workbook).toContain("Point Economics");
     expect(workbook).toContain("Commercial Operations");
-    expect(summary).toContain("42.00000000");
-    expect(summary).toContain(snapshot.snapshotHash);
-    expect(memory).toContain("Valor presente líquido");
-    expect(memory).toContain("npv@1.0.0");
+    expect(inputsSheet).toContain("qualifiedCouplesMonth1");
+    expect(inputsSheet).toContain("100");
+    expect(inputsSheet).toContain("capexAcquisitionShareRate");
+    expect(inputsSheet).toContain("PENDENTE");
+    expect(provenanceSheet).toContain("Tabela aprovada");
+    expect(provenanceSheet).toContain("Ata de carteira");
+    expect(provenanceSheet).toContain("Cadastro de pontos");
+    expect(provenanceSheet).toContain(snapshot.snapshotHash);
+    expect(scenarios).toContain("Snapshot sem cenários anexados");
+    expect(scenarios).not.toContain("Base aprovada");
+    expect(formulas).toContain(snapshot.memory[0].label);
+    expect(formulas).toContain(`${snapshot.memory[0].formulaId}@${snapshot.memory[0].formulaVersion}`);
+    expect(outputs).toContain("VPL");
+    expect(outputs).toContain(snapshot.kpis.npv);
+    expect(outputs).toContain(snapshot.snapshotHash);
     expect(points).toContain("Quiosque Cotia Mall");
     expect(points).toContain(pointEconomics.totals.value.incrementalNetContribution);
     expect(points).toContain(pointEconomics.totals.reconciliation.productionDifference);
@@ -179,19 +335,31 @@ describe("geradores de artefato Boardroom", () => {
     expect(projections).toContain(snapshot.projections[0].commissionPayments);
   });
 
+  it("registra estado honesto quando o snapshot não carrega inputs nem cenários", async () => {
+    const archive = await JSZip.loadAsync(
+      await buildBoardroomXlsx(withoutSnapshotData())
+    );
+
+    expect(await workbookSheet(archive, 1)).toContain("Snapshot sem input payload");
+    expect(await workbookSheet(archive, 4)).toContain("Snapshot sem cenários anexados");
+    expect(await workbookSheet(archive, 6)).toContain("blocked_by_pending_inputs");
+    expect(await workbookSheet(archive, 6)).toContain("averageTicket");
+  });
+
   it("mantém os artefatos compatíveis quando Commercial Operations está ausente", async () => {
     const { commercialOperations: _operations, commissionLedger: _ledger, ...withoutOperations } = snapshot;
 
     const pdfBytes = await buildBoardroomPdf(withoutOperations);
     const pdf = await PDFDocument.load(pdfBytes);
-    expect(pdf.getPageCount()).toBe(2);
+    expect(pdf.getPageCount()).toBe(6);
 
     const pptx = await JSZip.loadAsync(await buildBoardroomPptx(withoutOperations));
     expect(pptx.file("ppt/slides/slide2.xml")).toBeTruthy();
-    expect(pptx.file("ppt/slides/slide3.xml")).toBeNull();
+    expect(pptx.file("ppt/slides/slide6.xml")).toBeTruthy();
+    expect(pptx.file("ppt/slides/slide7.xml")).toBeNull();
 
     const xlsx = await JSZip.loadAsync(await buildBoardroomXlsx(withoutOperations));
-    const operations = await xlsx.file("xl/worksheets/sheet5.xml")?.async("string");
+    const operations = await xlsx.file("xl/worksheets/sheet8.xml")?.async("string");
     expect(operations).toContain("Snapshot sem Commercial Operations");
   });
 });

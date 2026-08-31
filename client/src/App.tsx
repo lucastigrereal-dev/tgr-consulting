@@ -21,11 +21,12 @@ function PanelFallback() {
 function Router() {
   const Shell = ({ children }: { children: React.ReactNode }) => <DashboardLayout>{children}</DashboardLayout>;
   const Panel = ({ children }: { children: React.ReactNode }) => <Suspense fallback={<PanelFallback />}><Shell>{children}</Shell></Suspense>;
+  const BoardroomPanel = () => <Suspense fallback={<PanelFallback />}><Boardroom /></Suspense>;
   return (
     <Switch>
       <Route path={"/"}>{() => <Panel><Builder /></Panel>}</Route>
       <Route path={"/builder"}>{() => <Panel><Builder /></Panel>}</Route>
-      <Route path={"/study"}>{() => <Panel><Boardroom /></Panel>}</Route>
+      <Route path={"/study"}>{() => <BoardroomPanel />}</Route>
       <Route path={"/costs"}>{() => <Panel><CostCatalog /></Panel>}</Route>
       <Route path={"/decisions"}>{() => <Panel><Decisions /></Panel>}</Route>
       <Route path={"/scenarios"}>{() => <Panel><Scenarios /></Panel>}</Route>
@@ -35,6 +36,12 @@ function Router() {
       <Route component={NotFound} />
     </Switch>
   );
+}
+
+export type RouteShell = "admin" | "boardroom";
+
+export function resolveRouteShell(path: string): RouteShell {
+  return path === "/study" ? "boardroom" : "admin";
 }
 
 // NOTE: About Theme
