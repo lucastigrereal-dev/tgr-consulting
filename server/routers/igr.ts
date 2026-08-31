@@ -523,8 +523,8 @@ export const igrRouter = router({
   ),
   createCostCatalogItem: protectedProcedure.input(z.object({
     versionId: z.string().min(1), category: costCategorySchema, name: z.string().trim().min(2).max(255), frequency: z.enum(["monthly", "annual", "one_time"]),
-    amountText: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), status: z.enum(["provided", "pending"]), sourceType: provenanceSourceSchema, sourceRef: z.string().trim().max(500).optional(),
-  }).refine((data) => data.status === "pending" || Boolean(data.sourceRef?.trim()), { message: "Custo informado exige fonte ou responsável.", path: ["sourceRef"] })).mutation(({ ctx, input }) => createCostCatalogItemForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
+    cashflowTreatment: z.enum(["incremental", "included_in_project_totals"]), amountText: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), status: z.enum(["provided", "pending"]), sourceType: provenanceSourceSchema, sourceRef: z.string().trim().max(500).optional(),
+  }).refine((data) => data.status === "pending" || Boolean(data.amountText), { message: "Custo informado exige valor não negativo.", path: ["amountText"] }).refine((data) => data.status === "pending" || Boolean(data.sourceRef?.trim()), { message: "Custo informado exige fonte ou responsável.", path: ["sourceRef"] })).mutation(({ ctx, input }) => createCostCatalogItemForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   upsertBuilderComponent: protectedProcedure.input(z.object({
     versionId: z.string().min(1), componentType: builderComponentSchema, name: z.string().trim().min(2).max(255),
     status: z.enum(["provided", "pending"]), payload: z.record(z.string(), z.unknown()), sourceType: provenanceSourceSchema, sourceRef: z.string().trim().max(500).optional(),

@@ -16,7 +16,7 @@ Persistence services (server/db.ts)
 MySQL 8 / Drizzle migrations
 
 Shared financial domain
-  ├─ Decimal engine + Formula Registry 1.7.0
+  ├─ Decimal engine + Formula Registry 1.8.0
   ├─ inventory / commercial condition / payment calendar
   ├─ point economics / commercial operations / commissions
   ├─ cohorts / receivables portfolio
@@ -30,7 +30,7 @@ Shared financial domain
 - `server/routers`: validação de entrada, autenticação e superfície tRPC.
 - `server/db.ts`: tenancy, lifecycle, transações, snapshots e auditoria.
 - `server/financial`: snapshot e artefatos derivados.
-- `drizzle`: schema e migrations ordenadas `0000`–`0015`.
+- `drizzle`: schema e migrations ordenadas `0000`–`0016`.
 
 ## Fluxo autoritativo
 
@@ -38,7 +38,9 @@ Shared financial domain
 
 O snapshot fixa formula set, horizonte, input hash, payload calculado e snapshot hash. A UI, o Boardroom e os exports leem esse mesmo payload. Uma versão `baseline` recebe `isImmutable=true`; edição exige uma branch de cenário.
 
-Cada branch também mantém `financialRevision`. Inputs, produto, condições comerciais, carteira, captação, operações, workforce e custos incrementam a revisão dentro da mesma transação da mudança. O Goal Seek recalcula no servidor e só grava se `inputHash` e `financialRevision` ainda forem exatamente os observados; uma corrida causa rollback integral.
+Cada branch também mantém `financialRevision`. Inputs, produto, condições comerciais, carteira, captação, operações, workforce e custos incrementam a revisão dentro da mesma transação da mudança. O Goal Seek recalcula no servidor e só grava se `inputHash` e `financialRevision` ainda forem exatamente os observados; uma corrida causa rollback integral. A criação do snapshot bloqueia a versão, valida novamente estado/revisão/hash/formula set e faz a transição de lifecycle com predicados otimistas; qualquer drift concorrente reverte snapshot, memória, workflow e auditoria.
+
+O Cost Catalog participa do domínio autoritativo e do hash. A classificação `incremental` ajusta `fixedCostMonthly`, `payrollMonthly` ou `capexInitial`; `included_in_project_totals` evita dupla contagem. A classificação e as linhas são clonadas para cenários.
 
 ## Decisões operacionais
 

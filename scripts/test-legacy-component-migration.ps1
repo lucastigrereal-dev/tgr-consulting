@@ -114,6 +114,18 @@ VALUES
   Invoke-MigrationFile -Path (Join-Path $repoRoot "drizzle\0014_snapshot_analytical_identity.sql")
   Invoke-MigrationFile -Path (Join-Path $repoRoot "drizzle\0015_financial_revision.sql")
 
+  Invoke-Sql -Description "Legacy cost catalog fixture" -Sql @'
+INSERT INTO `cost_catalog_items`
+  (`id`, `versionId`, `category`, `name`, `frequency`, `amountText`, `status`, `sourceType`, `sourceRef`, `updatedBy`)
+VALUES
+  ('legacy-cost', 'legacy-version', 'operations', 'Legacy included cost', 'monthly', '12000', 'provided', 'current_document', 'legacy-source', 1);
+'@
+  Invoke-MigrationFile -Path (Join-Path $repoRoot "drizzle\0016_organic_nocturne.sql")
+  $legacyCostTreatment = docker compose -f $composeFile exec -T mysql mysql -uroot -N -B tgr_consulting_test -e "SELECT cashflowTreatment FROM cost_catalog_items WHERE id = 'legacy-cost';"
+  if ($LASTEXITCODE -ne 0 -or ($legacyCostTreatment.Trim() -ne "included_in_project_totals")) {
+    throw "Legacy cost did not receive the safe no-double-count treatment: '$($legacyCostTreatment.Trim())'."
+  }
+
   $snapshotOrder = docker compose -f $composeFile exec -T mysql mysql -uroot -N -B tgr_consulting_test -e "SELECT GROUP_CONCAT(CONCAT(id, ':', asOfMonth) ORDER BY createdOrdinal SEPARATOR ',') FROM calculation_snapshots WHERE id LIKE 'legacy-snapshot-%';"
   if ($LASTEXITCODE -ne 0 -or ($snapshotOrder.Trim() -ne "legacy-snapshot-old:3,legacy-snapshot-new:5")) {
     throw "Legacy snapshot backfill lost chronological/as-of identity: '$($snapshotOrder.Trim())'."
@@ -135,7 +147,7 @@ VALUES
     throw "Legacy project version did not receive the initial financial revision: '$($financialRevision.Trim())'."
   }
 
-  Write-Host "Legacy migration proof passed: component identity, chronological snapshot backfill, and financial revision preserved."
+  Write-Host "Legacy migration proof passed: component identity, chronological snapshot backfill, financial revision, and safe cost treatment preserved."
 }
 finally {
   if (-not $KeepDatabase) {

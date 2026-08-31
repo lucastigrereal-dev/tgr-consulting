@@ -53,7 +53,7 @@ import {
   calculateCommercialCapacity,
   calculateWorkforceEconomics,
 } from "../shared/financial/operationsEconomics";
-import { summarizeCostCatalog } from "../shared/financial/costCatalog";
+import { deriveCostCatalogCashflowAdjustments, summarizeCostCatalog, type CostCashflowTreatment } from "../shared/financial/costCatalog";
 import {
   evaluateProductInventory,
   type ProductSkuInput,
@@ -1865,7 +1865,7 @@ export async function listCostCatalogForTenant(
     .select()
     .from(costCatalogItems)
     .where(eq(costCatalogItems.versionId, versionId))
-    .orderBy(desc(costCatalogItems.updatedAt));
+    .orderBy(desc(costCatalogItems.updatedAt), costCatalogItems.id);
   return { items, summary: summarizeCostCatalog(items) };
 }
 
@@ -1876,6 +1876,7 @@ export async function createCostCatalogItemForTenant(params: {
   category: CostCategory;
   name: string;
   frequency: "monthly" | "annual" | "one_time";
+  cashflowTreatment: CostCashflowTreatment;
   amountText?: string;
   status: "provided" | "pending";
   sourceType: ProvenanceSourceType;
@@ -1887,12 +1888,18 @@ export async function createCostCatalogItemForTenant(params: {
     throw new Error("Catálogo só aceita edição na versão de trabalho.");
   if (params.status === "provided" && !params.sourceRef?.trim())
     throw new Error("Custo informado exige fonte ou responsável.");
+  if (params.status === "provided") {
+    if (params.amountText === undefined) throw new Error("Custo informado exige valor não negativo.");
+    const amount = new FinanceDecimal(params.amountText);
+    if (!amount.isFinite() || amount.lt(0)) throw new Error("Custo informado exige valor não negativo.");
+  }
   const record = {
     id: nanoid(),
     versionId: version.id,
     category: params.category,
     name: params.name,
     frequency: params.frequency,
+    cashflowTreatment: params.cashflowTreatment,
     amountText: params.amountText ?? null,
     status: params.status,
     sourceType: params.sourceType,
@@ -1918,6 +1925,7 @@ export async function createCostCatalogItemForTenant(params: {
         versionId: version.id,
         category: record.category,
         frequency: record.frequency,
+        cashflowTreatment: record.cashflowTreatment,
         status: record.status,
       },
     });
@@ -2081,6 +2089,8 @@ async function getAuthoritativeCalculationContext(params: {
   );
   const persistedCommercialOperations =
     await getCommercialOperationsForTenant(version.id, params.tenantId);
+  const costCatalog = await listCostCatalogForTenant(version.id, params.tenantId);
+  const costCatalogCashflowAdjustments = deriveCostCatalogCashflowAdjustments(costCatalog.items);
   const usesStructuredCommercialDomains =
     productCatalog.records.length > 0 || conditions.length > 0;
   const providedSkuCodes = new Set(
@@ -2116,6 +2126,10 @@ async function getAuthoritativeCalculationContext(params: {
     domainBlockers.push("commercial_operations.missing");
   else if (persistedCommercialOperations.record.status === "pending")
     domainBlockers.push("commercial_operations.pending");
+  if (costCatalogCashflowAdjustments.status === "blocked")
+    domainBlockers.push("cost_catalog.incremental_pending");
+  else if (costCatalogCashflowAdjustments.status === "invalid")
+    domainInvalidities.push("cost_catalog.incremental_invalid");
   let authoritativeReceivablesPolicy: ReceivablesPolicy | undefined;
   if (persistedReceivablesPolicy) {
     try {
@@ -2218,7 +2232,7 @@ async function getAuthoritativeCalculationContext(params: {
       domainInvalidities.push("commercial_operations.invalid");
     }
   }
-  const authoritativeDomains = usesStructuredCommercialDomains || persistedReceivablesPolicy || capturePoints.length > 0 || persistedCommercialOperations
+  const authoritativeDomains = usesStructuredCommercialDomains || persistedReceivablesPolicy || capturePoints.length > 0 || persistedCommercialOperations || costCatalog.items.length > 0
     ? {
         asOfMonth: params.asOfMonth,
         productCatalog: {
@@ -2266,8 +2280,19 @@ async function getAuthoritativeCalculationContext(params: {
               results: commercialOperations ?? null,
             }
           : null,
+        costCatalog: {
+          items: costCatalog.items.map(item => ({ category: item.category, name: item.name, frequency: item.frequency, cashflowTreatment: item.cashflowTreatment, amountText: item.amountText, status: item.status, sourceType: item.sourceType, sourceRef: item.sourceRef })),
+          summary: costCatalog.summary,
+          cashflowAdjustments: costCatalogCashflowAdjustments,
+        },
       }
     : undefined;
+  const hasIncrementalCatalogCosts = costCatalog.items.some(item => item.cashflowTreatment === "incremental");
+  const addCatalogAdjustment = (key: "fixedCostMonthly" | "payrollMonthly" | "capexInitial", adjustment: string) => {
+    const input = inputs[key];
+    if (input.status !== "provided" || input.value === undefined) return input;
+    return { status: "provided" as const, value: new FinanceDecimal(input.value).plus(adjustment).toFixed(8), sourceType: "derived_analysis" as const, sourceRef: `base:${input.sourceRef ?? "unreferenced"}+cost-catalog:incremental` };
+  };
   const calculationInputs =
     commercialModel?.status === "valid" &&
     domainBlockers.length === 0 &&
@@ -2308,6 +2333,11 @@ async function getAuthoritativeCalculationContext(params: {
             sourceType: "derived_analysis" as const,
             sourceRef: "authoritative-point-economics",
           },
+          ...(hasIncrementalCatalogCosts && costCatalogCashflowAdjustments.status === "valid" ? {
+            fixedCostMonthly: addCatalogAdjustment("fixedCostMonthly", costCatalogCashflowAdjustments.fixedCostMonthly),
+            payrollMonthly: addCatalogAdjustment("payrollMonthly", costCatalogCashflowAdjustments.payrollMonthly),
+            capexInitial: addCatalogAdjustment("capexInitial", costCatalogCashflowAdjustments.capexInitial),
+          } : {}),
         }
       : undefined;
   const calculationOptions = calculationInputs
@@ -2373,6 +2403,20 @@ export async function createCalculationSnapshot(params: {
   const id = nanoid();
   const isAuthoritative = calculation.status === "valid";
   await db.transaction(async transaction => {
+    const lockedVersion = (await transaction
+      .select()
+      .from(projectVersions)
+      .where(eq(projectVersions.id, version.id))
+      .for("update")
+      .limit(1))[0];
+    if (!lockedVersion) throw new Error("A versão deixou de existir durante o cálculo.");
+    if (
+      lockedVersion.state !== version.state ||
+      lockedVersion.isImmutable !== version.isImmutable ||
+      lockedVersion.inputHash !== version.inputHash ||
+      lockedVersion.financialRevision !== version.financialRevision ||
+      lockedVersion.formulaSetVersionId !== version.formulaSetVersionId
+    ) throw new Error("A versão mudou durante o cálculo; execute novamente sobre o estado atual.");
     await transaction.insert(calculationSnapshots).values({
       id,
       projectVersionId: version.id,
@@ -2402,10 +2446,19 @@ export async function createCalculationSnapshot(params: {
       );
     }
     if (calculation.status === "valid" && version.state === "draft") {
-      await transaction
+      const versionUpdate = await transaction
         .update(projectVersions)
         .set({ state: "in_review" })
-        .where(eq(projectVersions.id, version.id));
+        .where(and(
+          eq(projectVersions.id, version.id),
+          eq(projectVersions.state, "draft"),
+          eq(projectVersions.isImmutable, version.isImmutable),
+          eq(projectVersions.inputHash, version.inputHash),
+          eq(projectVersions.financialRevision, version.financialRevision),
+          eq(projectVersions.formulaSetVersionId, version.formulaSetVersionId)
+        ));
+      if (versionUpdate[0].affectedRows !== 1)
+        throw new Error("A versão mudou durante o cálculo; nenhuma transição foi aplicada.");
       await transaction
         .update(projects)
         .set({ status: "in_review" })
@@ -2420,6 +2473,22 @@ export async function createCalculationSnapshot(params: {
         actorId: params.actorId,
       });
     }
+    const verifiedVersion = (await transaction
+      .select()
+      .from(projectVersions)
+      .where(eq(projectVersions.id, version.id))
+      .for("update")
+      .limit(1))[0];
+    const expectedState = calculation.status === "valid" && version.state === "draft"
+      ? "in_review"
+      : version.state;
+    if (
+      !verifiedVersion ||
+      verifiedVersion.state !== expectedState ||
+      verifiedVersion.inputHash !== version.inputHash ||
+      verifiedVersion.financialRevision !== version.financialRevision ||
+      verifiedVersion.formulaSetVersionId !== version.formulaSetVersionId
+    ) throw new Error("A versão mudou durante o cálculo; o snapshot foi revertido.");
     await transaction.insert(auditEvents).values({
       id: nanoid(),
       tenantId: params.tenantId,
@@ -2551,6 +2620,10 @@ export async function createScenarioForTenant(params: {
       .select()
       .from(projectComponentRecords)
       .where(eq(projectComponentRecords.versionId, currentBase.id));
+    const baseCostCatalogItems = await transaction
+      .select()
+      .from(costCatalogItems)
+      .where(eq(costCatalogItems.versionId, currentBase.id));
     const scenarioSkuIds = new Map(
       baseProductSkus.map(sku => [sku.id, nanoid()])
     );
@@ -2679,6 +2752,11 @@ export async function createScenarioForTenant(params: {
           sourceRef: component.sourceRef,
           updatedBy: params.actorId,
         }))
+      );
+    }
+    if (baseCostCatalogItems.length) {
+      await transaction.insert(costCatalogItems).values(
+        baseCostCatalogItems.map(item => ({ id: nanoid(), versionId, category: item.category, name: item.name, frequency: item.frequency, cashflowTreatment: item.cashflowTreatment, amountText: item.amountText, status: item.status, sourceType: item.sourceType, sourceRef: item.sourceRef, updatedBy: params.actorId }))
       );
     }
     await transaction.insert(scenarioBranches).values({

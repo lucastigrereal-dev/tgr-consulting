@@ -312,6 +312,7 @@ export const costCatalogItems = mysqlTable(
     category: mysqlEnum("category", ["payroll", "occupancy", "technology", "marketing", "partner", "legal", "operations", "other"]).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     frequency: mysqlEnum("frequency", ["monthly", "annual", "one_time"]).notNull(),
+    cashflowTreatment: mysqlEnum("cashflowTreatment", ["incremental", "included_in_project_totals"]).default("included_in_project_totals").notNull(),
     amountText: varchar("amountText", { length: 255 }),
     status: mysqlEnum("status", ["provided", "pending"]).notNull(),
     sourceType: mysqlEnum("sourceType", [

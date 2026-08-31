@@ -23,7 +23,7 @@ describe("igr authorization", () => {
 
   it("rejeita valor não decimal do catálogo na fronteira da API", async () => {
     const caller = igrRouter.createCaller(contextFor("user"));
-    await expect(caller.createCostCatalogItem({ versionId: "version-test", category: "operations", name: "Custo operacional", frequency: "monthly", amountText: "doze-mil", status: "provided", sourceType: "current_decision" })).rejects.toThrow();
+    await expect(caller.createCostCatalogItem({ versionId: "version-test", category: "operations", name: "Custo operacional", frequency: "monthly", cashflowTreatment: "included_in_project_totals", amountText: "doze-mil", status: "provided", sourceType: "current_decision" })).rejects.toThrow();
   });
 
   it("rejeita componente do Builder sem nome mínimo antes de tocar no banco", async () => {
@@ -33,7 +33,7 @@ describe("igr authorization", () => {
 
   it("rejeita custo informado sem fonte antes de tocar no banco", async () => {
     const caller = igrRouter.createCaller(contextFor("user"));
-    await expect(caller.createCostCatalogItem({ versionId: "version-test", category: "operations", name: "Custo operacional", frequency: "monthly", amountText: "12000", status: "provided", sourceType: "current_decision" })).rejects.toThrow("Custo informado exige fonte");
+    await expect(caller.createCostCatalogItem({ versionId: "version-test", category: "operations", name: "Custo operacional", frequency: "monthly", cashflowTreatment: "included_in_project_totals", amountText: "12000", status: "provided", sourceType: "current_decision" })).rejects.toThrow("Custo informado exige fonte");
   });
 
   it("rejeita decisão sem fonte antes de tocar no banco", async () => {

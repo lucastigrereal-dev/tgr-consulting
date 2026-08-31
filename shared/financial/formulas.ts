@@ -1,9 +1,9 @@
 import type { FormulaSetVersion } from "./types";
 
 export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
-  id: "igr-core-formulas-v1-7",
-  semanticVersion: "1.7.0",
-  engineVersion: "igr-engine-1.7.0",
+  id: "igr-core-formulas-v1-8",
+  semanticVersion: "1.8.0",
+  engineVersion: "igr-engine-1.8.0",
   status: "published",
   definitions: [
     {
@@ -127,6 +127,14 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
       description: "Liquida entrada, encargos e parcelas por método depois de cancelamento, inadimplência, cura, MDR e prazo.",
     },
     {
+      id: "cost-catalog-cashflow",
+      name: "Ajustes do catálogo de custos",
+      version: "1.0.0",
+      expression: "somente linhas incremental: mensal/anual → fixedCostMonthly ou payrollMonthly; one_time → capexInitial",
+      dependencies: ["costCatalogItems", "fixedCostMonthly", "payrollMonthly", "capexInitial"],
+      description: "Soma custos explicitamente incrementais aos agregados do projeto; linhas legadas ou já incluídas nos totais não alteram o caixa.",
+    },
+    {
       id: "pre-operational-investment",
       name: "Pré-investimento de implantação",
       version: "1.3.0",
@@ -155,7 +163,7 @@ export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
       name: "Fluxo de caixa operacional",
       version: "1.2.0",
       expression: "netCollections - variableCosts - partnerShare - fixedCosts - custos incrementais de pontos/operação/comissão - payroll - preOperationalInvestment",
-      dependencies: ["net-entry-collections", "variableCostRate", "partnerShareRate", "fixedCostMonthly", "point-economics", "commercial-operations", "commission-policy", "payrollMonthly", "pre-operational-investment"],
+      dependencies: ["net-entry-collections", "variableCostRate", "partnerShareRate", "fixedCostMonthly", "cost-catalog-cashflow", "point-economics", "commercial-operations", "commission-policy", "payrollMonthly", "pre-operational-investment"],
       description: "Produz caixa mensal depois de recebimentos, custos, repasses, operação, comissão, folha e implantação, respeitando os tratamentos contra dupla contagem.",
     },
     {

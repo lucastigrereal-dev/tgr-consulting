@@ -2,9 +2,9 @@
 
 ## Formula set ativo
 
-- ID: `igr-core-formulas-v1-7`
-- versão semântica: `1.7.0`
-- engine: `igr-engine-1.7.0`
+- ID: `igr-core-formulas-v1-8`
+- versão semântica: `1.8.0`
+- engine: `igr-engine-1.8.0`
 - estado: `published`
 - fonte executável: `shared/financial/formulas.ts`
 
@@ -14,10 +14,12 @@
 | --- | --- |
 | Produção comercial | `commercial-operations`, `commission-policy`, `point-economics`, `qualified-couples`, `gross-sales` |
 | Comercial e recebíveis | `gross-entry-generated`, `gross-receivables-generated`, `installment-collections`, `gross-receivables-settled`, `canceled-receivables`, `delinquent-balance`, `cured-collections`, `written-off-balance`, `healthy-d90` |
-| Caixa | `net-entry-collections`, `pre-operational-investment`, `commercial-team-monthly-cost`, `payment-terms-net-settlement`, `operating-cash-flow` |
+| Caixa | `net-entry-collections`, `cost-catalog-cashflow`, `pre-operational-investment`, `commercial-team-monthly-cost`, `payment-terms-net-settlement`, `operating-cash-flow` |
 | Retorno | `npv`, `irr`, `payback` |
 
 Cada definição contém ID, nome, versão própria, expressão, dependências e explicação. `FormulaRegistry` recusa set vazio, ID duplicado, fórmula ausente e ativação de set não publicado; também expõe lineage fórmula→fórmula/input.
+
+`cost-catalog-cashflow` soma apenas linhas explicitamente `incremental`: mensal/anual ajusta custo fixo ou folha e `one_time` ajusta implantação. Linhas legadas e custos marcados como já incluídos nos totais permanecem no lineage sem alterar o caixa.
 
 ## Goal Seek V1
 

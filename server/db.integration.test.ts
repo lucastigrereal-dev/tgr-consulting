@@ -4,6 +4,7 @@ import {
   approvalDecisions,
   auditEvents,
   calculationSnapshots,
+  costCatalogItems,
   exportArtifacts,
   historicalBenchmarks,
   workflowEvents,
@@ -14,6 +15,7 @@ import type { FinancialInputSnapshot } from "../shared/financial/types";
 import {
   approveSnapshotForTenant,
   createCalculationSnapshot,
+  createCostCatalogItemForTenant,
   createProjectForTenant,
   createScenarioForTenant,
   freezeBaselineForTenant,
@@ -26,6 +28,7 @@ import {
   getScenarioComparisonForTenant,
   getProjectForTenant,
   listCommercialConditionsForTenant,
+  listCostCatalogForTenant,
   listHistoricalBenchmarksForTenant,
   replaceProductCatalogForTenant,
   replaceCapturePointsForTenant,
@@ -349,6 +352,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.ordinalScenarioVersionId}`
+  );
+  await db.execute(
+    sql`DELETE cc FROM cost_catalog_items cc INNER JOIN project_versions pv ON cc.versionId = pv.id WHERE pv.projectId IN (${ids.projectId}, ${ids.ordinalProjectId})`
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.versionId}`
@@ -1097,6 +1103,20 @@ describe("IGR database integration", () => {
     expect(context.snapshotHistory).toHaveLength(0);
     expect(context.project.status).toBe("draft");
     expect(context.versions[0]?.state).toBe("draft");
+
+    await db.execute(sql.raw("DROP TRIGGER IF EXISTS tgr_test_drift_snapshot_revision"));
+    await db.execute(sql.raw(
+      `CREATE TRIGGER tgr_test_drift_snapshot_revision BEFORE INSERT ON calculation_snapshots FOR EACH ROW BEGIN IF NEW.projectVersionId = '${created.versionId}' THEN UPDATE project_versions SET financialRevision = financialRevision + 1 WHERE id = '${created.versionId}'; END IF; END`
+    ));
+    try {
+      await expect(createCalculationSnapshot({ tenantId, actorId, versionId: created.versionId, horizonMonths: 24 })).rejects.toThrow("mudou durante o cálculo");
+    } finally {
+      await db.execute(sql.raw("DROP TRIGGER IF EXISTS tgr_test_drift_snapshot_revision"));
+    }
+    const driftContext = await getProjectContextForTenant(created.projectId, tenantId);
+    expect(driftContext.snapshotHistory).toHaveLength(0);
+    expect(driftContext.project.status).toBe("draft");
+    expect(driftContext.versions[0]?.state).toBe("draft");
   });
 
   it("reverte toda a aprovação quando uma escrita intermediária falha", async () => {
@@ -1178,6 +1198,15 @@ describe("IGR database integration", () => {
     });
     expect(updated.inputHash).not.toBe(created.inputHash);
     await seedAuthoritativeCommercialDomains(created.versionId, "1100");
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+    const tiedCostTimestamp = new Date("2030-01-01T00:00:00.000Z");
+    await db.insert(costCatalogItems).values([
+      { id: "z-tied-cost", versionId: created.versionId, category: "legal", name: "Z tied", frequency: "monthly", cashflowTreatment: "included_in_project_totals", amountText: "1", status: "provided", sourceType: "current_document", sourceRef: "db.integration.test:tied-cost", updatedBy: actorId, createdAt: tiedCostTimestamp, updatedAt: tiedCostTimestamp },
+      { id: "a-tied-cost", versionId: created.versionId, category: "legal", name: "A tied", frequency: "monthly", cashflowTreatment: "included_in_project_totals", amountText: "1", status: "provided", sourceType: "current_document", sourceRef: "db.integration.test:tied-cost", updatedBy: actorId, createdAt: tiedCostTimestamp, updatedAt: tiedCostTimestamp },
+    ]);
+    expect((await listCostCatalogForTenant(created.versionId, tenantId)).items.slice(0, 2).map(item => item.id)).toEqual(["a-tied-cost", "z-tied-cost"]);
+    await createCostCatalogItemForTenant({ tenantId, actorId, versionId: created.versionId, category: "operations", name: "Operação incremental", frequency: "monthly", amountText: "12000", status: "provided", cashflowTreatment: "incremental", sourceType: "current_document", sourceRef: "db.integration.test:incremental-cost" });
     const snapshot = await createCalculationSnapshot({
       tenantId,
       actorId,
@@ -1185,14 +1214,14 @@ describe("IGR database integration", () => {
       horizonMonths: 24,
     });
     expect(snapshot.status).toBe("valid");
+    expect(snapshot.projections[0]?.fixedCosts).toBe("13000.00000000");
+    expect(snapshot.authoritativeDomains).toMatchObject({ costCatalog: { cashflowAdjustments: { status: "valid", fixedCostMonthly: "12000.00000000" } } });
     ids.snapshotId = snapshot.id;
     ids.snapshotHash = snapshot.snapshotHash;
     expect(
       (await getExportEligibilityForTenant(snapshot.id, tenantId)).eligible
     ).toBe(false);
 
-    const db = await getDb();
-    if (!db) throw new Error("Banco de integração indisponível.");
     const approvalResults = await Promise.all([
       approveSnapshotForTenant({
         tenantId,
@@ -1349,6 +1378,11 @@ describe("IGR database integration", () => {
     expect(
       await listCommercialConditionsForTenant(scenario.versionId, tenantId)
     ).toHaveLength(1);
+    const scenarioCosts = (await listCostCatalogForTenant(scenario.versionId, tenantId)).items;
+    expect(scenarioCosts).toHaveLength(3);
+    expect(scenarioCosts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Operação incremental", cashflowTreatment: "incremental" }),
+    ]));
     const scenarioInputs = await getInputsForVersion(scenario.versionId);
     const scheduledInputs: FinancialInputSnapshot = {
       ...scenarioInputs,

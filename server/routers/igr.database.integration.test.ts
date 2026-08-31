@@ -109,7 +109,7 @@ describe("igrRouter + banco", () => {
     expect((await owner.versionInputs({ versionId: created.versionId })).averageTicket.value).toBe("1100");
     const decision = await owner.createDecision({ versionId: created.versionId, inputKey: "averageTicket", title: "Ticket aprovado", decisionValue: "1100", rationale: "Comitê validou o ticket com base no produto definido.", responsible: "Comitê de investimento", sourceRef: "Ata de integração tRPC" });
     ids.decisionId = decision.id;
-    const cost = await owner.createCostCatalogItem({ versionId: created.versionId, category: "operations", name: "Custo validado", frequency: "monthly", amountText: "1200", status: "provided", sourceType: "current_document", sourceRef: "Contrato operacional" });
+    const cost = await owner.createCostCatalogItem({ versionId: created.versionId, category: "operations", name: "Custo validado", frequency: "monthly", cashflowTreatment: "included_in_project_totals", amountText: "1200", status: "provided", sourceType: "current_document", sourceRef: "Contrato operacional" });
     ids.costId = cost.id;
 
     const commercialModelInput = {

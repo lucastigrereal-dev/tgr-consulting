@@ -19,6 +19,9 @@ Nenhum desses gates autoriza credenciais no repositório.
 3. **Correção e juros:** índice, periodicidade, base e capitalização devem ser decididos antes de entrarem em snapshot oficial.
 4. **Goal Seek avançado:** V1 suporta os targets/levers registrados e estados explícitos; multiobjetivo e targets ainda marcados `unsupported` dependem de fórmula autoritativa.
 5. **Edição click-only completa:** o E2E master usa browser real para a jornada visível e tRPC autenticado para preparar domínios sem editor integral. Transformar todo o setup complexo em digitação por UI permanece melhoria de produto, não prova já concluída.
+6. **Operação por turno e ICP por ponto:** os agregados atuais cobrem capacidade, captação e Point Economics, mas `Shift`, `CaptorPlan`, sazonalidade e ICP por ponto ainda não possuem contrato autoritativo completo.
+7. **Meios de pagamento avançados:** antecipação, chargeback, PIX e políticas por adquirente exigem premissas comerciais e financeiras antes de alterar caixa oficial.
+8. **Impact Cascade e regressão visual:** o impacto financeiro determinístico e a matriz responsiva estão cobertos; grafo causal interativo e baseline pixel-a-pixel permanecem evolução de produto/apresentação.
 
 ## Higiene histórica
 
@@ -40,3 +43,4 @@ Nenhum desses gates autoriza credenciais no repositório.
 - approval/baseline idempotentes, tenancy e imutabilidade provadas;
 - headers/CSP, request ID, redaction, body limit, rate limit local e startup de produção fail-closed;
 - migrations legadas, suíte completa, E2E master e restore drill certificados localmente.
+- Cost Catalog ligado ao snapshot oficial com tratamento explícito contra dupla contagem, clone de cenário, migration legada segura e Formula Set `1.8.0`.

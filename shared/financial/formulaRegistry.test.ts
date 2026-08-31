@@ -9,7 +9,7 @@ describe("Formula Registry", () => {
     expect(registry.list()).toHaveLength(2);
     expect(registry.getActiveFormulaSet().semanticVersion).toBe("2.0.0");
     registry.selectActiveFormulaSet(IGR_CORE_FORMULA_SET_V1.id);
-    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.7.0");
+    expect(registry.getActiveFormulaSet().semanticVersion).toBe("1.8.0");
   });
 
   it("expõe lineage recursivo de KPI até inputs", () => {
@@ -40,8 +40,11 @@ describe("Formula Registry", () => {
     expect(pointLineage.find((node) => node.id === "authoritative-commercial-model" && node.kind === "input")).toBeTruthy();
     expect(operationsLineage.find((node) => node.id === "room-capacity" && node.kind === "input")).toBeTruthy();
     expect(operationsLineage.find((node) => node.id === "workforce-cohorts" && node.kind === "input")).toBeTruthy();
-    expect(IGR_CORE_FORMULA_SET_V1.id).toBe("igr-core-formulas-v1-7");
-    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.7.0");
+    expect(IGR_CORE_FORMULA_SET_V1.id).toBe("igr-core-formulas-v1-8");
+    expect(IGR_CORE_FORMULA_SET_V1.semanticVersion).toBe("1.8.0");
+    expect(IGR_CORE_FORMULA_SET_V1.definitions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "cost-catalog-cashflow", version: "1.0.0" }),
+    ]));
   });
 
   it("recusa ativar formula set que não foi publicado", () => {

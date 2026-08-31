@@ -512,12 +512,14 @@ async function main() {
       training: { cashflowTreatment: "incremental", plans: [{ trainingId: "academy", role: "closer", startMonth: 0, candidates: "8", classes: "1", durationMonths: 1, trainers: "1", trainerMonthlyCost: "5000", candidateMonthlySalary: "1500", monthlySupportCost: "1000", approvalRate: "0.9", certificationRate: "0.9", timeToProductiveMonths: 1, targetProductivePeople: "4" }] },
       commissions: { cashflowTreatment: "incremental", policies: [{ policyId: "closer-fixed", role: "closer", eligibleBase: "gross_sales", mode: "percentage", fixedAmount: "0", percentageRate: "0.02", tiers: [], guarantee: "0", cutoffDay: 15, paymentLagMonths: 1, qualityMultiplier: "1", holdbackRate: "0", reversalEnabled: false }] },
     } });
-    await caller.igr.createCostCatalogItem({ versionId, category: "operations", name: "Operacao comercial Cotia", frequency: "monthly", amountText: "12000", status: "provided", sourceType: "current_document", sourceRef });
+    await caller.igr.createCostCatalogItem({ versionId, category: "operations", name: "Operacao comercial Cotia", frequency: "monthly", cashflowTreatment: "incremental", amountText: "12000", status: "provided", sourceType: "current_document", sourceRef });
     await caller.igr.upsertReceivablesPolicy({ versionId, status: "provided", sourceType: "current_document", sourceRef, policy: { cancellationCurve: { d7: "0.01", d30: "0.02", d60: "0.03", d90: "0.04", d180: "0.05", lifetime: "0.06" }, delinquencyRate: "0.08", cureRates: { days1To30: "0.40", days31To60: "0.30", days61To90: "0.20", days90Plus: "0.10" }, writeOffAfterDays: 180, policyVersion: "e2e-policy-v1", sourceRef } });
     await caller.igr.createDecision({ versionId, title: "Aprovar baseline E2E", decisionValue: "baseline", rationale: "Jornada mestre criou dados reais e está pronta para snapshot autoritativo.", responsible: ownerName, sourceRef });
 
     const snapshot = await caller.igr.calculate({ versionId, horizonMonths: 24, asOfMonth: 0 });
     assert(snapshot.status === "valid", `Snapshot not valid: ${snapshot.status}`);
+    const costDomain = snapshot.authoritativeDomains as { costCatalog?: { cashflowAdjustments?: { status?: string; fixedCostMonthly?: string } } };
+    assert(costDomain.costCatalog?.cashflowAdjustments?.status === "valid" && costDomain.costCatalog.cashflowAdjustments.fixedCostMonthly === "12000.00000000", "Incremental Cost Catalog line did not feed the authoritative snapshot.");
     assert(snapshot.receivablesPortfolio, "Cohorts/portfolio were not generated.");
     assert(snapshot.kpis.totalOperatingCashFlow, "Cash KPI missing.");
     const capital = await caller.igr.capitalEnvelope({ versionId, horizonMonths: 24, asOfMonth: 0, availableCapital: "500000" });
@@ -530,6 +532,8 @@ async function main() {
     await caller.igr.applyGoalSeek({ targetVersionId: scenario.versionId, sourceVersionId: versionId, horizonMonths: 24, asOfMonth: 0, variableKey: "qualifiedCouplesMonth1", value: goal.result, targetKpi: "healthyD90", target: goalTarget, lowerBound: "1", upperBound: "250", objectiveValue: goal.objectiveValue, residual: goal.residual, iterations: goal.iterations });
     const scenarioSnapshot = await caller.igr.calculate({ versionId: scenario.versionId, horizonMonths: 24, asOfMonth: 0 });
     assert(scenarioSnapshot.status === "valid", "Goal Seek scenario snapshot was not valid.");
+    const scenarioCostDomain = scenarioSnapshot.authoritativeDomains as { costCatalog?: { cashflowAdjustments?: { fixedCostMonthly?: string } } };
+    assert(scenarioCostDomain.costCatalog?.cashflowAdjustments?.fixedCostMonthly === "12000.00000000", "Scenario did not inherit the authoritative Cost Catalog treatment.");
     const mismatchedScenarioSnapshot = await caller.igr.calculate({
       versionId: scenario.versionId,
       horizonMonths: 12,
@@ -609,7 +613,7 @@ async function main() {
       () => { throw new Error("Export from invalid temporary simulation succeeded."); },
       () => markCase(25, "export rejected invalid/non-approved simulation snapshot"),
     );
-    await caller.igr.createCostCatalogItem({ versionId, category: "operations", name: "bad", frequency: "monthly", amountText: "not-a-decimal", status: "provided", sourceType: "current_document", sourceRef }).then(
+    await caller.igr.createCostCatalogItem({ versionId, category: "operations", name: "bad", frequency: "monthly", cashflowTreatment: "incremental", amountText: "not-a-decimal", status: "provided", sourceType: "current_document", sourceRef }).then(
       () => { throw new Error("Corrupted input was accepted."); },
       () => markCase(26, "API rejected corrupted decimal input"),
     );
