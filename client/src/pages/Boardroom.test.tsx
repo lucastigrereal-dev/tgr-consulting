@@ -61,7 +61,11 @@ vi.mock("@/lib/trpc", () => ({
       approveSnapshot: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
       freezeBaseline: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
       requestExport: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
-      simulateCaptadores: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
+      simulateCaptadores: { useMutation: () => ({ isPending: false, mutateAsync: async () => undefined }) },
+      updateInputs: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ versionId: "meeting-branch-1" }) }) },
+      replaceCapturePoints: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ versionId: "meeting-branch-1" }) }) },
+      createDecision: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ id: "decision-1" }) }) },
+      calculate: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ id: "meeting-snapshot-1", status: "valid" }) }) },
       goalSeek: { useMutation: () => ({ isPending: false, mutate: () => undefined, data: state.goalSeekResult }) },
       createScenario: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ versionId: "goal-branch-1" }) }) },
       applyGoalSeek: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ versionId: "goal-branch-1" }) }) },
@@ -182,6 +186,13 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain("Página 13 · Capital");
     expect(html).toContain("Demonstrativo vivo");
     expect(html).toContain("Simulação de reunião");
+    expect(html).toContain("BASELINE BLOQUEADA · SIMULAÇÃO NÃO PERSISTENTE");
+    expect(html).toContain("Meta de vendas brutas/mês");
+    expect(html).toContain("DESCARTAR SIMULAÇÃO");
+    expect(html).toContain("SALVAR COMO CENÁRIO");
+    expect(html).toContain("REGISTRAR DECISÃO");
+    expect(html).toContain("SOLICITAR APROVAÇÃO");
+    expect(html).toContain("Abrir branch da baseline");
     expect(html).toContain("Goal Seek de reunião");
     expect(html).toContain("Executar Goal Seek");
     expect(html).toContain("Decision panel");

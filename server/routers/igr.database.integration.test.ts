@@ -417,6 +417,20 @@ describe("igrRouter + banco", () => {
     expect(simulation.marginal).toMatchObject({ investment: "2500.00000000" });
     expect(simulation.marginal.npv).toMatch(/^-?\d+\.\d{8}$/);
     expect(simulation.marginal.method).toContain("caixa incremental");
+    const baselineInputsBeforeMeeting = await owner.versionInputs({ versionId: created.versionId });
+    const salesTargetSimulation = await owner.simulateCaptadores({
+      versionId: created.versionId,
+      horizonMonths: 24,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "12",
+    });
+    expect(salesTargetSimulation.before.grossSalesMonth1).toBe("10.00000000");
+    expect(salesTargetSimulation.after.grossSalesMonth1).toBe("12.00000000");
+    expect(Number(salesTargetSimulation.after.qualifiedCouplesMonth1)).toBeGreaterThan(Number(salesTargetSimulation.before.qualifiedCouplesMonth1));
+    expect(salesTargetSimulation.after.kpis.npv).not.toBe(salesTargetSimulation.before.kpis.npv);
+    expect(await owner.versionInputs({ versionId: created.versionId })).toEqual(baselineInputsBeforeMeeting);
     const envelope = await owner.capitalEnvelope({
       versionId: created.versionId,
       horizonMonths: 24,

@@ -47,6 +47,7 @@ import {
 import {
   calculateFinancialProjection,
   FinanceDecimal,
+  type FinancialProjectionOptions,
 } from "../shared/financial/engine";
 import { simulateCaptadorChange } from "../shared/financial/meetingSimulator";
 import {
@@ -3087,6 +3088,7 @@ export async function simulateCaptadorChangeForTenant(params: {
   captadorDelta: string;
   qualifiedCouplesPerCaptadorMonth: string;
   loadedCostPerCaptadorMonth: string;
+  targetGrossSalesMonth1?: string;
   averageTicketDelta?: string;
   fixedCostMonthlyDelta?: string;
   payrollMonthlyDelta?: string;
@@ -3101,19 +3103,61 @@ export async function simulateCaptadorChangeForTenant(params: {
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
     throw new Error("A simulação exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
+  let simulatedCalculationOptions: FinancialProjectionOptions | undefined = context.calculationOptions;
+  if (params.targetGrossSalesMonth1 !== undefined) {
+    const pointInputs = context.authoritativeDomains?.capturePoints.authoritativeInputs;
+    const operationsDefinition = context.authoritativeDomains?.commercialOperations?.definition;
+    const baselinePointSales = context.pointEconomics
+      ? new FinanceDecimal(context.pointEconomics.totals.production.totalSales)
+      : null;
+    const targetSales = new FinanceDecimal(params.targetGrossSalesMonth1);
+    if (!pointInputs?.length || !context.pointEconomics || !operationsDefinition || !baselinePointSales) {
+      throw new Error("A meta de vendas exige Point Economics e operações comerciais autoritativos.");
+    }
+    if (baselinePointSales.eq(0) && targetSales.gt(0)) {
+      throw new Error("A meta de vendas não pode ser derivada quando a produção autoritativa atual é zero.");
+    }
+    const demandFactor = baselinePointSales.eq(0)
+      ? new FinanceDecimal(0)
+      : targetSales.div(baselinePointSales);
+    const simulatedPointEconomics = calculatePointEconomics({
+      points: pointInputs.map(point => ({
+        ...point,
+        approaches: new FinanceDecimal(point.approaches)
+          .times(demandFactor)
+          .toFixed(8),
+      })),
+    });
+    const simulatedCommercialOperations = calculateCommercialOperations({
+      definition: operationsDefinition,
+      horizonMonths: params.horizonMonths,
+      pointDemand: {
+        toursMonthly: simulatedPointEconomics.totals.funnel.tours,
+        salesMonthly: simulatedPointEconomics.totals.production.totalSales,
+      },
+    });
+    simulatedCalculationOptions = {
+      ...context.calculationOptions,
+      pointEconomics: simulatedPointEconomics,
+      commercialOperations: simulatedCommercialOperations,
+    };
+  }
   return simulateCaptadorChange({
     inputs: context.calculationInputs,
-    maxContracts: context.calculationOptions?.maxContracts,
+    calculationOptions: context.calculationOptions,
+    simulatedCalculationOptions,
     horizonMonths: params.horizonMonths,
     captadorDelta: params.captadorDelta,
     qualifiedCouplesPerCaptadorMonth:
       params.qualifiedCouplesPerCaptadorMonth,
     loadedCostPerCaptadorMonth: params.loadedCostPerCaptadorMonth,
+    targetGrossSalesMonth1: params.targetGrossSalesMonth1,
     averageTicketDelta: params.averageTicketDelta,
     fixedCostMonthlyDelta: params.fixedCostMonthlyDelta,
     payrollMonthlyDelta: params.payrollMonthlyDelta,
     variableCostMonthlyDelta: params.variableCostMonthlyDelta,
     capexInitialDelta: params.capexInitialDelta,
+    includeLeverBreakdown: false,
   });
 }
 

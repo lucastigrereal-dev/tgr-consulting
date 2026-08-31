@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { simulateCaptadorChange } from "./meetingSimulator";
 import type { FinancialInputSnapshot } from "./types";
+import { GOLDEN_NATAL_PONTA_NEGRA_2026 } from "./natalGolden";
 
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const, sourceRef: "meeting-simulator-test" });
 const inputs: FinancialInputSnapshot = {
@@ -74,5 +75,70 @@ describe("simulateCaptadorChange", () => {
     expect(result.before.kpis.grossSales).toBe("2222.22222222");
     expect(result.after.kpis.grossSales).toBe("2222.22222222");
     expect(result.marginal.grossSales).toBe("0.00000000");
+  });
+
+  it("deriva qualificados da meta mensal de vendas sem alterar o Golden Natal", () => {
+    const originalInputs = structuredClone(GOLDEN_NATAL_PONTA_NEGRA_2026.inputs);
+    const result = simulateCaptadorChange({
+      inputs: GOLDEN_NATAL_PONTA_NEGRA_2026.inputs,
+      horizonMonths: GOLDEN_NATAL_PONTA_NEGRA_2026.horizonMonths,
+      calculationOptions: GOLDEN_NATAL_PONTA_NEGRA_2026.options,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "120",
+      includeLeverBreakdown: false,
+    });
+
+    expect(result.before.grossSalesMonth1).toBe("100.00000000");
+    expect(result.after.grossSalesMonth1).toBe("120.00000000");
+    expect(result.before.qualifiedCouplesMonth1).toBe("500.00000000");
+    expect(result.after.qualifiedCouplesMonth1).toBe("600.00000000");
+    expect(result.before.kpis.sellOutMonth).not.toBe(result.after.kpis.sellOutMonth);
+    expect(result.before.variableCostMonthly).not.toBe(result.after.variableCostMonthly);
+    expect(result.before.kpis.totalOperatingCashFlow).not.toBe(result.after.kpis.totalOperatingCashFlow);
+    expect(result.before.kpis.npv).not.toBe(result.after.kpis.npv);
+    expect(result.before.kpis.paybackMonths).not.toBe(result.after.kpis.paybackMonths);
+    expect(GOLDEN_NATAL_PONTA_NEGRA_2026.inputs).toEqual(originalInputs);
+  });
+
+  it("recalcula TIR quando o fluxo possui raiz econômica disponível", () => {
+    const result = simulateCaptadorChange({
+      inputs: {
+        ...GOLDEN_NATAL_PONTA_NEGRA_2026.inputs,
+        preOperationMonths: provided("12"),
+      },
+      horizonMonths: GOLDEN_NATAL_PONTA_NEGRA_2026.horizonMonths,
+      calculationOptions: GOLDEN_NATAL_PONTA_NEGRA_2026.options,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "120",
+      includeLeverBreakdown: false,
+    });
+
+    expect(result.before.kpis.irrAnnual).not.toBeNull();
+    expect(result.after.kpis.irrAnnual).not.toBeNull();
+    expect(result.before.kpis.irrAnnual).not.toBe(result.after.kpis.irrAnnual);
+  });
+
+  it("recusa meta inválida e conversão zero ao derivar qualificados", () => {
+    expect(() => simulateCaptadorChange({
+      inputs,
+      horizonMonths: 12,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "12",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "-1",
+    })).toThrow("meta de vendas");
+
+    expect(() => simulateCaptadorChange({
+      inputs: { ...inputs, conversionRate: provided("0") },
+      horizonMonths: 12,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "12",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "20",
+    })).toThrow("conversão maior que zero");
   });
 });

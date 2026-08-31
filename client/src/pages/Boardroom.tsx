@@ -12,6 +12,7 @@ import { getChapterFormulaTrace } from "@/lib/chapterFormulaTrace";
 import { LIVE_DOCUMENT_CHAPTERS } from "@/lib/liveDocumentStructure";
 import { trpc } from "@/lib/trpc";
 import { getStudyImpacts } from "@shared/financial/impactMap";
+import type { MeetingSimulationResult } from "@shared/financial/meetingSimulator";
 import {
   GOAL_SEEK_LEVERS,
   GOAL_SEEK_TARGETS,
@@ -25,6 +26,14 @@ import {
   type FinancialInputSnapshot,
   type GoalSeekResult,
 } from "@shared/financial/types";
+import {
+  buildMeetingScenarioInputs,
+  buildMeetingScenarioCapturePoints,
+  calculateMeetingDelta,
+  isLatestMeetingResponse,
+  meetingSimulationSignature,
+  type MeetingCapturePoint,
+} from "@/lib/meetingSimulation";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -42,7 +51,7 @@ import {
   Sparkles,
   Target,
 } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
@@ -108,15 +117,9 @@ const comparisonKpis = [
   { key: "totalOperatingCashFlow" as const, label: "Caixa" },
 ];
 
-function formatSignedKpi(key: Parameters<typeof formatKpi>[0], value: string | null | undefined) {
-  const numeric = Number(value ?? "0");
-  if (!Number.isFinite(value === null ? NaN : numeric)) return "PENDENTE";
-  return `${numeric >= 0 ? "+" : "−"}${formatKpi(key, String(Math.abs(numeric)))}`;
-}
-
-function formatMarginalMonths(value: string | null) {
-  if (value === null) return "Não atinge com esta hipótese";
-  return `${Number(value).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} meses`;
+function formatMeetingPercent(value: number | null) {
+  if (value === null) return "N/A";
+  return `${value >= 0 ? "+" : "−"}${Math.abs(value).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
 }
 
 const inputLabels: Partial<Record<FinancialInputKey, string>> = {
@@ -266,14 +269,33 @@ export default function Boardroom() {
   const [activeProjectId, setActiveProjectId] = useState("");
   const [approvalRationale, setApprovalRationale] = useState("");
   const [exportUrl, setExportUrl] = useState<string | null>(null);
-  const [captadorDelta, setCaptadorDelta] = useState("-2");
-  const [qualifiedCouplesPerCaptadorMonth, setQualifiedCouplesPerCaptadorMonth] = useState("12");
-  const [loadedCostPerCaptadorMonth, setLoadedCostPerCaptadorMonth] = useState("3500");
+  const [targetGrossSalesMonth1, setTargetGrossSalesMonth1] = useState("");
+  const [captadorDelta, setCaptadorDelta] = useState("0");
+  const [qualifiedCouplesPerCaptadorMonth, setQualifiedCouplesPerCaptadorMonth] = useState("0");
+  const [loadedCostPerCaptadorMonth, setLoadedCostPerCaptadorMonth] = useState("0");
   const [averageTicketDelta, setAverageTicketDelta] = useState("0");
   const [fixedCostMonthlyDelta, setFixedCostMonthlyDelta] = useState("0");
   const [payrollMonthlyDelta, setPayrollMonthlyDelta] = useState("0");
   const [variableCostMonthlyDelta, setVariableCostMonthlyDelta] = useState("0");
   const [capexInitialDelta, setCapexInitialDelta] = useState("0");
+  const [meetingResult, setMeetingResult] = useState<MeetingSimulationResult | null>(null);
+  const [meetingError, setMeetingError] = useState("");
+  const [meetingStatus, setMeetingStatus] = useState<"idle" | "calculating" | "current">("idle");
+  const meetingRequestRef = useRef(0);
+  const meetingSignatureRef = useRef("");
+  const initializedMeetingVersionRef = useRef("");
+  const [savedMeetingScenario, setSavedMeetingScenario] = useState<{
+    versionId: string;
+    signature: string;
+    applied: boolean;
+    state: "draft" | "in_review";
+    snapshotId?: string;
+  } | null>(null);
+  const [meetingAction, setMeetingAction] = useState<"save" | "decision" | "review" | null>(null);
+  const [meetingActionMessage, setMeetingActionMessage] = useState("");
+  const [decisionRationale, setDecisionRationale] = useState("");
+  const [decisionResponsible, setDecisionResponsible] = useState("");
+  const [decisionSourceRef, setDecisionSourceRef] = useState("");
   const [goal, setGoal] = useState<BoardroomGoalSeekSelection>({
     targetKpi: "npv",
     variableKey: "qualifiedCouplesMonth1",
@@ -300,7 +322,13 @@ export default function Boardroom() {
   const calculation = snapshot?.payload as unknown as
     | (FinancialCalculation & {
         snapshotHash: string;
-        authoritativeDomains?: { asOfMonth?: number };
+        authoritativeDomains?: {
+          asOfMonth?: number;
+          capturePoints?: {
+            definitions?: MeetingCapturePoint[];
+            economics?: { totals?: { production?: { totalSales?: string } } } | null;
+          };
+        };
       })
     | undefined;
   const approval = contextQuery.data?.latestApproval;
@@ -355,10 +383,12 @@ export default function Boardroom() {
     onError: error =>
       toast.error("Exportação bloqueada.", { description: error.message }),
   });
-  const simulateCaptadores = trpc.igr.simulateCaptadores.useMutation({
-    onError: error =>
-      toast.error("A simulação não pôde rodar.", { description: error.message }),
-  });
+  const simulateCaptadores = trpc.igr.simulateCaptadores.useMutation();
+  const createMeetingBranch = trpc.igr.createScenario.useMutation();
+  const updateMeetingInputs = trpc.igr.updateInputs.useMutation();
+  const replaceMeetingCapturePoints = trpc.igr.replaceCapturePoints.useMutation();
+  const createMeetingDecision = trpc.igr.createDecision.useMutation();
+  const calculateMeetingScenario = trpc.igr.calculate.useMutation();
   const goalSeek = trpc.igr.goalSeek.useMutation({
     onError: error =>
       toast.error("Goal Seek recusado.", { description: error.message }),
@@ -488,6 +518,219 @@ export default function Boardroom() {
       // onError das mutations mostra o motivo específico; este catch evita rejeição não tratada no handler.
     }
   };
+  const baselineGrossSalesMonth1 = calculation?.projections[0]?.grossContracts
+    ?? calculation?.projections[0]?.contracts
+    ?? "";
+  useEffect(() => {
+    if (!snapshot?.projectVersionId || !baselineGrossSalesMonth1) return;
+    if (initializedMeetingVersionRef.current === snapshot.projectVersionId) return;
+    initializedMeetingVersionRef.current = snapshot.projectVersionId;
+    setTargetGrossSalesMonth1(baselineGrossSalesMonth1);
+    setMeetingResult(null);
+    setMeetingError("");
+    setMeetingStatus("idle");
+    setSavedMeetingScenario(null);
+  }, [baselineGrossSalesMonth1, snapshot?.projectVersionId]);
+
+  const createMeetingPayload = () => {
+    if (
+      !snapshot?.projectVersionId ||
+      !targetGrossSalesMonth1 ||
+      !isDecimal(targetGrossSalesMonth1) ||
+      Number(targetGrossSalesMonth1) < 0 ||
+      !isDecimal(captadorDelta) ||
+      !isDecimal(qualifiedCouplesPerCaptadorMonth) ||
+      Number(qualifiedCouplesPerCaptadorMonth) < 0 ||
+      !isDecimal(loadedCostPerCaptadorMonth) ||
+      Number(loadedCostPerCaptadorMonth) < 0 ||
+      ![averageTicketDelta, fixedCostMonthlyDelta, payrollMonthlyDelta, variableCostMonthlyDelta, capexInitialDelta].every(isDecimal)
+    ) return null;
+    return {
+      versionId: snapshot.projectVersionId,
+      horizonMonths: snapshot.horizonMonths,
+      asOfMonth: calculation?.authoritativeDomains?.asOfMonth ?? 0,
+      targetGrossSalesMonth1,
+      captadorDelta,
+      qualifiedCouplesPerCaptadorMonth,
+      loadedCostPerCaptadorMonth,
+      averageTicketDelta,
+      fixedCostMonthlyDelta,
+      payrollMonthlyDelta,
+      variableCostMonthlyDelta,
+      capexInitialDelta,
+    };
+  };
+  const runMeetingSimulation = async (manual = false) => {
+    const payload = createMeetingPayload();
+    if (!payload) {
+      meetingRequestRef.current += 1;
+      setMeetingStatus("idle");
+      setMeetingResult(null);
+      setMeetingError(targetGrossSalesMonth1 ? "Revise os campos da hipótese antes de calcular." : "");
+      return;
+    }
+    const signature = meetingSimulationSignature(payload);
+    meetingSignatureRef.current = signature;
+    const requestId = ++meetingRequestRef.current;
+    setMeetingStatus("calculating");
+    setMeetingError("");
+    try {
+      const result = await simulateCaptadores.mutateAsync(payload);
+      if (!isLatestMeetingResponse(requestId, meetingRequestRef.current, signature, meetingSignatureRef.current)) return;
+      setMeetingResult(result as MeetingSimulationResult);
+      setMeetingStatus("current");
+      setSavedMeetingScenario(current => current?.signature === signature ? current : null);
+    } catch (error) {
+      if (!isLatestMeetingResponse(requestId, meetingRequestRef.current, signature, meetingSignatureRef.current)) return;
+      const message = error instanceof Error ? error.message : "A hipótese não pôde ser calculada.";
+      setMeetingResult(null);
+      setMeetingStatus("idle");
+      setMeetingError(message);
+      if (manual) toast.error("A simulação não pôde rodar.", { description: message });
+    }
+  };
+  useEffect(() => {
+    const payload = createMeetingPayload();
+    if (!payload) {
+      meetingRequestRef.current += 1;
+      meetingSignatureRef.current = "invalid";
+      setMeetingResult(null);
+      setMeetingStatus("idle");
+      return;
+    }
+    const signature = meetingSimulationSignature(payload);
+    meetingSignatureRef.current = signature;
+    const timer = window.setTimeout(() => {
+      void runMeetingSimulation(false);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [
+    targetGrossSalesMonth1,
+    captadorDelta,
+    qualifiedCouplesPerCaptadorMonth,
+    loadedCostPerCaptadorMonth,
+    averageTicketDelta,
+    fixedCostMonthlyDelta,
+    payrollMonthlyDelta,
+    variableCostMonthlyDelta,
+    capexInitialDelta,
+    snapshot?.projectVersionId,
+    snapshot?.horizonMonths,
+    calculation?.authoritativeDomains?.asOfMonth,
+  ]);
+
+  const currentMeetingSignature = meetingResult
+    ? meetingSimulationSignature(createMeetingPayload() ?? {})
+    : "";
+  const meetingScenarioInputs = meetingResult && versionInputs
+    ? buildMeetingScenarioInputs(versionInputs, meetingResult)
+    : null;
+  const baselinePointSales = calculation?.authoritativeDomains?.capturePoints?.economics?.totals?.production?.totalSales;
+  const baseCapturePoints = calculation?.authoritativeDomains?.capturePoints?.definitions;
+  const meetingSalesTargetChanged = Boolean(
+    meetingResult &&
+    baselinePointSales &&
+    Number(targetGrossSalesMonth1) !== Number(baselinePointSales)
+  );
+  const meetingCapturePoints = meetingSalesTargetChanged && baseCapturePoints && baselinePointSales
+    ? buildMeetingScenarioCapturePoints(baseCapturePoints, baselinePointSales, targetGrossSalesMonth1)
+    : null;
+  const meetingImpactChapters = getStudyImpacts(meetingScenarioInputs?.changedKeys ?? []);
+  const ensureMeetingScenario = async () => {
+    if (!meetingResult || !versionInputs || !snapshot?.projectVersionId || !meetingScenarioInputs?.changedKeys.length) {
+      throw new Error("Calcule uma hipótese diferente da baseline antes de salvar.");
+    }
+    if (meetingSalesTargetChanged && !meetingCapturePoints) {
+      throw new Error("A hipótese de vendas não pode ser salva sem os pontos de captação autoritativos da baseline.");
+    }
+    if (savedMeetingScenario?.signature === currentMeetingSignature && savedMeetingScenario.applied) {
+      return savedMeetingScenario;
+    }
+    const branch = await createMeetingBranch.mutateAsync({
+      baseVersionId: snapshot.projectVersionId,
+      name: `Boardroom · ${targetGrossSalesMonth1} vendas/mês`,
+      reason: "Hipótese não persistente convertida explicitamente em cenário durante reunião.",
+    });
+    try {
+      await updateMeetingInputs.mutateAsync({
+        versionId: branch.versionId,
+        inputs: meetingScenarioInputs.inputs,
+      });
+      if (meetingCapturePoints) {
+        await replaceMeetingCapturePoints.mutateAsync({
+          versionId: branch.versionId,
+          points: meetingCapturePoints,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha desconhecida ao aplicar inputs.";
+      const partial = { versionId: branch.versionId, signature: currentMeetingSignature, applied: false, state: "draft" as const };
+      setSavedMeetingScenario(partial);
+      throw new Error(`A branch ${branch.versionId} foi criada, mas a hipótese não foi aplicada por completo: ${message}`);
+    }
+    const saved = { versionId: branch.versionId, signature: currentMeetingSignature, applied: true, state: "draft" as const };
+    setSavedMeetingScenario(saved);
+    return saved;
+  };
+  const runMeetingAction = async (action: "save" | "decision" | "review") => {
+    setMeetingAction(action);
+    setMeetingActionMessage("");
+    try {
+      const scenario = await ensureMeetingScenario();
+      if (action === "save") {
+        setMeetingActionMessage(`Cenário ${scenario.versionId} salvo; baseline preservada.`);
+        return;
+      }
+      if (action === "decision") {
+        if (scenario.state !== "draft") throw new Error("A decisão precisa ser registrada antes de solicitar aprovação.");
+        if (decisionRationale.trim().length < 3 || decisionResponsible.trim().length < 2 || decisionSourceRef.trim().length < 2) {
+          throw new Error("Informe racional, responsável e fonte para registrar a decisão.");
+        }
+        await createMeetingDecision.mutateAsync({
+          versionId: scenario.versionId,
+          title: "Meta de vendas brutas/mês definida no Boardroom",
+          decisionValue: `${targetGrossSalesMonth1} vendas brutas/mês`,
+          rationale: decisionRationale.trim(),
+          responsible: decisionResponsible.trim(),
+          sourceRef: decisionSourceRef.trim(),
+        });
+        setMeetingActionMessage(`Decisão registrada na branch ${scenario.versionId}; baseline preservada.`);
+        return;
+      }
+      if (!snapshot) throw new Error("Snapshot oficial indisponível para solicitar revisão.");
+      const calculated = await calculateMeetingScenario.mutateAsync({
+        versionId: scenario.versionId,
+        horizonMonths: snapshot.horizonMonths,
+        asOfMonth: calculation?.authoritativeDomains?.asOfMonth ?? 0,
+      });
+      if (calculated.status !== "valid") {
+        throw new Error("O cenário foi calculado, mas permanece inválido e não entrou em revisão.");
+      }
+      const reviewed = { ...scenario, state: "in_review" as const, snapshotId: calculated.id };
+      setSavedMeetingScenario(reviewed);
+      setMeetingActionMessage(`Revisão solicitada. Snapshot ${calculated.id}; cenário em IN_REVIEW, ainda não aprovado.`);
+    } catch (error) {
+      setMeetingActionMessage(error instanceof Error ? error.message : "A ação não pôde ser concluída.");
+    } finally {
+      setMeetingAction(null);
+    }
+  };
+  const discardMeetingSimulation = () => {
+    meetingRequestRef.current += 1;
+    setTargetGrossSalesMonth1(baselineGrossSalesMonth1);
+    setCaptadorDelta("0");
+    setQualifiedCouplesPerCaptadorMonth("0");
+    setLoadedCostPerCaptadorMonth("0");
+    setAverageTicketDelta("0");
+    setFixedCostMonthlyDelta("0");
+    setPayrollMonthlyDelta("0");
+    setVariableCostMonthlyDelta("0");
+    setCapexInitialDelta("0");
+    setMeetingResult(null);
+    setMeetingStatus("idle");
+    setMeetingError("");
+    setMeetingActionMessage("Hipótese local descartada; baseline não foi alterada.");
+  };
   const studyConclusion = !snapshot
     ? "Preencha as premissas essenciais para o TGR montar a primeira leitura de viabilidade."
     : !snapshot.isAuthoritative
@@ -597,7 +840,7 @@ export default function Boardroom() {
               className="bg-amber-400 text-slate-950 hover:bg-amber-300"
             >
               <Link href="/builder">
-                Reset / editar baseline <ArrowUpRight className="ml-2 h-4 w-4" />
+                Abrir branch da baseline <ArrowUpRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
           </div>
@@ -1047,6 +1290,29 @@ export default function Boardroom() {
             <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-scenarios")} />
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-300/20 bg-emerald-300/[0.04] p-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-200">BASELINE BLOQUEADA · SIMULAÇÃO NÃO PERSISTENTE</p>
+                <p className="mt-1 text-xs text-muted-foreground">A hipótese local nunca altera a versão oficial sem uma ação explícita.</p>
+              </div>
+              <Badge variant="outline" className="border-sky-300/25 text-sky-100">
+                {meetingStatus === "calculating" ? "CALCULANDO…" : meetingStatus === "current" ? "HIPÓTESE ATUAL" : "AGUARDANDO HIPÓTESE"}
+              </Badge>
+            </div>
+            <div className="max-w-md">
+              <Label htmlFor="meta-vendas-brutas">Meta de vendas brutas/mês</Label>
+              <Input
+                id="meta-vendas-brutas"
+                inputMode="decimal"
+                value={targetGrossSalesMonth1}
+                onChange={event => setTargetGrossSalesMonth1(normalizeDecimalInput(event.target.value))}
+                placeholder={baselineGrossSalesMonth1 ? `Baseline: ${baselineGrossSalesMonth1}` : "Carregando baseline real…"}
+                className="mt-1.5 bg-white/[0.03] text-lg font-semibold"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">O engine deriva os qualificados necessários usando a conversão autoritativa.</p>
+            </div>
+            <details className="rounded-xl border border-white/10 bg-black/10 p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-sky-100">Avançado · custos, equipe e demais deltas</summary>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <div>
                 <Label htmlFor="captador-delta">Variação de captadores</Label>
@@ -1081,61 +1347,61 @@ export default function Boardroom() {
                 <Input id="delta-capex" inputMode="decimal" value={capexInitialDelta} onChange={event => setCapexInitialDelta(event.target.value)} className="mt-1.5 bg-white/[0.03]" />
               </div>
             </div>
+            </details>
             <Button
               variant="outline"
               className="border-sky-300/30 bg-sky-300/[0.08] text-sky-100 hover:bg-sky-300/[0.15]"
-              disabled={simulateCaptadores.isPending}
-              onClick={() =>
-                simulateCaptadores.mutate({
-                  versionId: snapshot.projectVersionId,
-                  horizonMonths: snapshot.horizonMonths,
-                  asOfMonth: calculation?.authoritativeDomains?.asOfMonth ?? 0,
-                  captadorDelta,
-                  qualifiedCouplesPerCaptadorMonth,
-                  loadedCostPerCaptadorMonth,
-                  averageTicketDelta,
-                  fixedCostMonthlyDelta,
-                  payrollMonthlyDelta,
-                  variableCostMonthlyDelta,
-                  capexInitialDelta,
-                })
-              }
+              disabled={meetingStatus === "calculating"}
+              onClick={() => void runMeetingSimulation(true)}
             >
-              {simulateCaptadores.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              Simular impacto sem gravar
+              {meetingStatus === "calculating" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Recalcular agora
             </Button>
-            {simulateCaptadores.data ? (
-              <>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">Qualificados — mês 1</p><p className="mt-2 font-medium">{simulateCaptadores.data.before.qualifiedCouplesMonth1} → {simulateCaptadores.data.after.qualifiedCouplesMonth1}</p></div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">Folha mensal</p><p className="mt-2 font-medium">{formatKpi("totalOperatingCashFlow", simulateCaptadores.data.before.payrollMonthly)} → {formatKpi("totalOperatingCashFlow", simulateCaptadores.data.after.payrollMonthly)}</p></div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">Ticket médio</p><p className="mt-2 font-medium">{formatKpi("averageTicket", simulateCaptadores.data.before.averageTicket)} → {formatKpi("averageTicket", simulateCaptadores.data.after.averageTicket)}</p></div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">Custo fixo mensal</p><p className="mt-2 font-medium">{formatKpi("totalOperatingCashFlow", simulateCaptadores.data.before.fixedCostMonthly)} → {formatKpi("totalOperatingCashFlow", simulateCaptadores.data.after.fixedCostMonthly)}</p></div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">Comissão / incentivo mês</p><p className="mt-2 font-medium">{formatKpi("totalOperatingCashFlow", simulateCaptadores.data.before.variableCostMonthly)} → {formatKpi("totalOperatingCashFlow", simulateCaptadores.data.after.variableCostMonthly)}</p></div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">CAPEX de implantação</p><p className="mt-2 font-medium">{formatKpi("preOperationalInvestment", simulateCaptadores.data.before.capexInitial)} → {formatKpi("preOperationalInvestment", simulateCaptadores.data.after.capexInitial)}</p></div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">VPL simulado</p><p className="mt-2 font-medium">{formatKpi("npv", simulateCaptadores.data.after.kpis.npv)}</p></div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4"><p className="text-xs text-muted-foreground">Caixa simulado</p><p className="mt-2 font-medium">{formatKpi("totalOperatingCashFlow", simulateCaptadores.data.after.kpis.totalOperatingCashFlow)}</p></div>
-              </div>
-              <div className="rounded-xl border border-sky-300/20 bg-sky-300/[0.035] p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.15em] text-sky-200/90">Leitura marginal da decisão</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{simulateCaptadores.data.marginal.method}</p></div><Badge variant="outline" className="border-sky-300/25 text-sky-100">NÃO PERSISTENTE</Badge></div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Ganho marginal de venda</p><p className="mt-1 font-medium text-emerald-200">{formatSignedKpi("grossSales", simulateCaptadores.data.marginal.grossSales)}</p></div>
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Custo marginal</p><p className="mt-1 font-medium text-rose-200">{formatSignedKpi("totalOperatingCashFlow", simulateCaptadores.data.marginal.cost)}</p></div>
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Caixa marginal</p><p className="mt-1 font-medium">{formatSignedKpi("totalOperatingCashFlow", simulateCaptadores.data.marginal.operatingCash)}</p></div>
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Investimento adicional</p><p className="mt-1 font-medium text-amber-200">{formatSignedKpi("preOperationalInvestment", simulateCaptadores.data.marginal.investment)}</p></div>
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Δ VPL</p><p className="mt-1 font-medium">{formatSignedKpi("npv", simulateCaptadores.data.marginal.npv)}</p></div>
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Δ TIR</p><p className="mt-1 font-medium">{formatSignedKpi("irrAnnual", simulateCaptadores.data.marginal.irrAnnual)}</p></div>
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Δ Payback</p><p className="mt-1 font-medium">{formatSignedKpi("paybackMonths", simulateCaptadores.data.marginal.paybackMonths)}</p></div>
-                  <div className="rounded-lg border border-white/8 bg-black/10 p-3"><p className="text-xs text-muted-foreground">Ponto de equilíbrio da decisão</p><p className="mt-1 font-medium">{formatMarginalMonths(simulateCaptadores.data.marginal.recoveryMonths)}</p></div>
+            {meetingError ? <p role="alert" className="text-sm text-rose-200">{meetingError}</p> : null}
+            {meetingResult ? (
+              <div className="space-y-4">
+                <div className="overflow-x-auto rounded-xl border border-white/10">
+                  <table className="w-full min-w-[760px] text-left text-sm">
+                    <thead className="bg-black/20 text-xs uppercase tracking-[0.1em] text-muted-foreground"><tr><th className="px-3 py-3">Indicador</th><th className="px-3 py-3">Oficial</th><th className="px-3 py-3">Hipótese</th><th className="px-3 py-3">Delta absoluto</th><th className="px-3 py-3">Delta %</th></tr></thead>
+                    <tbody>
+                      {[
+                        { label: "Qualificados · mês 1", before: meetingResult.before.qualifiedCouplesMonth1, after: meetingResult.after.qualifiedCouplesMonth1, format: (value: string | null) => value ?? "N/A" },
+                        { label: "Vendas brutas · mês 1", before: meetingResult.before.grossSalesMonth1, after: meetingResult.after.grossSalesMonth1, format: (value: string | null) => value ?? "N/A" },
+                        { label: "Sell-out", before: meetingResult.before.kpis.sellOutMonth, after: meetingResult.after.kpis.sellOutMonth, format: (value: string | null) => value ? `${Number(value).toLocaleString("pt-BR")} meses` : "N/A" },
+                        { label: "Comissão / custo variável · mês", before: meetingResult.before.variableCostMonthly, after: meetingResult.after.variableCostMonthly, format: (value: string | null) => formatKpi("totalOperatingCashFlow", value) },
+                        { label: "Caixa operacional", before: meetingResult.before.kpis.totalOperatingCashFlow, after: meetingResult.after.kpis.totalOperatingCashFlow, format: (value: string | null) => formatKpi("totalOperatingCashFlow", value) },
+                        { label: "VPL", before: meetingResult.before.kpis.npv, after: meetingResult.after.kpis.npv, format: (value: string | null) => formatKpi("npv", value) },
+                        { label: "TIR", before: meetingResult.before.kpis.irrAnnual, after: meetingResult.after.kpis.irrAnnual, format: (value: string | null) => formatKpi("irrAnnual", value) },
+                        { label: "Payback", before: meetingResult.before.kpis.paybackMonths, after: meetingResult.after.kpis.paybackMonths, format: (value: string | null) => formatKpi("paybackMonths", value) },
+                        { label: "Capital necessário", before: meetingResult.before.kpis.capitalRequired, after: meetingResult.after.kpis.capitalRequired, format: (value: string | null) => formatKpi("capitalRequired", value) },
+                      ].map(row => {
+                        const delta = calculateMeetingDelta(row.after, row.before);
+                        return <tr className="border-t border-white/[0.07]" key={row.label}><td className="px-3 py-3 font-medium text-sky-100">{row.label}</td><td className="px-3 py-3">{row.format(row.before)}</td><td className="px-3 py-3">{row.format(row.after)}</td><td className="px-3 py-3">{delta.absolute === null ? "N/A" : delta.absolute.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td><td className="px-3 py-3">{formatMeetingPercent(delta.percent)}</td></tr>;
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-                {simulateCaptadores.data.marginal.byLever.length ? (
-                  <div className="mt-4 overflow-x-auto rounded-lg border border-white/8">
-                    <table className="w-full min-w-[1000px] text-left text-xs"><thead className="border-b border-white/10 bg-black/10 uppercase tracking-[0.1em] text-muted-foreground"><tr><th className="px-3 py-3 font-medium">Alavanca isolada</th><th className="px-3 py-3 font-medium">Ganho de venda</th><th className="px-3 py-3 font-medium">Custo</th><th className="px-3 py-3 font-medium">Caixa</th><th className="px-3 py-3 font-medium">Δ VPL</th><th className="px-3 py-3 font-medium">Δ TIR</th><th className="px-3 py-3 font-medium">Δ Payback</th><th className="px-3 py-3 font-medium">Equilíbrio</th></tr></thead><tbody>{simulateCaptadores.data.marginal.byLever.map(item => <tr className="border-b border-white/[0.06] text-slate-200 last:border-0" key={item.key}><td className="px-3 py-3 font-medium text-sky-100">{item.label}</td><td className="px-3 py-3 text-emerald-200">{formatSignedKpi("grossSales", item.marginal.grossSales)}</td><td className="px-3 py-3 text-rose-200">{formatSignedKpi("totalOperatingCashFlow", item.marginal.cost)}</td><td className="px-3 py-3">{formatSignedKpi("totalOperatingCashFlow", item.marginal.operatingCash)}</td><td className="px-3 py-3">{formatSignedKpi("npv", item.marginal.npv)}</td><td className="px-3 py-3">{formatSignedKpi("irrAnnual", item.marginal.irrAnnual)}</td><td className="px-3 py-3">{formatSignedKpi("paybackMonths", item.marginal.paybackMonths)}</td><td className="px-3 py-3">{formatMarginalMonths(item.marginal.recoveryMonths)}</td></tr>)}</tbody></table>
-                  </div>
-                ) : null}
+                <div className="rounded-xl border border-sky-300/20 bg-sky-300/[0.035] p-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-sky-100">Páginas impactadas</p>
+                  <div className="mt-2 flex flex-wrap gap-2">{meetingImpactChapters.map(impact => <Badge variant="outline" className="border-sky-300/25 text-sky-100" key={impact.chapter}>{impact.chapter} · {impact.outputs.join(", ")}</Badge>)}</div>
+                </div>
               </div>
-              </>
             ) : null}
+            <div className="grid gap-3 rounded-xl border border-white/10 bg-black/10 p-4 md:grid-cols-3">
+              <div><Label htmlFor="meeting-decision-rationale">Racional da decisão</Label><Textarea id="meeting-decision-rationale" value={decisionRationale} onChange={event => setDecisionRationale(event.target.value)} className="mt-1.5 min-h-20 bg-white/[0.03]" placeholder="Trade-off aceito na reunião" /></div>
+              <div><Label htmlFor="meeting-decision-owner">Responsável</Label><Input id="meeting-decision-owner" value={decisionResponsible} onChange={event => setDecisionResponsible(event.target.value)} className="mt-1.5 bg-white/[0.03]" placeholder="Dono da decisão" /></div>
+              <div><Label htmlFor="meeting-decision-source">Fonte / ata</Label><Input id="meeting-decision-source" value={decisionSourceRef} onChange={event => setDecisionSourceRef(event.target.value)} className="mt-1.5 bg-white/[0.03]" placeholder="Ata, reunião ou documento" /></div>
+            </div>
+            <div className="rounded-xl border border-amber-200/20 bg-amber-100/[0.035] p-4">
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={discardMeetingSimulation}>DESCARTAR SIMULAÇÃO</Button>
+                <Button variant="outline" disabled={!meetingResult || Boolean(meetingAction)} onClick={() => void runMeetingAction("save")}>SALVAR COMO CENÁRIO</Button>
+                <Button variant="outline" disabled={!meetingResult || Boolean(meetingAction) || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("decision")}>REGISTRAR DECISÃO</Button>
+                <Button className="bg-amber-400 text-slate-950 hover:bg-amber-300" disabled={!meetingResult || Boolean(meetingAction) || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("review")}>{meetingAction === "review" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}SOLICITAR APROVAÇÃO</Button>
+              </div>
+              {meetingActionMessage ? <p role="status" className="mt-3 text-sm text-amber-100">{meetingActionMessage}</p> : null}
+              {savedMeetingScenario ? <p className="mt-2 font-mono text-xs text-muted-foreground">Cenário {savedMeetingScenario.versionId} · {savedMeetingScenario.applied ? savedMeetingScenario.state.toUpperCase() : "BRANCH CRIADA / INPUTS NÃO APLICADOS"}{savedMeetingScenario.snapshotId ? ` · snapshot ${savedMeetingScenario.snapshotId}` : ""}</p> : null}
+            </div>
             <div className="rounded-2xl border border-amber-200/20 bg-amber-100/[0.035] p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>

@@ -1,4 +1,8 @@
-import { calculateFinancialProjection, FinanceDecimal } from "./engine";
+import {
+  calculateFinancialProjection,
+  FinanceDecimal,
+  type FinancialProjectionOptions,
+} from "./engine";
 import type { FinancialCalculation, FinancialInputSnapshot } from "./types";
 
 export type CaptadorSimulationInput = {
@@ -13,6 +17,9 @@ export type CaptadorSimulationInput = {
   variableCostMonthlyDelta?: string;
   capexInitialDelta?: string;
   maxContracts?: string;
+  calculationOptions?: FinancialProjectionOptions;
+  simulatedCalculationOptions?: FinancialProjectionOptions;
+  targetGrossSalesMonth1?: string;
   includeLeverBreakdown?: boolean;
 };
 
@@ -31,6 +38,7 @@ export type MarginalAnalysis = {
 };
 
 type SimulationState = {
+  grossSalesMonth1: string;
   qualifiedCouplesMonth1: string;
   payrollMonthly: string;
   averageTicket: string;
@@ -76,7 +84,10 @@ function readProvided(inputs: FinancialInputSnapshot, key: "qualifiedCouplesMont
 }
 
 export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingSimulationResult {
-  const calculationOptions = { maxContracts: input.maxContracts };
+  const calculationOptions = {
+    ...input.calculationOptions,
+    maxContracts: input.maxContracts ?? input.calculationOptions?.maxContracts,
+  };
   const baseline = calculateFinancialProjection(input.inputs, input.horizonMonths, calculationOptions);
   if (baseline.status !== "valid") throw new Error("A simulação exige um estudo calculável, sem premissas financeiras pendentes.");
 
@@ -90,21 +101,36 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
   const baselineVariableCostRate = readProvided(input.inputs, "variableCostRate");
   const baselineCapex = readProvided(input.inputs, "capexInitial");
   const conversionRate = readProvided(input.inputs, "conversionRate");
+  const targetGrossSalesMonth1 = input.targetGrossSalesMonth1 === undefined
+    ? null
+    : new FinanceDecimal(input.targetGrossSalesMonth1);
+  if (targetGrossSalesMonth1?.isNegative()) {
+    throw new Error("A meta de vendas brutas/mês deve ser não negativa.");
+  }
+  if (targetGrossSalesMonth1 !== null && conversionRate.lte(0)) {
+    throw new Error("A meta de vendas exige conversão maior que zero.");
+  }
   const ticketDelta = new FinanceDecimal(input.averageTicketDelta ?? "0");
   const fixedCostDelta = new FinanceDecimal(input.fixedCostMonthlyDelta ?? "0");
   const payrollDelta = new FinanceDecimal(input.payrollMonthlyDelta ?? "0");
   const variableCostMonthlyDelta = new FinanceDecimal(input.variableCostMonthlyDelta ?? "0");
   const capexDelta = new FinanceDecimal(input.capexInitialDelta ?? "0");
-  const nextCouples = FinanceDecimal.max(new FinanceDecimal(0), baselineCouples.plus(delta.times(couplesPerCaptador)));
+  const nextCouples = targetGrossSalesMonth1 === null
+    ? FinanceDecimal.max(new FinanceDecimal(0), baselineCouples.plus(delta.times(couplesPerCaptador)))
+    : targetGrossSalesMonth1.div(conversionRate);
   const nextPayroll = FinanceDecimal.max(new FinanceDecimal(0), baselinePayroll.plus(delta.times(loadedCost)).plus(payrollDelta));
   const nextTicket = FinanceDecimal.max(new FinanceDecimal(0), baselineTicket.plus(ticketDelta));
   const nextFixedCost = FinanceDecimal.max(new FinanceDecimal(0), baselineFixedCost.plus(fixedCostDelta));
   const baselineMonthlyGrossSales = baselineCouples.times(conversionRate).times(baselineTicket);
   const nextMonthlyGrossSales = nextCouples.times(conversionRate).times(nextTicket);
   const baselineVariableCostMonthly = baselineMonthlyGrossSales.times(baselineVariableCostRate);
+  const nextVariableCostMonthly = (targetGrossSalesMonth1 === null
+    ? baselineVariableCostMonthly
+    : nextMonthlyGrossSales.times(baselineVariableCostRate))
+    .plus(variableCostMonthlyDelta);
   const nextVariableCostRate = nextMonthlyGrossSales.eq(0)
     ? new FinanceDecimal(0)
-    : FinanceDecimal.max(new FinanceDecimal(0), baselineVariableCostMonthly.plus(variableCostMonthlyDelta).div(nextMonthlyGrossSales));
+    : FinanceDecimal.max(new FinanceDecimal(0), nextVariableCostMonthly.div(nextMonthlyGrossSales));
   const nextCapex = FinanceDecimal.max(new FinanceDecimal(0), baselineCapex.plus(capexDelta));
   const simulatedInputs: FinancialInputSnapshot = {
     ...input.inputs,
@@ -115,7 +141,11 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
     variableCostRate: { status: "provided", value: decimalText(nextVariableCostRate), sourceType: "derived_analysis", sourceRef: "meeting_simulator" },
     capexInitial: { status: "provided", value: decimalText(nextCapex), sourceType: "derived_analysis", sourceRef: "meeting_simulator" },
   };
-  const simulated = calculateFinancialProjection(simulatedInputs, input.horizonMonths, calculationOptions);
+  const simulated = calculateFinancialProjection(
+    simulatedInputs,
+    input.horizonMonths,
+    input.simulatedCalculationOptions ?? calculationOptions
+  );
   if (simulated.status !== "valid") throw new Error("A cópia de simulação ficou inválida.");
   const marginalGrossSales = decimalOrZero(simulated.kpis.grossSales).minus(decimalOrZero(baseline.kpis.grossSales));
   const marginalOperatingCash = decimalOrZero(simulated.kpis.totalOperatingCashFlow).minus(decimalOrZero(baseline.kpis.totalOperatingCashFlow));
@@ -137,11 +167,13 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
       variableCostMonthlyDelta: "0",
       capexInitialDelta: "0",
       includeLeverBreakdown: false,
+      targetGrossSalesMonth1: undefined,
       ...patch,
     }).marginal;
   const leverageBreakdown: MarginalAnalysis["byLever"] = input.includeLeverBreakdown === false
     ? []
     : [
+        { key: "vendas", label: "Meta de vendas", active: targetGrossSalesMonth1 !== null && !targetGrossSalesMonth1.eq(baselineCouples.times(conversionRate)), patch: { targetGrossSalesMonth1: input.targetGrossSalesMonth1 } },
         { key: "captadores", label: "Captadores", active: !delta.eq(0), patch: { captadorDelta: input.captadorDelta } },
         { key: "ticket", label: "Ticket médio", active: !ticketDelta.eq(0), patch: { averageTicketDelta: input.averageTicketDelta } },
         { key: "custo_fixo", label: "Custo fixo", active: !fixedCostDelta.eq(0), patch: { fixedCostMonthlyDelta: input.fixedCostMonthlyDelta } },
@@ -160,9 +192,10 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
       payrollMonthlyDelta: decimalText(payrollDelta),
       variableCostMonthlyDelta: decimalText(variableCostMonthlyDelta),
       capexInitialDelta: decimalText(capexDelta),
+      ...(targetGrossSalesMonth1 === null ? {} : { targetGrossSalesMonth1: decimalText(targetGrossSalesMonth1) }),
     },
-    before: { qualifiedCouplesMonth1: decimalText(baselineCouples), payrollMonthly: decimalText(baselinePayroll), averageTicket: decimalText(baselineTicket), fixedCostMonthly: decimalText(baselineFixedCost), variableCostRate: decimalText(baselineVariableCostRate), variableCostMonthly: decimalText(baselineVariableCostMonthly), capexInitial: decimalText(baselineCapex), kpis: baseline.kpis },
-    after: { qualifiedCouplesMonth1: decimalText(nextCouples), payrollMonthly: decimalText(nextPayroll), averageTicket: decimalText(nextTicket), fixedCostMonthly: decimalText(nextFixedCost), variableCostRate: decimalText(nextVariableCostRate), variableCostMonthly: decimalText(baselineVariableCostMonthly.plus(variableCostMonthlyDelta)), capexInitial: decimalText(nextCapex), kpis: simulated.kpis },
+    before: { grossSalesMonth1: decimalText(new FinanceDecimal(baseline.projections[0]?.grossContracts ?? baseline.projections[0]?.contracts ?? "0")), qualifiedCouplesMonth1: decimalText(baselineCouples), payrollMonthly: decimalText(baselinePayroll), averageTicket: decimalText(baselineTicket), fixedCostMonthly: decimalText(baselineFixedCost), variableCostRate: decimalText(baselineVariableCostRate), variableCostMonthly: decimalText(baselineVariableCostMonthly), capexInitial: decimalText(baselineCapex), kpis: baseline.kpis },
+    after: { grossSalesMonth1: decimalText(new FinanceDecimal(simulated.projections[0]?.grossContracts ?? simulated.projections[0]?.contracts ?? "0")), qualifiedCouplesMonth1: decimalText(nextCouples), payrollMonthly: decimalText(nextPayroll), averageTicket: decimalText(nextTicket), fixedCostMonthly: decimalText(nextFixedCost), variableCostRate: decimalText(nextVariableCostRate), variableCostMonthly: decimalText(nextVariableCostMonthly), capexInitial: decimalText(nextCapex), kpis: simulated.kpis },
     marginal: {
       grossSales: decimalText(marginalGrossSales),
       cost: decimalText(marginalCost),
