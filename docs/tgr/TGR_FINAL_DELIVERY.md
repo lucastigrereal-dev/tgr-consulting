@@ -8,7 +8,7 @@
 
 **Branch:** `codex/tgr-master-brd-v1`
 
-**Certified source head before receipt:** `d6c3f3c125c2fb8b8e0451274c25e85cf2c9d908`
+**Certified source head before receipt:** `179f1693ad14e76cec009962ca74a0d493aa7eec`
 
 **Environment:** Windows local; MySQL, storage e sessão de browser efêmeros; nenhuma credencial de produção usada
 
@@ -18,6 +18,8 @@ O TGR Consulting transforma o estudo em um fluxo rastreável: Builder → snapsh
 
 O Cost Catalog passou a declarar se cada linha é incremental ou já está incluída nos totais do projeto. Custos incrementais alteram o caixa oficial e o hash; linhas legadas recebem o default seguro contra dupla contagem. A criação do snapshot bloqueia e revalida a versão, com rollback integral se houver drift concorrente.
 
+A criação de snapshot também é idempotente: retries com identidade analítica e hash iguais reutilizam a linha existente antes de KPI memory, workflow e audit; colisões semanticamente incompatíveis continuam bloqueadas pela unique constraint.
+
 Goal Seek V1 é recalculado no servidor, aplicado somente a branch de cenário e protegido por `inputHash` + `financialRevision` monotônica. Comparações e exports de cenário carregam horizonte, `asOfMonth`, `selectionHash` e `exportPackHash`; snapshots incompatíveis são excluídos com estado explícito.
 
 ## Gates provados
@@ -25,8 +27,8 @@ Goal Seek V1 é recalculado no servidor, aplicado somente a branch de cenário e
 | Gate | Resultado |
 | --- | --- |
 | TypeScript/build | PASS — `pnpm run check` e `pnpm run build` |
-| Suíte completa | PASS — 48 arquivos, 195 testes |
-| Integração MySQL | PASS — migrations `0000`–`0016`, tenancy, transações, corrida de Goal Seek/snapshot e lifecycle |
+| Suíte completa | PASS — 48 arquivos, 196 testes |
+| Integração MySQL | PASS — 15 testes; migrations `0000`–`0016`, tenancy, transações, corrida de inputs/Goal Seek/snapshot, idempotência e lifecycle |
 | Migração legada | PASS — deduplicação, `asOfMonth`, ordinal cronológica, revisão financeira e tratamento seguro do catálogo |
 | Restore drill | PASS — dump + SHA-256 + restore + canary + limpeza |
 | E2E master | PASS — híbrido autenticado, 30/30 adversariais, 4 viewports × 16 capítulos |
