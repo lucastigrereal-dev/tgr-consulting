@@ -131,3 +131,11 @@ export function isLatestMeetingResponse(
 ) {
   return requestId === currentRequestId && responseSignature === currentSignature;
 }
+
+export function isCurrentMeetingHypothesis(
+  status: "idle" | "calculating" | "current",
+  resultSignature: string,
+  currentSignature: string
+) {
+  return status === "current" && Boolean(resultSignature) && resultSignature === currentSignature;
+}

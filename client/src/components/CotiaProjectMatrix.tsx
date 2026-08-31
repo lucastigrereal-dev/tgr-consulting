@@ -190,7 +190,7 @@ export function CotiaProjectMatrix({
         </div>
       </div>
 
-      <MatrixSection title="Hospedar / Da Mata · Dados do projeto">
+      <MatrixSection title="TGR Consulting · Dados do projeto">
         <div className="grid border-collapse sm:grid-cols-2 lg:grid-cols-4">
           {[
             ["nomeProjeto", "Nome do projeto", "Novo projeto", "text"],

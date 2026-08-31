@@ -3080,7 +3080,7 @@ export async function createCalculationSnapshot(params: {
   return { id: persistedSnapshot.id, ...calculation };
 }
 
-export async function simulateCaptadorChangeForTenant(params: {
+type MeetingSimulationParams = {
   tenantId: number;
   versionId: string;
   horizonMonths: number;
@@ -3094,7 +3094,9 @@ export async function simulateCaptadorChangeForTenant(params: {
   payrollMonthlyDelta?: string;
   variableCostMonthlyDelta?: string;
   capexInitialDelta?: string;
-}) {
+};
+
+async function prepareMeetingSimulation(params: MeetingSimulationParams) {
   const context = await getAuthoritativeCalculationContext({
     tenantId: params.tenantId,
     versionId: params.versionId,
@@ -3104,6 +3106,7 @@ export async function simulateCaptadorChangeForTenant(params: {
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
     throw new Error("A simulação exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
   let simulatedCalculationOptions: FinancialProjectionOptions | undefined = context.calculationOptions;
+  let scaledPointInputs: PointEconomicsInput[] | undefined;
   if (params.targetGrossSalesMonth1 !== undefined) {
     const pointInputs = context.authoritativeDomains?.capturePoints.authoritativeInputs;
     const operationsDefinition = context.authoritativeDomains?.commercialOperations?.definition;
@@ -3120,14 +3123,13 @@ export async function simulateCaptadorChangeForTenant(params: {
     const demandFactor = baselinePointSales.eq(0)
       ? new FinanceDecimal(0)
       : targetSales.div(baselinePointSales);
-    const simulatedPointEconomics = calculatePointEconomics({
-      points: pointInputs.map(point => ({
+    scaledPointInputs = pointInputs.map(point => ({
         ...point,
         approaches: new FinanceDecimal(point.approaches)
           .times(demandFactor)
           .toFixed(8),
-      })),
-    });
+      }));
+    const simulatedPointEconomics = calculatePointEconomics({ points: scaledPointInputs });
     const simulatedCommercialOperations = calculateCommercialOperations({
       definition: operationsDefinition,
       horizonMonths: params.horizonMonths,
@@ -3142,7 +3144,7 @@ export async function simulateCaptadorChangeForTenant(params: {
       commercialOperations: simulatedCommercialOperations,
     };
   }
-  return simulateCaptadorChange({
+  const simulation = simulateCaptadorChange({
     inputs: context.calculationInputs,
     calculationOptions: context.calculationOptions,
     simulatedCalculationOptions,
@@ -3159,28 +3161,38 @@ export async function simulateCaptadorChangeForTenant(params: {
     capexInitialDelta: params.capexInitialDelta,
     includeLeverBreakdown: false,
   });
+  return { context, simulation, scaledPointInputs };
 }
 
-export async function createScenarioForTenant(params: {
+export async function simulateCaptadorChangeForTenant(params: MeetingSimulationParams) {
+  return (await prepareMeetingSimulation(params)).simulation;
+}
+
+type ScenarioCloneContext = {
+  transaction: TgrTransaction;
+  versionId: string;
+  branchId: string;
+  baseVersion: Awaited<ReturnType<typeof getVersionForTenant>>;
+  inputSnapshot: FinancialInputSnapshot;
+};
+
+async function createScenarioInTransaction(params: {
   tenantId: number;
   actorId: number;
-  baseVersionId: string;
+  baseVersion: Awaited<ReturnType<typeof getVersionForTenant>>;
+  formulaSetVersionId: string;
   name: string;
   reason: string;
+  transaction: TgrTransaction;
+  afterClone?: (context: ScenarioCloneContext) => Promise<void>;
 }) {
-  const db = await requireDb();
-  const baseVersion = await getVersionForTenant(
-    params.baseVersionId,
-    params.tenantId
-  );
-  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
   const versionId = nanoid();
   const branchId = nanoid();
-  await db.transaction(async transaction => {
+  const { transaction } = params;
     const currentBaseRows = await transaction
       .select()
       .from(projectVersions)
-      .where(eq(projectVersions.id, baseVersion.id))
+      .where(eq(projectVersions.id, params.baseVersion.id))
       .limit(1);
     const currentBase = currentBaseRows[0];
     if (!currentBase)
@@ -3246,7 +3258,7 @@ export async function createScenarioForTenant(params: {
       id: versionId,
       projectId: currentBase.projectId,
       parentVersionId: currentBase.id,
-      formulaSetVersionId,
+      formulaSetVersionId: params.formulaSetVersionId,
       kind: "scenario",
       state: "draft",
       isImmutable: false,
@@ -3374,6 +3386,13 @@ export async function createScenarioForTenant(params: {
         baseCostCatalogItems.map(item => ({ id: nanoid(), versionId, category: item.category, name: item.name, frequency: item.frequency, cashflowTreatment: item.cashflowTreatment, amountText: item.amountText, status: item.status, sourceType: item.sourceType, sourceRef: item.sourceRef, updatedBy: params.actorId }))
       );
     }
+    await params.afterClone?.({
+      transaction,
+      versionId,
+      branchId,
+      baseVersion: params.baseVersion,
+      inputSnapshot,
+    });
     await transaction.insert(scenarioBranches).values({
       id: branchId,
       projectId: currentBase.projectId,
@@ -3401,8 +3420,170 @@ export async function createScenarioForTenant(params: {
       actorId: params.actorId,
       metadata: { baseVersionId: currentBase.id, branchVersionId: versionId },
     });
-  });
   return { branchId, versionId };
+}
+
+export async function createScenarioForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  baseVersionId: string;
+  name: string;
+  reason: string;
+}) {
+  const db = await requireDb();
+  const baseVersion = await getVersionForTenant(params.baseVersionId, params.tenantId);
+  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
+  return db.transaction(transaction => createScenarioInTransaction({
+    ...params,
+    baseVersion,
+    formulaSetVersionId,
+    transaction,
+  }));
+}
+
+export async function promoteMeetingSimulationToScenarioForTenant(params: MeetingSimulationParams & {
+  actorId: number;
+  baseSnapshotId: string;
+  name: string;
+  reason: string;
+  sourceRef: string;
+}) {
+  const db = await requireDb();
+  const prepared = await prepareMeetingSimulation(params);
+  const baseVersion = prepared.context.version;
+  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
+  const sourceRef = params.sourceRef.trim();
+  if (!sourceRef) throw new Error("Salvar cenário de reunião exige fonte ou ata explícita.");
+
+  const candidateValues: Partial<Record<FinancialInputKey, string>> = {
+    qualifiedCouplesMonth1: prepared.simulation.after.qualifiedCouplesMonth1,
+    payrollMonthly: prepared.simulation.after.payrollMonthly,
+    averageTicket: prepared.simulation.after.averageTicket,
+    fixedCostMonthly: prepared.simulation.after.fixedCostMonthly,
+    variableCostRate: prepared.simulation.after.variableCostRate,
+    capexInitial: prepared.simulation.after.capexInitial,
+  };
+  const changedInputKeys = (Object.entries(candidateValues) as Array<[FinancialInputKey, string]>)
+    .filter(([key, value]) => {
+      const current = prepared.context.calculationInputs?.[key];
+      return current?.status !== "provided" || current.value === undefined || !new FinanceDecimal(current.value).eq(value);
+    })
+    .map(([key]) => key);
+  const pointsChanged = Boolean(
+    params.targetGrossSalesMonth1 !== undefined &&
+    prepared.scaledPointInputs &&
+    prepared.context.pointEconomics &&
+    !new FinanceDecimal(params.targetGrossSalesMonth1).eq(
+      prepared.context.pointEconomics.totals.production.totalSales
+    )
+  );
+  if (!changedInputKeys.length && !pointsChanged) {
+    throw new Error("A hipótese é idêntica à baseline; nenhum cenário foi criado.");
+  }
+
+  return db.transaction(transaction => createScenarioInTransaction({
+    tenantId: params.tenantId,
+    actorId: params.actorId,
+    baseVersion,
+    formulaSetVersionId,
+    name: params.name,
+    reason: params.reason,
+    transaction,
+    afterClone: async ({ versionId, inputSnapshot }) => {
+      const lockedBase = (await transaction
+        .select()
+        .from(projectVersions)
+        .where(eq(projectVersions.id, baseVersion.id))
+        .for("update")
+        .limit(1))[0];
+      if (
+        !lockedBase ||
+        lockedBase.inputHash !== baseVersion.inputHash ||
+        lockedBase.financialRevision !== baseVersion.financialRevision
+      ) throw new Error("A baseline mudou durante a promoção; nenhuma branch foi criada.");
+      const lockedSnapshot = (await transaction
+        .select()
+        .from(calculationSnapshots)
+        .where(eq(calculationSnapshots.id, params.baseSnapshotId))
+        .limit(1))[0];
+      if (
+        !lockedSnapshot ||
+        lockedSnapshot.projectVersionId !== baseVersion.id ||
+        !lockedSnapshot.isAuthoritative ||
+        lockedSnapshot.validationStatus !== "valid"
+      ) throw new Error("O snapshot-base não é autoritativo, válido ou compatível com a baseline.");
+
+      const nextInputs = structuredClone(inputSnapshot);
+      for (const key of changedInputKeys) {
+        const value = candidateValues[key]!;
+        nextInputs[key] = {
+          status: "provided",
+          value,
+          sourceType: "current_decision",
+          sourceRef,
+        };
+        await transaction
+          .update(inputValues)
+          .set({
+            status: "provided",
+            valueText: value,
+            sourceType: "current_decision",
+            sourceRef,
+            updatedBy: params.actorId,
+          })
+          .where(and(eq(inputValues.versionId, versionId), eq(inputValues.key, key)));
+      }
+
+      if (prepared.scaledPointInputs && pointsChanged) {
+        const approachesByPoint = new Map(
+          prepared.scaledPointInputs.map(point => [point.pointId, point.approaches])
+        );
+        const scenarioPoints = await transaction
+          .select()
+          .from(projectComponentRecords)
+          .where(and(
+            eq(projectComponentRecords.versionId, versionId),
+            eq(projectComponentRecords.componentType, "acquisition_capacity")
+          ));
+        for (const point of scenarioPoints) {
+          const payload = point.payload as CapturePointDefinition;
+          const approaches = approachesByPoint.get(payload.pointId);
+          if (approaches === undefined) throw new Error(`Ponto autoritativo ausente na promoção: ${payload.pointId}.`);
+          await transaction
+            .update(projectComponentRecords)
+            .set({
+              payload: { ...payload, approaches },
+              sourceType: "current_decision",
+              sourceRef,
+              updatedBy: params.actorId,
+            })
+            .where(eq(projectComponentRecords.id, point.id));
+        }
+      }
+
+      await transaction
+        .update(projectVersions)
+        .set({ inputHash: sha256(nextInputs), financialRevision: 1 })
+        .where(eq(projectVersions.id, versionId));
+      await transaction.insert(auditEvents).values({
+        id: nanoid(),
+        tenantId: params.tenantId,
+        entityType: "scenario_branch",
+        entityId: versionId,
+        action: "meeting_simulation.promoted",
+        actorId: params.actorId,
+        beforeHash: lockedSnapshot.snapshotHash,
+        afterHash: sha256({ inputs: nextInputs, points: prepared.scaledPointInputs ?? null }),
+        metadata: {
+          baseVersionId: baseVersion.id,
+          baseSnapshotId: params.baseSnapshotId,
+          changedInputKeys,
+          sourceRef,
+          targetGrossSalesMonth1: params.targetGrossSalesMonth1 ?? null,
+        },
+      });
+    },
+  })).then(result => ({ ...result, changedInputKeys, simulation: prepared.simulation }));
 }
 
 export async function approveSnapshotForTenant(params: {

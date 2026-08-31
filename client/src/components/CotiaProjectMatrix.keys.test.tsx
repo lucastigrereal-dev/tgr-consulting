@@ -26,6 +26,8 @@ describe("CotiaProjectMatrix · estabilidade de listas", () => {
     );
 
     expect(html).toContain("Matriz de Montagem da Operação");
+    expect(html).toContain("TGR Consulting · Dados do projeto");
+    expect(html).not.toMatch(/Hospedar|Da Mata/);
     expect(html).toContain("Máquina de captação / OPC por canal");
     expect(html).toContain(
       "Pré-investimento / operação recorrente / entrada líquida"

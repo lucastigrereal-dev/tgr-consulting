@@ -9,7 +9,7 @@ import { auditEvents, productPricePhases, productSkus, projects, projectVersions
 
 const ownerId = 1;
 const outsiderId = 991_001;
-const ids = { projectId: "", versionId: "", pendingSnapshotId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "", commercialConditionId: "", receivablesPolicyId: "", scenarioBranchId: "", scenarioVersionId: "", cotiaProjectId: "", cotiaVersionId: "", cotiaRollbackProjectId: "", cotiaRollbackVersionId: "", cotiaCreatedProjectId: "", cotiaCreatedVersionId: "" };
+const ids = { projectId: "", versionId: "", pendingSnapshotId: "", snapshotId: "", snapshotHash: "", decisionId: "", costId: "", commercialConditionId: "", receivablesPolicyId: "", scenarioBranchId: "", scenarioVersionId: "", meetingScenarioBranchId: "", meetingScenarioVersionId: "", cotiaProjectId: "", cotiaVersionId: "", cotiaRollbackProjectId: "", cotiaRollbackVersionId: "", cotiaCreatedProjectId: "", cotiaCreatedVersionId: "" };
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const, sourceRef: "igr.database.integration.test" });
 const inputs: FinancialInputSnapshot = {
   qualifiedCouplesMonth1: provided("100"), qualifiedCouplesGrowthRate: provided("0"), conversionRate: provided("0.1"), averageTicket: provided("1000"),
@@ -70,18 +70,19 @@ function contextFor(userId: number, role: "user" | "admin" = "admin"): TrpcConte
 afterAll(async () => {
   const db = await getDb();
   if (!db || !ids.projectId) return;
-  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.pendingSnapshotId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId}, ${ids.commercialConditionId}, ${ids.receivablesPolicyId}, ${ids.scenarioBranchId}, ${ids.scenarioVersionId}, ${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId}, ${ids.cotiaCreatedVersionId})`);
+  await db.execute(sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.pendingSnapshotId}, ${ids.snapshotId}, ${ids.decisionId}, ${ids.costId}, ${ids.commercialConditionId}, ${ids.receivablesPolicyId}, ${ids.scenarioBranchId}, ${ids.scenarioVersionId}, ${ids.meetingScenarioBranchId}, ${ids.meetingScenarioVersionId}, ${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId}, ${ids.cotiaCreatedVersionId})`);
   await db.execute(sql`DELETE FROM historical_benchmarks WHERE tenantId = ${ownerId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`);
   await db.execute(sql`DELETE FROM approval_decisions WHERE snapshotId = ${ids.snapshotId}`);
   await db.execute(sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.snapshotId}`);
-  await db.execute(sql`DELETE FROM calculation_snapshots WHERE projectVersionId IN (${ids.versionId}, ${ids.scenarioVersionId})`);
+  await db.execute(sql`DELETE FROM calculation_snapshots WHERE projectVersionId IN (${ids.versionId}, ${ids.scenarioVersionId}, ${ids.meetingScenarioVersionId})`);
   await db.execute(sql`DELETE FROM decision_records WHERE versionId = ${ids.versionId}`);
   await db.execute(sql`DELETE FROM cost_catalog_items WHERE versionId = ${ids.versionId}`);
-  await db.execute(sql`DELETE FROM project_component_records WHERE versionId IN (${ids.versionId}, ${ids.scenarioVersionId}, ${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId}, ${ids.cotiaCreatedVersionId})`);
-  await db.execute(sql`DELETE FROM input_values WHERE versionId IN (${ids.versionId}, ${ids.scenarioVersionId}, ${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId}, ${ids.cotiaCreatedVersionId})`);
+  await db.execute(sql`DELETE FROM project_component_records WHERE versionId IN (${ids.versionId}, ${ids.scenarioVersionId}, ${ids.meetingScenarioVersionId}, ${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId}, ${ids.cotiaCreatedVersionId})`);
+  await db.execute(sql`DELETE FROM input_values WHERE versionId IN (${ids.versionId}, ${ids.scenarioVersionId}, ${ids.meetingScenarioVersionId}, ${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId}, ${ids.cotiaCreatedVersionId})`);
   await db.execute(sql`DELETE FROM workflow_events WHERE projectId IN (${ids.projectId}, ${ids.cotiaProjectId}, ${ids.cotiaRollbackProjectId}, ${ids.cotiaCreatedProjectId})`);
   await db.execute(sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`);
   await db.execute(sql`DELETE FROM project_versions WHERE id = ${ids.scenarioVersionId}`);
+  await db.execute(sql`DELETE FROM project_versions WHERE id = ${ids.meetingScenarioVersionId}`);
   await db.execute(sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(sql`DELETE FROM project_versions WHERE id IN (${ids.cotiaVersionId}, ${ids.cotiaRollbackVersionId}, ${ids.cotiaCreatedVersionId})`);
@@ -431,6 +432,56 @@ describe("igrRouter + banco", () => {
     expect(Number(salesTargetSimulation.after.qualifiedCouplesMonth1)).toBeGreaterThan(Number(salesTargetSimulation.before.qualifiedCouplesMonth1));
     expect(salesTargetSimulation.after.kpis.npv).not.toBe(salesTargetSimulation.before.kpis.npv);
     expect(await owner.versionInputs({ versionId: created.versionId })).toEqual(baselineInputsBeforeMeeting);
+    const promotedMeeting = await owner.promoteMeetingSimulationToScenario({
+      versionId: created.versionId,
+      baseSnapshotId: snapshot.id,
+      horizonMonths: 24,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "12",
+      name: "Boardroom 12 vendas",
+      reason: "Meta deliberada no teste integrado.",
+      sourceRef: "Ata Boardroom 42",
+    });
+    ids.meetingScenarioBranchId = promotedMeeting.branchId;
+    ids.meetingScenarioVersionId = promotedMeeting.versionId;
+    expect(await owner.versionInputs({ versionId: promotedMeeting.versionId })).toMatchObject({
+      qualifiedCouplesMonth1: { value: "120.00000000", sourceType: "current_decision", sourceRef: "Ata Boardroom 42" },
+    });
+    expect(await owner.capturePoints({ versionId: promotedMeeting.versionId })).toMatchObject([{
+      sourceType: "current_decision",
+      sourceRef: "Ata Boardroom 42",
+      definition: { pointId: "pipa-pdv", approaches: "120.00000000" },
+    }]);
+    expect((await owner.calculate({ versionId: promotedMeeting.versionId, horizonMonths: 24 })).status).toBe("valid");
+    expect(await owner.versionInputs({ versionId: created.versionId })).toEqual(baselineInputsBeforeMeeting);
+
+    const db = await getDb();
+    expect(db).not.toBeNull();
+    expect((await db!.select().from(auditEvents).where(and(
+      eq(auditEvents.entityId, promotedMeeting.versionId),
+      eq(auditEvents.action, "meeting_simulation.promoted"),
+    )).limit(1))[0]?.metadata).toMatchObject({ sourceRef: "Ata Boardroom 42", baseSnapshotId: snapshot.id });
+    const scenarioCountBeforeRollback = (await db!.select({ id: projectVersions.id }).from(projectVersions)).length;
+    await db!.execute(sql.raw("CREATE TRIGGER meeting_promotion_rollback BEFORE INSERT ON audit_events FOR EACH ROW SET NEW.entityId = IF(NEW.action = 'meeting_simulation.promoted', NULL, NEW.entityId)"));
+    try {
+      await expect(owner.promoteMeetingSimulationToScenario({
+        versionId: created.versionId,
+        baseSnapshotId: snapshot.id,
+        horizonMonths: 24,
+        captadorDelta: "0",
+        qualifiedCouplesPerCaptadorMonth: "25",
+        loadedCostPerCaptadorMonth: "0",
+        targetGrossSalesMonth1: "14",
+        name: "Boardroom rollback",
+        reason: "Forçar falha após clone.",
+        sourceRef: "Ata rollback",
+      })).rejects.toThrow();
+    } finally {
+      await db!.execute(sql.raw("DROP TRIGGER IF EXISTS meeting_promotion_rollback"));
+    }
+    expect((await db!.select({ id: projectVersions.id }).from(projectVersions)).length).toBe(scenarioCountBeforeRollback);
     const envelope = await owner.capitalEnvelope({
       versionId: created.versionId,
       horizonMonths: 24,

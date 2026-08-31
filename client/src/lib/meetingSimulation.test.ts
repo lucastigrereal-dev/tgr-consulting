@@ -6,6 +6,7 @@ import {
   buildMeetingScenarioCapturePoints,
   calculateMeetingDelta,
   isLatestMeetingResponse,
+  isCurrentMeetingHypothesis,
   meetingSimulationSignature,
 } from "./meetingSimulation";
 
@@ -76,5 +77,8 @@ describe("meetingSimulation helpers", () => {
     expect(isLatestMeetingResponse(2, 3, "target:100", "target:120")).toBe(false);
     expect(meetingSimulationSignature({ target: "120", versionId: "v1" }))
       .toBe(meetingSimulationSignature({ versionId: "v1", target: "120" }));
+    expect(isCurrentMeetingHypothesis("current", "target:120", "target:120")).toBe(true);
+    expect(isCurrentMeetingHypothesis("current", "target:120", "")).toBe(false);
+    expect(isCurrentMeetingHypothesis("calculating", "target:100", "target:120")).toBe(false);
   });
 });

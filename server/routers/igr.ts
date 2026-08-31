@@ -15,6 +15,7 @@ import {
   createProjectFromCotiaAssemblyForTenant,
   createProjectForTenant,
   createScenarioForTenant,
+  promoteMeetingSimulationToScenarioForTenant,
   getExportEligibilityForTenant,
   getCapturePointsForTenant,
   getCommercialOperationsForTenant,
@@ -64,6 +65,21 @@ const positiveDecimalSchema = nonNegativeDecimalSchema.refine(
   value => Number(value) > 0,
   { message: "Valor deve ser maior que zero." }
 );
+const signedDecimalSchema = z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/);
+const meetingSimulationSchema = z.object({
+  versionId: z.string().min(1),
+  horizonMonths: z.number().int().min(1).max(120),
+  asOfMonth: z.number().int().min(0).max(1200).default(0),
+  captadorDelta: signedDecimalSchema,
+  qualifiedCouplesPerCaptadorMonth: nonNegativeDecimalSchema,
+  loadedCostPerCaptadorMonth: nonNegativeDecimalSchema,
+  targetGrossSalesMonth1: nonNegativeDecimalSchema.optional(),
+  averageTicketDelta: signedDecimalSchema.optional(),
+  fixedCostMonthlyDelta: signedDecimalSchema.optional(),
+  payrollMonthlyDelta: signedDecimalSchema.optional(),
+  variableCostMonthlyDelta: signedDecimalSchema.optional(),
+  capexInitialDelta: signedDecimalSchema.optional(),
+});
 const nonNegativeIntegerTextSchema = z.string().regex(/^(?:0|[1-9]\d*)$/);
 const productSkuSchema = z
   .object({
@@ -570,8 +586,16 @@ export const igrRouter = router({
     .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0) }))
     .mutation(({ ctx, input }) => createCalculationSnapshot({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   simulateCaptadores: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), captadorDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), qualifiedCouplesPerCaptadorMonth: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/), loadedCostPerCaptadorMonth: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/), targetGrossSalesMonth1: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), averageTicketDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), fixedCostMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), payrollMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), variableCostMonthlyDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional(), capexInitialDelta: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/).optional() }))
+    .input(meetingSimulationSchema)
     .mutation(({ ctx, input }) => simulateCaptadorChangeForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
+  promoteMeetingSimulationToScenario: protectedProcedure
+    .input(meetingSimulationSchema.extend({
+      baseSnapshotId: z.string().min(1),
+      name: z.string().trim().min(3).max(255),
+      reason: z.string().trim().min(3).max(1000),
+      sourceRef: z.string().trim().min(2).max(500),
+    }))
+    .mutation(({ ctx, input }) => promoteMeetingSimulationToScenarioForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   createScenario: protectedProcedure
     .input(z.object({ baseVersionId: z.string().min(1), name: z.string().trim().min(3).max(255), reason: z.string().trim().min(3).max(1000) }))
     .mutation(({ ctx, input }) => createScenarioForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
