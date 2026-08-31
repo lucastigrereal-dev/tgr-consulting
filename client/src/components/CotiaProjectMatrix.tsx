@@ -315,7 +315,7 @@ export function CotiaProjectMatrix({
                 const total =
                   parseBrazilianDecimal(values[`${role.key}Valor`]) *
                   parseBrazilianDecimal(values[`${role.key}Quantidade`]);
-                return <tr className="border-b border-slate-900/20" key={role.key}><td className="bg-slate-50 px-3 py-1.5 font-semibold">{role.label}</td><td>{field(`${role.key}Valor`)}</td><td className="border-l border-slate-900/20">{field(`${role.key}Quantidade`)}</td><td className="border-l border-slate-900/20 px-3 text-right font-bold">{money(total)}</td></tr>;
+                return <tr className="border-b border-slate-900/20" key={role.key}><td className="bg-slate-50 px-3 py-1.5 font-semibold"><Label htmlFor={`cotia-${role.key}Valor`} className="font-semibold">{role.label}</Label></td><td>{field(`${role.key}Valor`)}</td><td className="border-l border-slate-900/20">{field(`${role.key}Quantidade`)}</td><td className="border-l border-slate-900/20 px-3 text-right font-bold">{money(total)}</td></tr>;
               })}
               <tr key="commission-per-share" className="bg-[#fff200]"><td className="px-3 py-2 font-black">Comissão por cota vendida</td><td colSpan={3} className="px-3 text-right font-black">{money(calculations.commissionPerShare)}</td></tr>
             </tbody>
@@ -421,7 +421,7 @@ export function CotiaProjectMatrix({
 
       <MatrixSection title="Média das formas de pagamento da entrada">
         <div className="overflow-x-auto"><table className="min-w-full border-collapse text-sm"><thead className="bg-slate-950 text-[10px] uppercase tracking-wide text-white"><tr><th className="px-3 py-2 text-left">Forma de pagamento</th><th className="px-3 py-2 text-right">% do mix</th><th className="px-3 py-2 text-right">Taxa / MDR</th><th className="px-3 py-2 text-right">Prazo (dias)</th></tr></thead><tbody>
-          {paymentMethods.map(method => <tr className="border-b border-slate-900/20" key={method.key}><td className="bg-slate-50 px-3 py-1.5 font-semibold">{method.label}</td><td>{field(`${method.key}Percentual`)}</td><td className="border-l border-slate-900/20">{field(`${method.key}Taxa`)}</td><td className="border-l border-slate-900/20">{field(`${method.key}Prazo`)}</td></tr>)}
+          {paymentMethods.map(method => <tr className="border-b border-slate-900/20" key={method.key}><td className="bg-slate-50 px-3 py-1.5 font-semibold"><Label htmlFor={`cotia-${method.key}Percentual`} className="font-semibold">{method.label}</Label></td><td>{field(`${method.key}Percentual`)}</td><td className="border-l border-slate-900/20">{field(`${method.key}Taxa`)}</td><td className="border-l border-slate-900/20">{field(`${method.key}Prazo`)}</td></tr>)}
           <tr key="payment-mdr" className="bg-slate-100"><td className="px-3 py-1.5 font-black">MDR médio ponderado</td><td colSpan={3} className="px-3 text-right font-black">{number(calculations.weightedMdrRate, 2)}%</td></tr>
           <tr key="payment-gross-entry" className="bg-slate-100"><td className="px-3 py-1.5 font-black">Entrada bruta / mês</td><td colSpan={3} className="px-3 text-right font-black">{money(calculations.grossEntryMonthly)}</td></tr>
           <tr key="payment-net-entry" className="bg-slate-100"><td className="px-3 py-1.5 font-black">Entrada líquida após taxas</td><td colSpan={3} className="px-3 text-right font-black">{money(calculations.netEntryMonthly)}</td></tr>

@@ -12,6 +12,7 @@ import {
   createCostCatalogItemForTenant,
   createDecisionRecordForTenant,
   createHistoricalBenchmarkForTenant,
+  createProjectFromCotiaAssemblyForTenant,
   createProjectForTenant,
   createScenarioForTenant,
   getExportEligibilityForTenant,
@@ -550,6 +551,18 @@ export const igrRouter = router({
   createProject: protectedProcedure
     .input(z.object({ name: z.string().trim().min(3).max(255), inputs: FinancialInputSnapshotSchema }))
     .mutation(({ ctx, input }) => createProjectForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
+  createProjectFromCotiaAssembly: protectedProcedure
+    .input(z.object({
+      name: z.string().trim().min(3).max(255),
+      assemblyName: z.string().trim().min(2).max(255),
+      payload: z.record(z.string(), z.string()),
+      sourceRef: z.string().trim().max(500).optional(),
+    }))
+    .mutation(({ ctx, input }) => createProjectFromCotiaAssemblyForTenant({
+      tenantId: tenantIdFromUser(ctx.user.id),
+      actorId: ctx.user.id,
+      ...input,
+    })),
   updateInputs: protectedProcedure
     .input(z.object({ versionId: z.string().min(1), inputs: FinancialInputSnapshotSchema }))
     .mutation(({ ctx, input }) => updateInputsForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),

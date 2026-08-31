@@ -145,12 +145,6 @@ type DomainDefinition = {
   detail: string;
   fields: { key: string; label: string; placeholder: string }[];
 };
-type PendingAssembly = {
-  name: string;
-  status: "provided" | "pending";
-  payload: Record<string, string>;
-  sourceRef?: string;
-};
 const assemblyDomain: DomainDefinition = {
   type: "project_assembly",
   title: "Montagem do Projeto",
@@ -368,6 +362,21 @@ function signature(value: unknown) {
   return JSON.stringify(value);
 }
 
+export function getCotiaRegistrationFeedback(warnings: string[]) {
+  if (warnings.length) {
+    return {
+      kind: "warning" as const,
+      title: "Página 1 registrada com pendência financeira.",
+      description: warnings.join(" "),
+    };
+  }
+  return {
+    kind: "success" as const,
+    title: "Página 1 reconciliada.",
+    description: "Premissas e domínios autoritativos foram gravados atomicamente.",
+  };
+}
+
 export default function Builder() {
   const utils = trpc.useUtils();
   const projectsQuery = trpc.igr.projects.useQuery(undefined, { retry: false });
@@ -394,7 +403,6 @@ export default function Builder() {
     dirty: false,
     recordSignature: "",
   });
-  const pendingAssemblyRef = useRef<PendingAssembly | null>(null);
   const contextQuery = trpc.igr.projectContext.useQuery(
     { projectId: activeProjectId },
     { enabled: Boolean(activeProjectId), retry: false }
@@ -430,37 +438,6 @@ export default function Builder() {
     window.addEventListener("beforeunload", blockExit);
     return () => window.removeEventListener("beforeunload", blockExit);
   }, [isDirty]);
-  const createProject = trpc.igr.createProject.useMutation({
-    onSuccess: async (result, variables) => {
-      await utils.igr.projects.invalidate();
-      const pendingAssembly = pendingAssemblyRef.current;
-      if (pendingAssembly) {
-        assemblyHydrationRef.current = {
-          versionId: result.versionId,
-          dirty: true,
-          recordSignature: "",
-        };
-      }
-      setActiveProjectId(result.projectId);
-      setInputs(variables.inputs as FinancialInputSnapshot);
-      setPersistedSignature(signature(variables.inputs as FinancialInputSnapshot));
-      if (pendingAssembly) {
-        await registerCotiaAssembly.mutateAsync({
-          versionId: result.versionId,
-          name: pendingAssembly.name,
-          payload: pendingAssembly.payload,
-          sourceRef: pendingAssembly.sourceRef,
-        });
-      }
-      toast.success("Projeto criado com trilha de auditoria.", {
-        description: `Versão ${result.versionId} aberta em rascunho.`,
-      });
-    },
-    onError: error =>
-      toast.error("Não foi possível criar o projeto.", {
-        description: error.message,
-      }),
-  });
   const upsertComponent = trpc.igr.upsertBuilderComponent.useMutation({
     onSuccess: async () => {
       await componentsQuery.refetch();
@@ -474,8 +451,7 @@ export default function Builder() {
       }),
   });
   const registerCotiaAssembly = trpc.igr.registerCotiaAssembly.useMutation({
-    onSuccess: async () => {
-      pendingAssemblyRef.current = null;
+    onSuccess: async result => {
       assemblyHydrationRef.current = {
         ...assemblyHydrationRef.current,
         dirty: false,
@@ -489,12 +465,35 @@ export default function Builder() {
         utils.igr.receivablesPolicy.invalidate(),
       ]);
       await contextQuery.refetch();
-      toast.success("Página 1 reconciliada.", {
-        description: "Premissas, produto, condição e carteira foram gravados atomicamente.",
-      });
+      const feedback = getCotiaRegistrationFeedback(result.warnings);
+      toast[feedback.kind](feedback.title, { description: feedback.description });
     },
     onError: error =>
       toast.error("Página 1 Cotia não pôde ser reconciliada.", {
+        description: error.message,
+      }),
+  });
+  const createProjectFromCotiaAssembly = trpc.igr.createProjectFromCotiaAssembly.useMutation({
+    onSuccess: async result => {
+      assemblyHydrationRef.current = {
+        versionId: result.versionId,
+        dirty: false,
+        recordSignature: "",
+      };
+      setActiveProjectId(result.projectId);
+      await Promise.all([
+        utils.igr.projects.invalidate(),
+        utils.igr.versionInputs.invalidate(),
+        utils.igr.builderComponents.invalidate(),
+        utils.igr.productCatalog.invalidate(),
+        utils.igr.commercialConditions.invalidate(),
+        utils.igr.receivablesPolicy.invalidate(),
+      ]);
+      const feedback = getCotiaRegistrationFeedback(result.warnings);
+      toast[feedback.kind](feedback.title, { description: feedback.description });
+    },
+    onError: error =>
+      toast.error("Projeto Cotia não pôde ser criado.", {
         description: error.message,
       }),
   });
@@ -560,7 +559,7 @@ export default function Builder() {
         value,
       ])
     );
-    const assemblyRecord: PendingAssembly = {
+    const assemblyRecord = {
       name: draft.name.trim() || assemblyDomain.title,
       status: assemblyStatus,
       payload,
@@ -578,8 +577,12 @@ export default function Builder() {
     const assemblyProjectName = draft.values.nomeProjeto?.trim() || projectName.trim();
     if (assemblyProjectName.length < 3)
       return toast.error("Dê um nome ao estudo antes de registrar a Montagem.");
-    pendingAssemblyRef.current = assemblyRecord;
-    createProject.mutate({ name: assemblyProjectName, inputs: createPendingInputs() });
+    createProjectFromCotiaAssembly.mutate({
+      name: assemblyProjectName,
+      assemblyName: assemblyRecord.name,
+      payload: assemblyRecord.payload,
+      sourceRef: assemblyRecord.sourceRef,
+    });
   };
   const assemblyDraft = getDraft(assemblyDomain);
   const assemblyCompletion = evaluateCotiaAssemblyCompleteness(assemblyDraft.values);
@@ -622,8 +625,8 @@ export default function Builder() {
         values={assemblyDraft.values}
         sourceRef={assemblyDraft.sourceRef}
         status={assemblyDisplayStatus}
-        disabled={registerCotiaAssembly.isPending}
-        saving={registerCotiaAssembly.isPending || createProject.isPending}
+        disabled={registerCotiaAssembly.isPending || createProjectFromCotiaAssembly.isPending}
+        saving={registerCotiaAssembly.isPending || createProjectFromCotiaAssembly.isPending}
         onChange={(key, value) => {
           assemblyHydrationRef.current = {
             ...assemblyHydrationRef.current,

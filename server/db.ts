@@ -632,16 +632,16 @@ export type PersistedCommercialConditionInput = {
 const COTIA_SKU_CODE = "produto-principal";
 const COTIA_CONDITION_CODE = "condicao-base-cotia";
 
-export async function registerCotiaAssemblyForTenant(params: {
+type CotiaAssemblyRegistration = {
   tenantId: number;
   actorId: number;
   versionId: string;
   name: string;
   payload: Record<string, string>;
   sourceRef?: string;
-}) {
-  const db = await requireDb();
-  const version = await getVersionForTenant(params.versionId, params.tenantId);
+};
+
+function prepareCotiaAssembly(params: CotiaAssemblyRegistration) {
   const sourceRef = params.sourceRef?.trim() ?? "";
   const authoritative = buildCotiaAuthoritativePayload(params.payload, sourceRef);
   const mappings = sourceRef.length >= 2
@@ -667,8 +667,13 @@ export async function registerCotiaAssemblyForTenant(params: {
       );
     }
   }
+  let commercialConditionStatus: "provided" | "pending" = "provided";
+  const warnings: string[] = [];
   if (incomingCondition) {
     const reconciliation = reconcileCommercialCondition(incomingCondition.condition);
+    const indexedSchedulePending = reconciliation.violations.some(
+      item => item.code === "INDEXED_PAYMENT_SCHEDULE_REQUIRED"
+    );
     const blockingAssemblyViolations = reconciliation.violations.filter(
       item => item.code !== "INDEXED_PAYMENT_SCHEDULE_REQUIRED"
     );
@@ -677,10 +682,31 @@ export async function registerCotiaAssemblyForTenant(params: {
         `Condição comercial Cotia inválida: ${blockingAssemblyViolations.map(item => item.code).join(", ")}.`
       );
     }
+    if (indexedSchedulePending) {
+      commercialConditionStatus = "pending";
+      warnings.push(
+        "Correção ou juros informados exigem calendário financeiro indexado; condição mantida PENDENTE até configuração."
+      );
+    }
   }
   if (authoritative.receivablesPolicy) {
     assertReceivablesPolicy(authoritative.receivablesPolicy.policy);
   }
+  return {
+    sourceRef,
+    authoritative,
+    mappings,
+    incomingSku,
+    incomingCondition,
+    commercialConditionStatus,
+    warnings,
+  };
+}
+
+export async function registerCotiaAssemblyForTenant(params: CotiaAssemblyRegistration) {
+  const db = await requireDb();
+  const version = await getVersionForTenant(params.versionId, params.tenantId);
+  const prepared = prepareCotiaAssembly(params);
 
   return db.transaction(async transaction => {
     await transaction.execute(
@@ -695,7 +721,39 @@ export async function registerCotiaAssemblyForTenant(params: {
     if (!lockedVersion || lockedVersion.isImmutable || lockedVersion.state !== "draft") {
       throw new Error("A Página 1 só aceita edição na versão de trabalho.");
     }
+    return persistCotiaAssemblyInTransaction({
+      transaction,
+      params,
+      version: lockedVersion,
+      prepared,
+    });
+  });
+}
 
+async function persistCotiaAssemblyInTransaction({
+  transaction,
+  params,
+  version,
+  prepared,
+}: {
+  transaction: TgrTransaction;
+  params: CotiaAssemblyRegistration;
+  version: {
+    id: string;
+    projectId: string;
+    inputHash: string;
+  };
+  prepared: ReturnType<typeof prepareCotiaAssembly>;
+}) {
+    const {
+      sourceRef,
+      authoritative,
+      mappings,
+      incomingSku,
+      incomingCondition,
+      commercialConditionStatus,
+      warnings,
+    } = prepared;
     const beforeInputsRows = await transaction
       .select()
       .from(inputValues)
@@ -857,7 +915,7 @@ export async function registerCotiaAssemblyForTenant(params: {
         name: beforeBasePhase?.name ?? incomingBasePhase.id,
         startsAtMonth: 0,
         priceText: incomingBasePhase.price,
-        promotionalPriceText: null,
+        promotionalPriceText: beforeBasePhase?.promotionalPriceText ?? null,
       };
       await transaction
         .insert(productPricePhases)
@@ -865,7 +923,7 @@ export async function registerCotiaAssemblyForTenant(params: {
         .onDuplicateKeyUpdate({
           set: {
             priceText: basePhaseRecord.priceText,
-            promotionalPriceText: null,
+            promotionalPriceText: basePhaseRecord.promotionalPriceText,
           },
         });
 
@@ -894,7 +952,7 @@ export async function registerCotiaAssemblyForTenant(params: {
         interestRateText: condition.interestRate ?? null,
         materialityToleranceText: condition.materialityTolerance,
         campaign: null,
-        status: incomingCondition.status,
+        status: commercialConditionStatus,
         sourceType: incomingCondition.sourceType,
         sourceRef: incomingCondition.sourceRef ?? null,
         updatedBy: params.actorId,
@@ -1009,7 +1067,7 @@ export async function registerCotiaAssemblyForTenant(params: {
       action: "cotia_assembly.registered",
       actorId: params.actorId,
       beforeHash: sha256({
-        inputHash: lockedVersion.inputHash,
+        inputHash: version.inputHash,
         assembly: beforeComponents[0] ?? null,
         sku: beforeSkus.find(row => row.skuCode === COTIA_SKU_CODE) ?? null,
         condition: beforeConditions.find(row => row.conditionCode === COTIA_CONDITION_CODE) ?? null,
@@ -1027,6 +1085,8 @@ export async function registerCotiaAssemblyForTenant(params: {
         changedInputKeys,
         commercialModelUpdated,
         policyUpdated: Boolean(policyPayload),
+        commercialConditionStatus,
+        warnings,
       },
     });
     return {
@@ -1036,8 +1096,80 @@ export async function registerCotiaAssemblyForTenant(params: {
       changedInputKeys,
       commercialModelUpdated,
       policyUpdated: Boolean(policyPayload),
+      commercialConditionStatus,
+      warnings,
     };
+}
+
+export async function createProjectFromCotiaAssemblyForTenant(params: {
+  tenantId: number;
+  actorId: number;
+  name: string;
+  assemblyName: string;
+  payload: Record<string, string>;
+  sourceRef?: string;
+}) {
+  const db = await requireDb();
+  const projectId = nanoid();
+  const versionId = nanoid();
+  const registrationParams: CotiaAssemblyRegistration = {
+    tenantId: params.tenantId,
+    actorId: params.actorId,
+    versionId,
+    name: params.assemblyName,
+    payload: params.payload,
+    sourceRef: params.sourceRef,
+  };
+  const prepared = prepareCotiaAssembly(registrationParams);
+  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
+  const pendingInputs = Object.fromEntries(
+    FINANCIAL_INPUT_KEYS.map(key => [
+      key,
+      { status: "pending" as const, sourceType: "current_decision" as const },
+    ])
+  ) as FinancialInputSnapshot;
+  const initialInputHash = sha256(pendingInputs);
+
+  const registration = await db.transaction(async transaction => {
+    await transaction.insert(projects).values({
+      id: projectId,
+      tenantId: params.tenantId,
+      name: params.name.trim(),
+      createdBy: params.actorId,
+    });
+    await transaction.insert(projectVersions).values({
+      id: versionId,
+      projectId,
+      formulaSetVersionId,
+      kind: "working",
+      state: "draft",
+      isImmutable: false,
+      inputHash: initialInputHash,
+      createdBy: params.actorId,
+    });
+    const persisted = await persistCotiaAssemblyInTransaction({
+      transaction,
+      params: registrationParams,
+      version: { id: versionId, projectId, inputHash: initialInputHash },
+      prepared,
+    });
+    await transaction.insert(workflowEvents).values({
+      id: nanoid(),
+      projectId,
+      versionId,
+      fromState: null,
+      toState: "draft",
+      action: "version.created",
+      rationale: "Projeto criado atomicamente a partir da Página 1 Cotia.",
+      actorId: params.actorId,
+    });
+    return persisted;
   });
+  return {
+    projectId,
+    formulaSetVersionId,
+    ...registration,
+  };
 }
 
 export type CapturePointDefinition = Omit<
