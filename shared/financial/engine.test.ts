@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { calculateFinancialProjection } from "./engine";
 import { calculatePointEconomics } from "./pointEconomics";
 import { calculateCommercialOperations } from "./commercialOperations";
+import { IGR_CORE_FORMULA_SET_V1 } from "./formulas";
 import type { FinancialInputSnapshot } from "./types";
 
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const });
@@ -28,6 +29,17 @@ const completeInputs: FinancialInputSnapshot = {
   discountRateAnnual: provided("0.12"),
 };
 
+const NEW_KPI_FORMULA_IDS = {
+  totalGrossContracts: "total-gross-contracts",
+  totalNetContracts: "total-net-contracts",
+  sellOutMonth: "sell-out-month",
+  contributionMargin: "contribution-margin",
+  operatingMarginRate: "operating-margin-rate",
+  capitalRequired: "capital-required",
+  worstCashMonth: "worst-cash-month",
+  breakEvenMonth: "break-even-month",
+} as const;
+
 describe("motor financeiro determinístico", () => {
   it("reproduz a mesma projeção para o mesmo input e fórmula", () => {
     const first = calculateFinancialProjection(completeInputs, 120);
@@ -36,10 +48,32 @@ describe("motor financeiro determinístico", () => {
     expect(first.status).toBe("valid");
     expect(first.projections).toHaveLength(120);
     expect(first.kpis.grossSales).toBe("1200000.00000000");
-    expect(first.memory).toHaveLength(18);
+    expect(first.memory).toHaveLength(26);
     expect(first.memory.map((memory) => memory.kpiKey)).toEqual([
-      "grossSales", "grossEntryGenerated", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "canceledReceivables", "delinquentBalance", "curedCollections", "writtenOffBalance", "healthyD90", "recognizedRevenue", "paymentTermsNetSettlement", "commercialTeamMonthlyCost", "preOperationalInvestment", "operatingCashFlow", "npv", "irrAnnual", "paybackMonths",
+      "grossSales", "grossEntryGenerated", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "canceledReceivables", "delinquentBalance", "curedCollections", "writtenOffBalance", "healthyD90", "recognizedRevenue", "paymentTermsNetSettlement", "commercialTeamMonthlyCost", "preOperationalInvestment", "operatingCashFlow", "totalGrossContracts", "totalNetContracts", "sellOutMonth", "contributionMargin", "operatingMarginRate", "capitalRequired", "worstCashMonth", "breakEvenMonth", "npv", "irrAnnual", "paybackMonths",
     ]);
+  });
+
+  it("publica definição e memória versionada para cada KPI novo", () => {
+    const result = calculateFinancialProjection(completeInputs, 3, {
+      maxContracts: "15",
+    });
+
+    expect(IGR_CORE_FORMULA_SET_V1.status).toBe("published");
+    for (const [kpiKey, formulaId] of Object.entries(NEW_KPI_FORMULA_IDS) as Array<
+      [keyof typeof NEW_KPI_FORMULA_IDS, string]
+    >) {
+      const definition = IGR_CORE_FORMULA_SET_V1.definitions.find(
+        candidate => candidate.id === formulaId,
+      );
+      expect(definition).toMatchObject({ id: formulaId, version: "1.0.0" });
+      expect(result.memory.find(record => record.kpiKey === kpiKey)).toMatchObject({
+        kpiKey,
+        value: result.kpis[kpiKey],
+        formulaId,
+        formulaVersion: "1.0.0",
+      });
+    }
   });
 
   it("limita contratos ao estoque comercial disponível", () => {

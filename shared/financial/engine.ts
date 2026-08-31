@@ -836,6 +836,15 @@ export function calculateFinancialProjection(
   const capitalRequired = minimumCashFlow?.lt(ZERO)
     ? minimumCashFlow.negated()
     : ZERO;
+  const sellOutMonth = sellOutProjection
+    ? new FinanceDecimal(sellOutProjection.month)
+    : null;
+  const worstCashMonthValue = worstCashMonth === null
+    ? null
+    : new FinanceDecimal(worstCashMonth);
+  const breakEvenMonthValue = breakEvenMonth === null
+    ? null
+    : new FinanceDecimal(breakEvenMonth);
   const delinquentBalanceClosing = projections.length
     ? new FinanceDecimal(projections[projections.length - 1]!.delinquentBalance)
     : ZERO;
@@ -871,20 +880,18 @@ export function calculateFinancialProjection(
       totalOperatingCashFlow: decimalText(totalOperatingCashFlow),
       totalGrossContracts: decimalText(totalGrossContracts),
       totalNetContracts: decimalText(totalNetContracts),
-      sellOutMonth: sellOutProjection
-        ? decimalText(new FinanceDecimal(sellOutProjection.month))
-        : null,
+      sellOutMonth: sellOutMonth ? decimalText(sellOutMonth) : null,
       contributionMargin: decimalText(contributionMarginTotal),
       operatingMarginRate: operatingMarginRate
         ? decimalText(operatingMarginRate)
         : null,
       capitalRequired: decimalText(capitalRequired),
-      worstCashMonth: worstCashMonth === null
-        ? null
-        : decimalText(new FinanceDecimal(worstCashMonth)),
-      breakEvenMonth: breakEvenMonth === null
-        ? null
-        : decimalText(new FinanceDecimal(breakEvenMonth)),
+      worstCashMonth: worstCashMonthValue
+        ? decimalText(worstCashMonthValue)
+        : null,
+      breakEvenMonth: breakEvenMonthValue
+        ? decimalText(breakEvenMonthValue)
+        : null,
       npv: decimalText(npv),
       irrAnnual: irrAnnual ? decimalText(irrAnnual) : null,
       paybackMonths: paybackMonths ? decimalText(paybackMonths) : null,
@@ -905,6 +912,14 @@ export function calculateFinancialProjection(
       createMemory("commercialTeamMonthlyCost", payrollMonthly, "commercial-team-monthly-cost", "Folha mensal agregada da estrutura comercial informada na Página 1."),
       createMemory("preOperationalInvestment", preOperationalInvestmentTotal, "pre-operational-investment", hasCompleteImplementationSchedule ? "Pré-investimento alocado por frente e mês de implantação informado." : "Pré-investimento distribuído antes da abertura operacional enquanto o cronograma por rubrica permanece incompleto."),
       createMemory("operatingCashFlow", totalOperatingCashFlow, "operating-cash-flow", "Fluxo acumulado depois de entrada líquida, custos, repasses, folha e implantação."),
+      createMemory("totalGrossContracts", totalGrossContracts, "total-gross-contracts", "Contratos brutos acumulados, incluindo revendas de estoque retornado por cancelamento."),
+      createMemory("totalNetContracts", totalNetContracts, "total-net-contracts", "Contratos brutos menos cancelamentos por coorte; reconcilia com contratos ativos no fechamento."),
+      createMemory("sellOutMonth", sellOutMonth, "sell-out-month", "Primeiro mês em que os contratos ativos ocupam todo o estoque físico configurado."),
+      createMemory("contributionMargin", contributionMarginTotal, "contribution-margin", "Recebimentos líquidos menos custos variáveis, repasses e impostos explicitamente zerados enquanto não configurados."),
+      createMemory("operatingMarginRate", operatingMarginRate, "operating-margin-rate", "Resultado operacional acumulado dividido pela receita reconhecida do horizonte."),
+      createMemory("capitalRequired", capitalRequired, "capital-required", "Valor necessário para cobrir o menor fechamento mensal de caixa, limitado ao mínimo de zero."),
+      createMemory("worstCashMonth", worstCashMonthValue, "worst-cash-month", "Primeiro mês correspondente ao menor caixa de fechamento do horizonte."),
+      createMemory("breakEvenMonth", breakEvenMonthValue, "break-even-month", "Primeiro mês com caixa de fechamento maior ou igual a zero."),
       createMemory("npv", npv, "npv", "Valor presente dos fluxos mensais usando a taxa anual convertida para taxa mensal equivalente."),
       createMemory("irrAnnual", irrAnnual, "irr", "Taxa anual equivalente ao retorno interno dos fluxos mensais; fica indisponível quando não há mudança de sinal nos fluxos."),
       createMemory("paybackMonths", paybackMonths, "payback", "Mês de recuperação do caixa acumulado, com interpolação quando o ponto de equilíbrio ocorre entre dois meses."),
