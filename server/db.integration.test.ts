@@ -7,6 +7,7 @@ import {
   costCatalogItems,
   exportArtifacts,
   historicalBenchmarks,
+  kpiMemoryRecords,
   workflowEvents,
 } from "../drizzle/schema";
 import { FinanceDecimal } from "../shared/financial/engine";
@@ -70,9 +71,12 @@ const ids = {
   missingDomainProjectId: "",
   missingDomainVersionId: "",
   missingDomainSnapshotId: "",
+  missingDomainChangedSnapshotId: "",
   ordinalProjectId: "",
   ordinalBaseVersionId: "",
   ordinalScenarioVersionId: "",
+  inputRaceProjectId: "",
+  inputRaceVersionId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -288,7 +292,7 @@ afterAll(async () => {
     sql`DELETE FROM project_component_records WHERE sourceRef = ${"db.integration.test:commercial-operations"}`
   );
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId}, ${ids.missingDomainProjectId}, ${ids.missingDomainVersionId}, ${ids.missingDomainSnapshotId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId}, ${ids.missingDomainProjectId}, ${ids.missingDomainVersionId}, ${ids.missingDomainSnapshotId}, ${ids.missingDomainChangedSnapshotId}, ${ids.inputRaceProjectId}, ${ids.inputRaceVersionId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
@@ -387,6 +391,9 @@ afterAll(async () => {
     sql`DELETE FROM input_values WHERE versionId IN (${ids.ordinalBaseVersionId}, ${ids.ordinalScenarioVersionId})`
   );
   await db.execute(
+    sql`DELETE FROM input_values WHERE versionId = ${ids.inputRaceVersionId}`
+  );
+  await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.projectId}`
   );
   await db.execute(
@@ -412,6 +419,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.missingDomainProjectId}`
+  );
+  await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.inputRaceProjectId}`
   );
   await db.execute(
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.scenarioRollbackProjectId}`
@@ -449,6 +459,9 @@ afterAll(async () => {
   await db.execute(
     sql`DELETE FROM project_versions WHERE id IN (${ids.ordinalScenarioVersionId}, ${ids.ordinalBaseVersionId})`
   );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.inputRaceVersionId}`
+  );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.projectId}`);
   await db.execute(
     sql`DELETE FROM projects WHERE id = ${ids.rollbackProjectId}`
@@ -475,6 +488,7 @@ afterAll(async () => {
     sql`DELETE FROM projects WHERE id = ${ids.missingDomainProjectId}`
   );
   await db.execute(sql`DELETE FROM projects WHERE id = ${ids.ordinalProjectId}`);
+  await db.execute(sql`DELETE FROM projects WHERE id = ${ids.inputRaceProjectId}`);
 });
 
 describe("IGR database integration", () => {
@@ -586,6 +600,34 @@ describe("IGR database integration", () => {
         "commercial_operations.missing",
       ])
     );
+
+    const repeated = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    expect(repeated.id).toBe(snapshot.id);
+    expect(repeated.snapshotHash).toBe(snapshot.snapshotHash);
+
+    await updateInputsForTenant({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      inputs: { ...inputs, averageTicket: provided("1008") },
+    });
+    const changed = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    ids.missingDomainChangedSnapshotId = changed.id;
+    expect(changed.id).not.toBe(snapshot.id);
+    expect(changed.snapshotHash).not.toBe(snapshot.snapshotHash);
+    expect(
+      (await getProjectContextForTenant(created.projectId, tenantId)).snapshotHistory
+    ).toHaveLength(2);
   });
 
   it("bloqueia autoridade quando o domínio estruturado está pendente", async () => {
@@ -941,6 +983,40 @@ describe("IGR database integration", () => {
     expect(context.versions[0]?.id).toBe(created.versionId);
   });
 
+  it("reverte inputs se a versão deixa de ser draft durante a transação", async () => {
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Corrida de estado nos inputs",
+      inputs: { ...inputs, averageTicket: provided("1009") },
+    });
+    ids.inputRaceProjectId = created.projectId;
+    ids.inputRaceVersionId = created.versionId;
+    const before = await getInputsForVersion(created.versionId);
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+
+    await db.execute(sql.raw("DROP TRIGGER IF EXISTS tgr_test_inputs_leave_draft"));
+    await db.execute(sql.raw(
+      `CREATE TRIGGER tgr_test_inputs_leave_draft BEFORE UPDATE ON input_values FOR EACH ROW BEGIN IF NEW.versionId = '${created.versionId}' THEN UPDATE project_versions SET state = 'in_review' WHERE id = '${created.versionId}'; END IF; END`
+    ));
+    try {
+      await expect(updateInputsForTenant({
+        tenantId,
+        actorId,
+        versionId: created.versionId,
+        inputs: { ...before, averageTicket: provided("1999") },
+      })).rejects.toThrow("mudou durante a gravação dos inputs");
+    } finally {
+      await db.execute(sql.raw("DROP TRIGGER IF EXISTS tgr_test_inputs_leave_draft"));
+    }
+
+    expect(await getInputsForVersion(created.versionId)).toEqual(before);
+    expect(
+      (await getProjectContextForTenant(created.projectId, tenantId)).versions[0]
+    ).toMatchObject({ state: "draft", financialRevision: 0 });
+  });
+
   it("mantém export queued quando a transição de falha não pode ser auditada", async () => {
     const created = await createProjectForTenant({
       tenantId,
@@ -1221,6 +1297,49 @@ describe("IGR database integration", () => {
     expect(
       (await getExportEligibilityForTenant(snapshot.id, tenantId)).eligible
     ).toBe(false);
+
+    const initialKpiMemory = await db
+      .select({ id: kpiMemoryRecords.id })
+      .from(kpiMemoryRecords)
+      .where(eq(kpiMemoryRecords.snapshotId, snapshot.id));
+    const repeatedSnapshot = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+    });
+    expect(repeatedSnapshot.id).toBe(snapshot.id);
+    expect(repeatedSnapshot.snapshotHash).toBe(snapshot.snapshotHash);
+    expect(
+      await db
+        .select({ id: calculationSnapshots.id })
+        .from(calculationSnapshots)
+        .where(eq(calculationSnapshots.projectVersionId, created.versionId))
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: kpiMemoryRecords.id })
+        .from(kpiMemoryRecords)
+        .where(eq(kpiMemoryRecords.snapshotId, snapshot.id))
+    ).toHaveLength(initialKpiMemory.length);
+    expect(
+      await db
+        .select({ id: workflowEvents.id })
+        .from(workflowEvents)
+        .where(and(
+          eq(workflowEvents.versionId, created.versionId),
+          eq(workflowEvents.action, "snapshot.submitted_for_review")
+        ))
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: auditEvents.id })
+        .from(auditEvents)
+        .where(and(
+          eq(auditEvents.entityId, snapshot.id),
+          eq(auditEvents.action, "snapshot.created")
+        ))
+    ).toHaveLength(1);
 
     const approvalResults = await Promise.all([
       approveSnapshotForTenant({

@@ -2402,7 +2402,7 @@ export async function createCalculationSnapshot(params: {
   });
   const id = nanoid();
   const isAuthoritative = calculation.status === "valid";
-  await db.transaction(async transaction => {
+  const persistedSnapshot = await db.transaction(async transaction => {
     const lockedVersion = (await transaction
       .select()
       .from(projectVersions)
@@ -2411,11 +2411,36 @@ export async function createCalculationSnapshot(params: {
       .limit(1))[0];
     if (!lockedVersion) throw new Error("A versão deixou de existir durante o cálculo.");
     if (
-      lockedVersion.state !== version.state ||
-      lockedVersion.isImmutable !== version.isImmutable ||
       lockedVersion.inputHash !== version.inputHash ||
       lockedVersion.financialRevision !== version.financialRevision ||
       lockedVersion.formulaSetVersionId !== version.formulaSetVersionId
+    ) throw new Error("A versão mudou durante o cálculo; execute novamente sobre o estado atual.");
+    const existingSnapshot = (await transaction
+      .select()
+      .from(calculationSnapshots)
+      .where(eq(calculationSnapshots.snapshotHash, calculation.snapshotHash))
+      .limit(1))[0];
+    if (existingSnapshot) {
+      const expectedValidationStatus = calculation.status === "valid" ? "valid" : "failed";
+      if (
+        existingSnapshot.projectVersionId !== version.id ||
+        existingSnapshot.formulaSetVersionId !== version.formulaSetVersionId ||
+        existingSnapshot.horizonMonths !== params.horizonMonths ||
+        existingSnapshot.asOfMonth !== (params.asOfMonth ?? 0) ||
+        existingSnapshot.inputHash !== context.authoritativeInputHash ||
+        existingSnapshot.calculationStatus !== calculation.status ||
+        existingSnapshot.validationStatus !== expectedValidationStatus ||
+        existingSnapshot.isAuthoritative !== isAuthoritative
+      ) {
+        throw new Error(
+          "Hash de snapshot já existe com identidade analítica incompatível; integridade recusada."
+        );
+      }
+      return { id: existingSnapshot.id, reused: true as const };
+    }
+    if (
+      lockedVersion.state !== version.state ||
+      lockedVersion.isImmutable !== version.isImmutable
     ) throw new Error("A versão mudou durante o cálculo; execute novamente sobre o estado atual.");
     await transaction.insert(calculationSnapshots).values({
       id,
@@ -2504,8 +2529,9 @@ export async function createCalculationSnapshot(params: {
         asOfMonth: params.asOfMonth ?? 0,
       },
     });
+    return { id, reused: false as const };
   });
-  return { id, ...calculation };
+  return { id: persistedSnapshot.id, ...calculation };
 }
 
 export async function simulateCaptadorChangeForTenant(params: {
