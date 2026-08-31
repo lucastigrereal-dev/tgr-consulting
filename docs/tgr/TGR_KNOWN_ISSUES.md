@@ -43,4 +43,4 @@ Nenhum desses gates autoriza credenciais no repositório.
 - approval/baseline idempotentes, tenancy e imutabilidade provadas;
 - headers/CSP, request ID, redaction, body limit, rate limit local e startup de produção fail-closed;
 - migrations legadas, suíte completa, E2E master e restore drill certificados localmente.
-- Cost Catalog ligado ao snapshot oficial com tratamento explícito contra dupla contagem, clone de cenário, migration legada segura e Formula Set `1.8.0`.
+- Cost Catalog ligado ao snapshot oficial com tratamento explícito contra dupla contagem, clone de cenário, migration legada segura e Formula Set `1.9.0`.

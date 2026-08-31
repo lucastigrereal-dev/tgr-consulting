@@ -16,7 +16,7 @@ Persistence services (server/db.ts)
 MySQL 8 / Drizzle migrations
 
 Shared financial domain
-  ├─ Decimal engine + Formula Registry 1.8.0
+  ├─ Decimal engine + Formula Registry 1.9.0
   ├─ inventory / commercial condition / payment calendar
   ├─ point economics / commercial operations / commissions
   ├─ cohorts / receivables portfolio

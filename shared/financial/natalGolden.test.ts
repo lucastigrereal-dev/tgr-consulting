@@ -1,5 +1,7 @@
 import Decimal from "decimal.js";
+import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
+import expected from "../../golden/natal-ponta-negra-2026.expected.json";
 import {
   GOLDEN_NATAL_PONTA_NEGRA_2026,
   calculateGoldenNatalPontaNegra2026,
@@ -75,7 +77,10 @@ describe("GOLDEN_NATAL_PONTA_NEGRA_2026", () => {
   });
 
   it("executa 120 meses, revende estoque devolvido e reconcilia contratos, DRE, caixa e KPIs", () => {
+    const startedAt = performance.now();
     const first = calculateGoldenNatalPontaNegra2026();
+    const projectionElapsedMs = performance.now() - startedAt;
+    expect(projectionElapsedMs).toBeLessThanOrEqual(expected.performanceBudgetMs);
     const second = calculateGoldenNatalPontaNegra2026();
     const maxContracts = new D(
       GOLDEN_NATAL_PONTA_NEGRA_2026.options.maxContracts
@@ -256,4 +261,35 @@ describe("GOLDEN_NATAL_PONTA_NEGRA_2026", () => {
       expectedBreakEven ? new D(expectedBreakEven.month).toFixed(8) : null
     );
   }, 15_000);
+
+  it("reproduz o vetor externo congelado no baseline 9fc5909", () => {
+    const result = calculateGoldenNatalPontaNegra2026();
+    const tolerance = new D(expected.tolerance);
+    const expectDecimal = (actual: string | null, baseline: string | null) => {
+      if (baseline === null) {
+        expect(actual).toBeNull();
+        return;
+      }
+      expect(actual).not.toBeNull();
+      expect(new D(actual!).minus(baseline).abs().lte(tolerance)).toBe(true);
+    };
+
+    expect(expected.sourceBaselineCommit).toBe(
+      "9fc59096219f8eb053dcb7f6677823bdf510f058"
+    );
+    expect(result.formulaSetVersion).toBe(expected.formulaSet.semanticVersion);
+    expect(result.engineVersion).toBe(expected.formulaSet.engineVersion);
+    for (const [kpi, baseline] of Object.entries(expected.kpis)) {
+      expectDecimal(result.kpis[kpi as keyof typeof result.kpis], baseline);
+    }
+    for (const sentinel of expected.months) {
+      const actual = result.projections[sentinel.month - 1]!;
+      for (const [field, baseline] of Object.entries(sentinel.values)) {
+        expectDecimal(
+          actual[field as keyof typeof sentinel.values] as string | null,
+          baseline
+        );
+      }
+    }
+  }, 10_000);
 });

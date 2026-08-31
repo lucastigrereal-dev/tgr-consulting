@@ -77,7 +77,10 @@ describe("motor financeiro determinístico", () => {
   });
 
   it("limita contratos ao estoque comercial disponível", () => {
-    const result = calculateFinancialProjection(completeInputs, 3, {
+    const result = calculateFinancialProjection({
+      ...completeInputs,
+      cancellationRate: provided("0"),
+    }, 3, {
       maxContracts: "15",
     });
 
@@ -88,6 +91,41 @@ describe("motor financeiro determinístico", () => {
     ]);
     expect(result.kpis.grossSales).toBe("15000.00000000");
     expect(result.kpis.grossEntryGenerated).toBe("1500.00000000");
+  });
+
+  it("aplica cancelamento físico agregado no mês da venda e libera o retorno no mês seguinte", () => {
+    const result = calculateFinancialProjection(completeInputs, 3, {
+      maxContracts: "15",
+    });
+
+    expect(result.projections.map(row => ({
+      gross: row.grossContracts,
+      canceled: row.canceledContracts,
+      net: row.netContracts,
+      active: row.activeContracts,
+      returned: row.returnedToInventory,
+      available: row.availableInventory,
+    }))).toEqual([
+      {
+        gross: "10.00000000", canceled: "1.00000000",
+        net: "9.00000000", active: "9.00000000",
+        returned: "1.00000000", available: "6.00000000",
+      },
+      {
+        gross: "6.00000000", canceled: "0.60000000",
+        net: "5.40000000", active: "14.40000000",
+        returned: "0.60000000", available: "0.60000000",
+      },
+      {
+        gross: "0.60000000", canceled: "0.06000000",
+        net: "0.54000000", active: "14.94000000",
+        returned: "0.06000000", available: "0.06000000",
+      },
+    ]);
+    expect(result.kpis).toMatchObject({
+      totalGrossContracts: "16.60000000",
+      totalNetContracts: "14.94000000",
+    });
   });
 
   it("devolve cancelamentos ao estoque no mês do evento e permite revenda sem dupla contagem física", () => {

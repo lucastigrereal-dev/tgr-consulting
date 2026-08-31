@@ -200,4 +200,65 @@ describe("buildReceivablesPortfolio", () => {
       ).toBe(receivable.expectedAfterCancellation);
     }
   });
+
+  it("mantém os resumos mensais equivalentes à agregação de referência do ledger", () => {
+    const result = buildReceivablesPortfolio({
+      cohorts: [
+        cohort([
+          { component: "entry", dueMonthOffset: 0, grossAmount: "100.00000000" },
+          { component: "balance", dueMonthOffset: 2, grossAmount: "300.00000000" },
+        ]),
+        {
+          ...cohort([
+            { component: "entry", dueMonthOffset: 1, grossAmount: "75.00000000" },
+            { component: "balance", dueMonthOffset: 3, grossAmount: "225.00000000" },
+          ]),
+          cohortId: "cohort-fev",
+          saleMonth: 1,
+          contracts: "7.50000000",
+        },
+      ],
+      policy: policy(),
+      asOfMonth: 8,
+    });
+
+    const sum = (values: string[]) => values
+      .reduce((total, value) => total.plus(value), new FinanceDecimal(0))
+      .toFixed(8);
+    const reference = result.monthlySummaries.map(summary => {
+      const due = result.ledger.filter(line => line.dueMonth === summary.month);
+      const cures = result.ledger.flatMap(line => line.curedCollections)
+        .filter(collection => collection.collectionMonth === summary.month);
+      const writeOffs = result.ledger.filter(
+        line => line.writtenOffMonth === summary.month,
+      );
+      const open = result.ledger
+        .filter(line => line.dueMonth <= summary.month)
+        .map(line => {
+          let value = new FinanceDecimal(line.expectedAfterCancellation)
+            .minus(line.currentCollected);
+          for (const cure of line.curedCollections) {
+            if (cure.collectionMonth <= summary.month) value = value.minus(cure.amount);
+          }
+          if (
+            line.writtenOffMonth !== null &&
+            line.writtenOffMonth <= summary.month
+          ) return "0";
+          return value.toString();
+        });
+
+      return {
+        month: summary.month,
+        grossDue: sum(due.map(line => line.gross)),
+        canceledBeforeDue: sum(due.map(line => line.canceledBeforeDue)),
+        expectedAfterCancellation: sum(due.map(line => line.expectedAfterCancellation)),
+        currentCollected: sum(due.map(line => line.currentCollected)),
+        curedCollections: sum(cures.map(collection => collection.amount)),
+        writtenOff: sum(writeOffs.map(line => line.writtenOff)),
+        openDelinquent: sum(open),
+      };
+    });
+
+    expect(result.monthlySummaries).toEqual(reference);
+  });
 });

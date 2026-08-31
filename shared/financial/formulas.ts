@@ -1,9 +1,9 @@
 import type { FormulaSetVersion } from "./types";
 
 export const IGR_CORE_FORMULA_SET_V1: FormulaSetVersion = {
-  id: "igr-core-formulas-v1-8",
-  semanticVersion: "1.8.0",
-  engineVersion: "igr-engine-1.8.0",
+  id: "igr-core-formulas-v1-9",
+  semanticVersion: "1.9.0",
+  engineVersion: "igr-engine-1.9.0",
   status: "published",
   definitions: [
     {

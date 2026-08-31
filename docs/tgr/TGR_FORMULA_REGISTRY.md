@@ -2,9 +2,9 @@
 
 ## Formula set ativo
 
-- ID: `igr-core-formulas-v1-8`
-- versão semântica: `1.8.0`
-- engine: `igr-engine-1.8.0`
+- ID: `igr-core-formulas-v1-9`
+- versão semântica: `1.9.0`
+- engine: `igr-engine-1.9.0`
 - estado: `published`
 - fonte executável: `shared/financial/formulas.ts`
 

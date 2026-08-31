@@ -14,7 +14,7 @@
 
 ## Resultado entregue
 
-O TGR Consulting transforma o estudo em um fluxo rastreável: Builder → snapshot determinístico → Scenario Lab/Goal Seek → approval/baseline → Boardroom → PDF/PPTX/XLSX. Produto, condição comercial, captação, operações, workforce, treinamento, comissão, pagamentos, coortes, carteira, Cost Catalog e capital convergem no mesmo motor decimal e no formula set `1.8.0`.
+O TGR Consulting transforma o estudo em um fluxo rastreável: Builder → snapshot determinístico → Scenario Lab/Goal Seek → approval/baseline → Boardroom → PDF/PPTX/XLSX. Produto, condição comercial, captação, operações, workforce, treinamento, comissão, pagamentos, coortes, carteira, Cost Catalog e capital convergem no mesmo motor decimal e no formula set `1.9.0`.
 
 O Cost Catalog passou a declarar se cada linha é incremental ou já está incluída nos totais do projeto. Custos incrementais alteram o caixa oficial e o hash; linhas legadas recebem o default seguro contra dupla contagem. A criação do snapshot bloqueia e revalida a versão, com rollback integral se houver drift concorrente.
 

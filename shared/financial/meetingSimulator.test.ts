@@ -61,7 +61,7 @@ describe("simulateCaptadorChange", () => {
     expect(inputs.capexInitial.value).toBe("5000");
   });
 
-  it("respeita o estoque máximo tanto na base quanto na simulação", () => {
+  it("limita o estoque ativo e permite revender contratos cancelados na base e na simulação", () => {
     const result = simulateCaptadorChange({
       inputs,
       horizonMonths: 12,
@@ -71,8 +71,8 @@ describe("simulateCaptadorChange", () => {
       maxContracts: "2",
     });
 
-    expect(result.before.kpis.grossSales).toBe("2000.00000000");
-    expect(result.after.kpis.grossSales).toBe("2000.00000000");
+    expect(result.before.kpis.grossSales).toBe("2222.22222222");
+    expect(result.after.kpis.grossSales).toBe("2222.22222222");
     expect(result.marginal.grossSales).toBe("0.00000000");
   });
 });

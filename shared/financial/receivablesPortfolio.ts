@@ -389,35 +389,73 @@ export function buildReceivablesPortfolio(input: {
   const firstMonth = input.cohorts.length === 0
     ? input.asOfMonth
     : Math.min(...input.cohorts.map(cohort => cohort.saleMonth));
+  const grossDueByMonth = new Map<number, PortfolioDecimalInstance>();
+  const canceledByMonth = new Map<number, PortfolioDecimalInstance>();
+  const expectedByMonth = new Map<number, PortfolioDecimalInstance>();
+  const currentByMonth = new Map<number, PortfolioDecimalInstance>();
+  const curedByMonth = new Map<number, PortfolioDecimalInstance>();
+  const writtenOffByMonth = new Map<number, PortfolioDecimalInstance>();
+  const openDeltaByMonth = new Map<number, PortfolioDecimalInstance>();
+  const addMonthlyAmount = (
+    target: Map<number, PortfolioDecimalInstance>,
+    month: number,
+    value: PortfolioDecimalInstance | string,
+  ) => {
+    target.set(
+      month,
+      (target.get(month) ?? ZERO).plus(value),
+    );
+  };
+
+  for (const line of ledger) {
+    addMonthlyAmount(grossDueByMonth, line.dueMonth, line.gross);
+    addMonthlyAmount(canceledByMonth, line.dueMonth, line.canceledBeforeDue);
+    addMonthlyAmount(
+      expectedByMonth,
+      line.dueMonth,
+      line.expectedAfterCancellation,
+    );
+    addMonthlyAmount(currentByMonth, line.dueMonth, line.currentCollected);
+    addMonthlyAmount(
+      openDeltaByMonth,
+      line.dueMonth,
+      new PortfolioDecimal(line.expectedAfterCancellation)
+        .minus(line.currentCollected),
+    );
+    for (const collection of line.curedCollections) {
+      addMonthlyAmount(curedByMonth, collection.collectionMonth, collection.amount);
+      addMonthlyAmount(
+        openDeltaByMonth,
+        collection.collectionMonth,
+        new PortfolioDecimal(collection.amount).negated(),
+      );
+    }
+    if (line.writtenOffMonth !== null) {
+      addMonthlyAmount(writtenOffByMonth, line.writtenOffMonth, line.writtenOff);
+      addMonthlyAmount(
+        openDeltaByMonth,
+        line.writtenOffMonth,
+        new PortfolioDecimal(line.writtenOff).negated(),
+      );
+    }
+  }
+
+  let openDelinquent = ZERO;
   const monthlySummaries = Array.from(
     { length: Math.max(0, input.asOfMonth - firstMonth + 1) },
     (_, index): ReceivablesMonthlySummary => {
       const month = firstMonth + index;
-      const due = ledger.filter(line => line.dueMonth === month);
-      const cures = ledger.flatMap(line => line.curedCollections)
-        .filter(collection => collection.collectionMonth === month);
-      const writeOffs = ledger.filter(line => line.writtenOffMonth === month);
-      const openAtMonth = ledger
-        .filter(line => line.dueMonth <= month)
-        .map(line => {
-          let open = new PortfolioDecimal(line.expectedAfterCancellation)
-            .minus(line.currentCollected);
-          line.curedCollections
-            .filter(collection => collection.collectionMonth <= month)
-            .forEach(collection => { open = open.minus(collection.amount); });
-          if (line.writtenOffMonth !== null && line.writtenOffMonth <= month) return ZERO;
-          return open;
-        });
+      openDelinquent = openDelinquent.plus(openDeltaByMonth.get(month) ?? ZERO);
 
       return {
         month,
-        grossDue: decimalText(sum(due.map(line => new PortfolioDecimal(line.gross)))),
-        canceledBeforeDue: decimalText(sum(due.map(line => new PortfolioDecimal(line.canceledBeforeDue)))),
-        expectedAfterCancellation: decimalText(sum(due.map(line => new PortfolioDecimal(line.expectedAfterCancellation)))),
-        currentCollected: decimalText(sum(due.map(line => new PortfolioDecimal(line.currentCollected)))),
-        curedCollections: decimalText(sum(cures.map(collection => new PortfolioDecimal(collection.amount)))),
-        writtenOff: decimalText(sum(writeOffs.map(line => new PortfolioDecimal(line.writtenOff)))),
-        openDelinquent: decimalText(sum(openAtMonth)),
+        grossDue: decimalText(grossDueByMonth.get(month) ?? ZERO),
+        canceledBeforeDue: decimalText(canceledByMonth.get(month) ?? ZERO),
+        expectedAfterCancellation: decimalText(expectedByMonth.get(month) ?? ZERO),
+        currentCollected: decimalText(currentByMonth.get(month) ?? ZERO),
+        curedCollections: decimalText(curedByMonth.get(month) ?? ZERO),
+        writtenOff: decimalText(writtenOffByMonth.get(month) ?? ZERO),
+        openDelinquent: decimalText(openDelinquent),
       };
     },
   );

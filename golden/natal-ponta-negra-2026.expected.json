@@ -1,0 +1,130 @@
+{
+  "scenarioId": "golden-natal-ponta-negra-2026",
+  "sourceBaselineCommit": "9fc59096219f8eb053dcb7f6677823bdf510f058",
+  "tolerance": "0.000001",
+  "performanceBudgetMs": 2000,
+  "formulaSet": {
+    "id": "igr-core-formulas-v1-9",
+    "semanticVersion": "1.9.0",
+    "engineVersion": "igr-engine-1.9.0"
+  },
+  "kpis": {
+    "grossSales": "124799999.86534134",
+    "grossEntryGenerated": "14262857.12746758",
+    "grossReceivablesGenerated": "124799999.86534134",
+    "recognizedRevenue": "76258836.34287130",
+    "totalOperatingCashFlow": "33922836.35229741",
+    "totalGrossContracts": "4457.14285233",
+    "totalNetContracts": "3120.00000000",
+    "sellOutMonth": "43.00000000",
+    "contributionMargin": "67522836.35229741",
+    "operatingMarginRate": "0.44483811",
+    "capitalRequired": "2885282.30475204",
+    "worstCashMonth": "15.00000000",
+    "breakEvenMonth": "34.00000000",
+    "npv": "17556378.03469937",
+    "irrAnnual": null,
+    "paybackMonths": "33.26222707"
+  },
+  "months": [
+    {
+      "month": 1,
+      "values": {
+        "grossContracts": "100.00000000",
+        "canceledContracts": "0.00000000",
+        "activeContracts": "100.00000000",
+        "availableInventory": "3020.00000000",
+        "grossEntryGenerated": "320000.00000000",
+        "grossEntrySettled": "30000.00000000",
+        "installmentCollections": "0.00000000",
+        "cashInflows": "30000.00000000",
+        "cashOutflows": "476000.00000000",
+        "contributionMargin": "-166000.00000000",
+        "operatingResult": "-446000.00000000",
+        "cashClosing": "-446000.00000000"
+      }
+    },
+    {
+      "month": 4,
+      "values": {
+        "grossContracts": "100.00000000",
+        "canceledContracts": "12.00000000",
+        "returnedToInventory": "12.00000000",
+        "activeContracts": "375.00000000",
+        "availableInventory": "2745.00000000",
+        "grossEntrySettled": "121260.00000000",
+        "installmentCollections": "19485.71428584",
+        "cashClosing": "-1581554.28571416"
+      }
+    },
+    {
+      "month": 8,
+      "values": {
+        "grossEntryGenerated": "320000.00000000",
+        "grossEntrySettled": "233827.90000000",
+        "installmentCollections": "100169.91619113",
+        "cashClosing": "-2424993.70190278"
+      }
+    },
+    {
+      "month": 15,
+      "values": {
+        "canceledContracts": "30.00000000",
+        "activeContracts": "1191.00000000",
+        "cashOpening": "-2873068.44665827",
+        "cashInflows": "463786.14190623",
+        "cashOutflows": "476000.00000000",
+        "contributionMargin": "267786.14190623",
+        "operatingResult": "-12213.85809377",
+        "cashClosing": "-2885282.30475204"
+      }
+    },
+    {
+      "month": 34,
+      "values": {
+        "activeContracts": "2521.00000000",
+        "installmentCollections": "559734.84857505",
+        "cashOpening": "-84798.65042052",
+        "cashClosing": "238580.05815453"
+      }
+    },
+    {
+      "month": 43,
+      "values": {
+        "grossContracts": "69.00000000",
+        "canceledContracts": "30.00000000",
+        "cumulativeGrossContracts": "4269.00000000",
+        "activeContracts": "3120.00000000",
+        "availableInventory": "0.00000000",
+        "sellOutRate": "1.00000000",
+        "grossEntryGenerated": "220800.00000000",
+        "installmentCollections": "718699.74857607",
+        "cashClosing": "3995272.93533508"
+      }
+    },
+    {
+      "month": 87,
+      "values": {
+        "grossContracts": "0.00229214",
+        "activeContracts": "3120.00000000",
+        "grossEntrySettled": "14.41026034",
+        "installmentCollections": "787252.49601459",
+        "cashClosing": "26964163.88080269"
+      }
+    },
+    {
+      "month": 120,
+      "values": {
+        "grossContracts": "0.00000123",
+        "canceledContracts": "0.00000123",
+        "cumulativeGrossContracts": "4457.14285233",
+        "activeContracts": "3120.00000000",
+        "grossEntryGenerated": "0.00393344",
+        "installmentCollections": "208343.17498778",
+        "contributionMargin": "208343.18022380",
+        "operatingResult": "-71656.81977620",
+        "cashClosing": "33922836.35229741"
+      }
+    }
+  ]
+}

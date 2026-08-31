@@ -393,11 +393,11 @@ export function calculateFinancialProjection(
   const salesPlan = Array.from({ length: horizonMonths }, (_, index) => {
     const month = index + 1;
     const scheduledCancellations = contractCancellationSchedule[month];
-    const canceledContracts = FinanceDecimal.min(
+    const cohortCancellations = FinanceDecimal.min(
       activeContracts,
       scheduledCancellations,
     );
-    activeContracts = activeContracts.minus(canceledContracts);
+    activeContracts = activeContracts.minus(cohortCancellations);
     const operationMonth = month - preOperationMonthsNumber;
     const isOperating = operationMonth > 0;
     const qualifiedCouples = isOperating
@@ -425,6 +425,16 @@ export function calculateFinancialProjection(
       : inventoryLimitedContracts;
     activeContracts = activeContracts.plus(contracts);
     cumulativeGrossContracts = cumulativeGrossContracts.plus(contracts);
+    // Legacy aggregate mode has no temporal curve. Its cancellation is
+    // recognized against the sale cohort immediately; the returned inventory
+    // is visible after this month's selling window and can be resold next month.
+    const aggregateCancellations = options?.receivablesPolicy
+      ? ZERO
+      : contracts.times(cancellationRate);
+    activeContracts = activeContracts.minus(aggregateCancellations);
+    const canceledContracts = cohortCancellations.plus(
+      aggregateCancellations,
+    );
     for (const cancellation of cancellationIncrements) {
       const eventMonth = month + cancellation.monthOffset;
       if (eventMonth <= horizonMonths) {
