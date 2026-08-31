@@ -33,6 +33,14 @@ export const FinanceDecimal = Decimal.clone({
 const ZERO = new FinanceDecimal("0");
 const ONE = new FinanceDecimal("1");
 const MONTHS_PER_YEAR = new FinanceDecimal("12");
+const CONTRACT_CANCELLATION_MILESTONES = [
+  { key: "d7", monthOffset: 1 },
+  { key: "d30", monthOffset: 1 },
+  { key: "d60", monthOffset: 2 },
+  { key: "d90", monthOffset: 3 },
+  { key: "d180", monthOffset: 6 },
+  { key: "lifetime", monthOffset: 7 },
+] as const;
 
 const PAYMENT_METHODS = [
   { mix: "paymentCardViewMixRate", mdr: "paymentCardViewMdrRate", settlementDays: "paymentCardViewSettlementDays" },
@@ -112,6 +120,24 @@ function resolvePaymentSchedulePerContract(
       dueMonthOffset: item.dueMonthOffset,
       grossAmount,
     };
+  });
+}
+
+function resolveContractCancellationIncrements(
+  policy: ReceivablesPolicy | undefined,
+): Array<{ monthOffset: number; rate: Decimal }> {
+  if (!policy) return [];
+
+  // Reuse the portfolio's canonical validation before the curve controls stock.
+  buildReceivablesPortfolio({ cohorts: [], policy, asOfMonth: 1 });
+  let previousRate = ZERO;
+  return CONTRACT_CANCELLATION_MILESTONES.map(milestone => {
+    const cumulativeRate = new FinanceDecimal(
+      policy.cancellationCurve[milestone.key],
+    );
+    const rate = cumulativeRate.minus(previousRate);
+    previousRate = cumulativeRate;
+    return { monthOffset: milestone.monthOffset, rate };
   });
 }
 
@@ -230,6 +256,14 @@ export function calculateFinancialProjection(
         paymentFees: null,
         preOperationalInvestment: null,
         totalOperatingCashFlow: null,
+        totalGrossContracts: null,
+        totalNetContracts: null,
+        sellOutMonth: null,
+        contributionMargin: null,
+        operatingMarginRate: null,
+        capitalRequired: null,
+        worstCashMonth: null,
+        breakEvenMonth: null,
         npv: null,
         irrAnnual: null,
         paybackMonths: null,
@@ -341,14 +375,29 @@ export function calculateFinancialProjection(
   }
 
   const monthlyDiscountRate = ONE.plus(discountRateAnnual).pow(ONE.div(MONTHS_PER_YEAR)).minus(ONE);
-  let remainingContracts = options?.maxContracts === undefined
+  const maxContracts = options?.maxContracts === undefined
     ? null
     : new FinanceDecimal(options.maxContracts);
-  if (remainingContracts && remainingContracts.isNegative()) {
+  if (maxContracts && maxContracts.isNegative()) {
     throw new Error("O limite de contratos não pode ser negativo.");
   }
+  const cancellationIncrements = resolveContractCancellationIncrements(
+    options?.receivablesPolicy,
+  );
+  const contractCancellationSchedule = Array.from(
+    { length: horizonMonths + 8 },
+    () => ZERO,
+  );
+  let cumulativeGrossContracts = ZERO;
+  let activeContracts = ZERO;
   const salesPlan = Array.from({ length: horizonMonths }, (_, index) => {
     const month = index + 1;
+    const scheduledCancellations = contractCancellationSchedule[month];
+    const canceledContracts = FinanceDecimal.min(
+      activeContracts,
+      scheduledCancellations,
+    );
+    activeContracts = activeContracts.minus(canceledContracts);
     const operationMonth = month - preOperationMonthsNumber;
     const isOperating = operationMonth > 0;
     const qualifiedCouples = isOperating
@@ -359,11 +408,14 @@ export function calculateFinancialProjection(
     const demandedContracts = isOperating
       ? qualifiedCouples.times(conversionRate)
       : ZERO;
-    const inventoryLimitedContracts = remainingContracts === null
+    const availableBeforeSales = maxContracts === null
+      ? null
+      : FinanceDecimal.max(ZERO, maxContracts.minus(activeContracts));
+    const inventoryLimitedContracts = availableBeforeSales === null
       ? demandedContracts
-      : demandedContracts.lte(remainingContracts)
+      : demandedContracts.lte(availableBeforeSales)
         ? demandedContracts
-        : remainingContracts;
+        : availableBeforeSales;
     const operationsCapacity = options?.commercialOperations?.months[index];
     const contracts = operationsCapacity
       ? FinanceDecimal.min(
@@ -371,9 +423,40 @@ export function calculateFinancialProjection(
           new FinanceDecimal(operationsCapacity.salesCapacity),
         )
       : inventoryLimitedContracts;
-    if (remainingContracts !== null)
-      remainingContracts = remainingContracts.minus(contracts);
-    return { month, operationMonth, isOperating, qualifiedCouples, contracts };
+    activeContracts = activeContracts.plus(contracts);
+    cumulativeGrossContracts = cumulativeGrossContracts.plus(contracts);
+    for (const cancellation of cancellationIncrements) {
+      const eventMonth = month + cancellation.monthOffset;
+      if (eventMonth <= horizonMonths) {
+        contractCancellationSchedule[eventMonth] =
+          contractCancellationSchedule[eventMonth].plus(
+            contracts.times(cancellation.rate),
+          );
+      }
+    }
+    const availableInventory = maxContracts === null
+      ? null
+      : FinanceDecimal.max(ZERO, maxContracts.minus(activeContracts));
+    const sellOutRate = maxContracts === null
+      ? null
+      : maxContracts.eq(ZERO)
+        ? ZERO
+        : activeContracts.div(maxContracts);
+    return {
+      month,
+      operationMonth,
+      isOperating,
+      qualifiedCouples,
+      contracts,
+      grossContracts: contracts,
+      canceledContracts,
+      netContracts: contracts.minus(canceledContracts),
+      cumulativeGrossContracts,
+      activeContracts,
+      returnedToInventory: canceledContracts,
+      availableInventory,
+      sellOutRate,
+    };
   });
   const receivablesPortfolio: ReceivablesPortfolio | undefined =
     options?.receivablesPolicy
@@ -431,6 +514,13 @@ export function calculateFinancialProjection(
   let commercialOperationsCostsTotal = ZERO;
   let commissionPaymentsTotal = ZERO;
   let totalOperatingCashFlow = ZERO;
+  let totalGrossContracts = ZERO;
+  let totalNetContracts = ZERO;
+  let contributionMarginTotal = ZERO;
+  let operatingResultTotal = ZERO;
+  let minimumCashFlow: Decimal | null = null;
+  let worstCashMonth: number | null = null;
+  let breakEvenMonth: number | null = null;
   const projections: MonthlyProjection[] = [];
   const cashFlows: Decimal[] = [];
   const settlementGrossSchedule = Array.from({ length: horizonMonths + 121 }, () => ZERO);
@@ -491,8 +581,8 @@ export function calculateFinancialProjection(
   }
 
   for (let month = 1; month <= horizonMonths; month += 1) {
-    const { operationMonth, isOperating, qualifiedCouples, contracts } =
-      salesPlan[month - 1]!;
+    const sales = salesPlan[month - 1]!;
+    const { operationMonth, isOperating, qualifiedCouples, contracts } = sales;
     const grossSales = contracts.times(averageTicket);
     const grossEntryGenerated = contracts.times(entryScheduleValuePerContract);
     const grossReceivablesGenerated = contracts.times(
@@ -617,25 +707,57 @@ export function calculateFinancialProjection(
       ? fixedCostMonthly.plus(pointIncrementalMonthlyOpex)
       : ZERO;
     const payroll = isOperating ? payrollMonthly : ZERO;
-    const operatingCashFlow = netCollections
+    const taxes = ZERO;
+    const contributionMargin = netCollections
       .minus(variableCosts)
       .minus(partnerShare)
+      .minus(taxes);
+    const operatingResult = contributionMargin
       .minus(fixedCosts)
       .minus(commercialOperationsCosts)
       .minus(commissionPayments)
-      .minus(payroll)
-      .minus(preOperationalInvestment);
-    cumulativeCashFlow = cumulativeCashFlow.plus(operatingCashFlow);
+      .minus(payroll);
+    const cashOpening = cumulativeCashFlow;
+    const cashInflows = netCollections;
+    const cashOutflows = variableCosts
+      .plus(partnerShare)
+      .plus(taxes)
+      .plus(fixedCosts)
+      .plus(commercialOperationsCosts)
+      .plus(commissionPayments)
+      .plus(payroll)
+      .plus(preOperationalInvestment);
+    const operatingCashFlow = cashInflows.minus(cashOutflows);
+    const cashClosing = cashOpening.plus(operatingCashFlow);
+    cumulativeCashFlow = cashClosing;
+    if (minimumCashFlow === null || cashClosing.lt(minimumCashFlow)) {
+      minimumCashFlow = cashClosing;
+      worstCashMonth = month;
+    }
+    if (breakEvenMonth === null && cashClosing.gte(ZERO)) breakEvenMonth = month;
     const discountedCashFlow = operatingCashFlow.div(ONE.plus(monthlyDiscountRate).pow(month));
 
     projections.push({
       month,
       qualifiedCouples: decimalText(qualifiedCouples),
       contracts: decimalText(contracts),
+      grossContracts: decimalText(sales.grossContracts),
+      canceledContracts: decimalText(sales.canceledContracts),
+      netContracts: decimalText(sales.netContracts),
+      cumulativeGrossContracts: decimalText(sales.cumulativeGrossContracts),
+      activeContracts: decimalText(sales.activeContracts),
+      returnedToInventory: decimalText(sales.returnedToInventory),
+      availableInventory: sales.availableInventory === null
+        ? null
+        : decimalText(sales.availableInventory),
+      sellOutRate: sales.sellOutRate === null
+        ? null
+        : decimalText(sales.sellOutRate),
       grossSales: decimalText(grossSales),
       recognizedRevenue: decimalText(recognizedRevenue),
       variableCosts: decimalText(variableCosts),
       partnerShare: decimalText(partnerShare),
+      taxes: decimalText(taxes),
       fixedCosts: decimalText(fixedCosts),
       commercialOperationsCosts: decimalText(commercialOperationsCosts),
       commissionPayments: decimalText(commissionPayments),
@@ -654,6 +776,12 @@ export function calculateFinancialProjection(
       healthyD90: decimalText(healthyD90),
       paymentFees: decimalText(paymentFees),
       netCollections: decimalText(netCollections),
+      cashOpening: decimalText(cashOpening),
+      cashInflows: decimalText(cashInflows),
+      cashOutflows: decimalText(cashOutflows),
+      contributionMargin: decimalText(contributionMargin),
+      operatingResult: decimalText(operatingResult),
+      cashClosing: decimalText(cashClosing),
       operatingCashFlow: decimalText(operatingCashFlow),
       cumulativeCashFlow: decimalText(cumulativeCashFlow),
       discountedCashFlow: decimalText(discountedCashFlow),
@@ -684,6 +812,10 @@ export function calculateFinancialProjection(
     );
     commissionPaymentsTotal = commissionPaymentsTotal.plus(commissionPayments);
     totalOperatingCashFlow = totalOperatingCashFlow.plus(operatingCashFlow);
+    totalGrossContracts = totalGrossContracts.plus(sales.grossContracts);
+    totalNetContracts = totalNetContracts.plus(sales.netContracts);
+    contributionMarginTotal = contributionMarginTotal.plus(contributionMargin);
+    operatingResultTotal = operatingResultTotal.plus(operatingResult);
     cashFlows.push(operatingCashFlow);
   }
 
@@ -694,6 +826,16 @@ export function calculateFinancialProjection(
   const irrMonthly = calculateIrrMonthly(cashFlows);
   const irrAnnual = irrMonthly ? ONE.plus(irrMonthly).pow(MONTHS_PER_YEAR).minus(ONE) : null;
   const paybackMonths = calculatePaybackMonths(projections);
+  const sellOutProjection = projections.find(projection =>
+    projection.sellOutRate !== null &&
+    new FinanceDecimal(projection.sellOutRate).eq(ONE)
+  );
+  const operatingMarginRate = recognizedRevenueTotal.eq(ZERO)
+    ? null
+    : operatingResultTotal.div(recognizedRevenueTotal);
+  const capitalRequired = minimumCashFlow?.lt(ZERO)
+    ? minimumCashFlow.negated()
+    : ZERO;
   const delinquentBalanceClosing = projections.length
     ? new FinanceDecimal(projections[projections.length - 1]!.delinquentBalance)
     : ZERO;
@@ -727,6 +869,22 @@ export function calculateFinancialProjection(
       paymentFees: decimalText(paymentFeesTotal),
       preOperationalInvestment: decimalText(preOperationalInvestmentTotal),
       totalOperatingCashFlow: decimalText(totalOperatingCashFlow),
+      totalGrossContracts: decimalText(totalGrossContracts),
+      totalNetContracts: decimalText(totalNetContracts),
+      sellOutMonth: sellOutProjection
+        ? decimalText(new FinanceDecimal(sellOutProjection.month))
+        : null,
+      contributionMargin: decimalText(contributionMarginTotal),
+      operatingMarginRate: operatingMarginRate
+        ? decimalText(operatingMarginRate)
+        : null,
+      capitalRequired: decimalText(capitalRequired),
+      worstCashMonth: worstCashMonth === null
+        ? null
+        : decimalText(new FinanceDecimal(worstCashMonth)),
+      breakEvenMonth: breakEvenMonth === null
+        ? null
+        : decimalText(new FinanceDecimal(breakEvenMonth)),
       npv: decimalText(npv),
       irrAnnual: irrAnnual ? decimalText(irrAnnual) : null,
       paybackMonths: paybackMonths ? decimalText(paybackMonths) : null,

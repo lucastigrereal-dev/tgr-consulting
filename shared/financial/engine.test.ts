@@ -56,6 +56,101 @@ describe("motor financeiro determinístico", () => {
     expect(result.kpis.grossEntryGenerated).toBe("1500.00000000");
   });
 
+  it("devolve cancelamentos ao estoque no mês do evento e permite revenda sem dupla contagem física", () => {
+    const result = calculateFinancialProjection({
+      ...completeInputs,
+      collectionRate: { status: "pending", sourceType: "current_decision" },
+      cancellationRate: { status: "pending", sourceType: "current_decision" },
+    }, 3, {
+      maxContracts: "15",
+      receivablesPolicy: {
+        cancellationCurve: {
+          d7: "0.5", d30: "0.5", d60: "0.5",
+          d90: "0.5", d180: "0.5", lifetime: "0.5",
+        },
+        delinquencyRate: "0",
+        cureRates: {
+          days1To30: "0", days31To60: "0",
+          days61To90: "0", days90Plus: "0",
+        },
+        writeOffAfterDays: 90,
+        policyVersion: "inventory-return-test-v1",
+        sourceRef: "engine-test",
+      },
+    });
+
+    expect(result.projections.map(row => row.contracts)).toEqual([
+      "10.00000000", "10.00000000", "5.00000000",
+    ]);
+    expect(result.projections.map(row => ({
+      grossContracts: row.grossContracts,
+      canceledContracts: row.canceledContracts,
+      netContracts: row.netContracts,
+      cumulativeGrossContracts: row.cumulativeGrossContracts,
+      activeContracts: row.activeContracts,
+      returnedToInventory: row.returnedToInventory,
+      availableInventory: row.availableInventory,
+      sellOutRate: row.sellOutRate,
+    }))).toEqual([
+      {
+        grossContracts: "10.00000000", canceledContracts: "0.00000000",
+        netContracts: "10.00000000", cumulativeGrossContracts: "10.00000000",
+        activeContracts: "10.00000000", returnedToInventory: "0.00000000",
+        availableInventory: "5.00000000", sellOutRate: "0.66666667",
+      },
+      {
+        grossContracts: "10.00000000", canceledContracts: "5.00000000",
+        netContracts: "5.00000000", cumulativeGrossContracts: "20.00000000",
+        activeContracts: "15.00000000", returnedToInventory: "5.00000000",
+        availableInventory: "0.00000000", sellOutRate: "1.00000000",
+      },
+      {
+        grossContracts: "5.00000000", canceledContracts: "5.00000000",
+        netContracts: "0.00000000", cumulativeGrossContracts: "25.00000000",
+        activeContracts: "15.00000000", returnedToInventory: "5.00000000",
+        availableInventory: "0.00000000", sellOutRate: "1.00000000",
+      },
+    ]);
+    expect(result.kpis).toMatchObject({
+      totalGrossContracts: "25.00000000",
+      totalNetContracts: "15.00000000",
+      sellOutMonth: "2.00000000",
+    });
+  });
+
+  it("reconcilia DRE e caixa mensal e deriva os novos KPIs do próprio fluxo", () => {
+    const result = calculateFinancialProjection({
+      ...completeInputs,
+      qualifiedCouplesMonth1: provided("10"), conversionRate: provided("0.1"),
+      averageTicket: provided("1000"), entryValuePerContract: provided("1000"),
+      collectionRate: provided("1"), cancellationRate: provided("0"),
+      variableCostRate: provided("0.2"), partnerShareRate: provided("0.1"),
+      fixedCostMonthly: provided("100"), payrollMonthly: provided("50"),
+      capexInitial: provided("1000"), discountRateAnnual: provided("0"),
+    }, 3);
+
+    expect(result.projections[0]).toMatchObject({
+      taxes: "0.00000000",
+      cashOpening: "0.00000000",
+      cashInflows: "1000.00000000",
+      cashOutflows: "1450.00000000",
+      contributionMargin: "700.00000000",
+      operatingResult: "550.00000000",
+      cashClosing: "-450.00000000",
+    });
+    expect(result.projections[1]).toMatchObject({
+      cashOpening: "-450.00000000",
+      cashClosing: "100.00000000",
+    });
+    expect(result.kpis).toMatchObject({
+      contributionMargin: "2100.00000000",
+      operatingMarginRate: "0.55000000",
+      capitalRequired: "450.00000000",
+      worstCashMonth: "1.00000000",
+      breakEvenMonth: "2.00000000",
+    });
+  });
+
   it("distribui a implantação antes da abertura e liquida a entrada pelo prazo e MDR de cada método", () => {
     const result = calculateFinancialProjection({
       ...completeInputs,

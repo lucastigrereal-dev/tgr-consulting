@@ -104,11 +104,24 @@ export type CalculationMemory = {
 export type MonthlyProjection = {
   month: number;
   qualifiedCouples: DecimalText;
+  /** Campo legado equivalente a grossContracts. */
   contracts: DecimalText;
+  grossContracts: DecimalText;
+  canceledContracts: DecimalText;
+  netContracts: DecimalText;
+  cumulativeGrossContracts: DecimalText;
+  activeContracts: DecimalText;
+  returnedToInventory: DecimalText;
+  /** Indisponível quando maxContracts não foi configurado. */
+  availableInventory: DecimalText | null;
+  /** Relação activeContracts / maxContracts; indisponível sem estoque físico. */
+  sellOutRate: DecimalText | null;
   grossSales: DecimalText;
   recognizedRevenue: DecimalText;
   variableCosts: DecimalText;
   partnerShare: DecimalText;
+  /** Impostos ainda não configurados no motor; permanece explicitamente zero. */
+  taxes: DecimalText;
   fixedCosts: DecimalText;
   commercialOperationsCosts: DecimalText;
   commissionPayments: DecimalText;
@@ -127,6 +140,12 @@ export type MonthlyProjection = {
   healthyD90: DecimalText;
   paymentFees: DecimalText;
   netCollections: DecimalText;
+  cashOpening: DecimalText;
+  cashInflows: DecimalText;
+  cashOutflows: DecimalText;
+  contributionMargin: DecimalText;
+  operatingResult: DecimalText;
+  cashClosing: DecimalText;
   operatingCashFlow: DecimalText;
   cumulativeCashFlow: DecimalText;
   discountedCashFlow: DecimalText;
@@ -156,6 +175,14 @@ export type FinancialCalculation = {
     paymentFees: DecimalText | null;
     preOperationalInvestment: DecimalText | null;
     totalOperatingCashFlow: DecimalText | null;
+    totalGrossContracts: DecimalText | null;
+    totalNetContracts: DecimalText | null;
+    sellOutMonth: DecimalText | null;
+    contributionMargin: DecimalText | null;
+    operatingMarginRate: DecimalText | null;
+    capitalRequired: DecimalText | null;
+    worstCashMonth: DecimalText | null;
+    breakEvenMonth: DecimalText | null;
     npv: DecimalText | null;
     irrAnnual: DecimalText | null;
     paybackMonths: DecimalText | null;
