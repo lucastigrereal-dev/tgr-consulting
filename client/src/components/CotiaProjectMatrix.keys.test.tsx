@@ -74,23 +74,40 @@ describe("CotiaProjectMatrix · estabilidade de listas", () => {
     expect(html).toContain('for="cotia-cartaoVistaPercentual"');
     expect(html).toMatch(/Premissa edit(?:a|á)vel/);
     expect(html).toContain("nenhuma regra é inventada");
-    expect(html).toContain("Digite 0,01 para 1% e 0,005 para 0,5%");
-    expect(html).toContain('data-percent-semantics="decimal-rate"');
+    expect(html).toContain("Digite 25 para 25%");
+    expect(html).toContain("0,25 significa 0,25%");
+    expect(html).toContain('data-percent-semantics="percentage-points"');
+    expect(html).toContain('aria-describedby="cotia-eficiencia-percent-help"');
+    expect(html).toContain("Deslize horizontalmente");
+    expect(html).toContain("primeira coluna permanece visível");
   });
 
-  it("adapta o decimal canônico da UI sem reinterpretar pontos percentuais persistidos", () => {
+  it("converte pontos percentuais para a fração canônica sem ambiguidade", () => {
     const moduleWithAdapters = cotiaMatrixModule as typeof cotiaMatrixModule & {
-      cotiaPercentPointsToDecimalInput?: (value: string) => string;
-      decimalInputToCotiaPercentPoints?: (value: string) => string;
+      cotiaPercentPointsToDecimalRate?: (value: string) => string;
+      normalizeCotiaPercentPointsInput?: (value: string) =>
+        | { status: "empty" }
+        | { status: "valid"; points: string; decimalRate: string }
+        | { status: "invalid"; message: string };
     };
 
-    expect(moduleWithAdapters.cotiaPercentPointsToDecimalInput).toBeTypeOf("function");
-    expect(moduleWithAdapters.decimalInputToCotiaPercentPoints).toBeTypeOf("function");
-    expect(moduleWithAdapters.cotiaPercentPointsToDecimalInput?.("25")).toBe("0,25");
-    expect(moduleWithAdapters.cotiaPercentPointsToDecimalInput?.("0,5")).toBe("0,005");
-    expect(moduleWithAdapters.decimalInputToCotiaPercentPoints?.("0,25")).toBe("25");
-    expect(moduleWithAdapters.decimalInputToCotiaPercentPoints?.("0.005")).toBe("0.5");
-    expect(moduleWithAdapters.decimalInputToCotiaPercentPoints?.("")).toBe("");
+    expect(moduleWithAdapters.cotiaPercentPointsToDecimalRate).toBeTypeOf("function");
+    expect(moduleWithAdapters.normalizeCotiaPercentPointsInput).toBeTypeOf("function");
+    expect(moduleWithAdapters.cotiaPercentPointsToDecimalRate?.("25")).toBe("0.25");
+    expect(moduleWithAdapters.cotiaPercentPointsToDecimalRate?.("0,25")).toBe("0.0025");
+    expect(moduleWithAdapters.normalizeCotiaPercentPointsInput?.("25")).toEqual({
+      status: "valid",
+      points: "25",
+      decimalRate: "0.25",
+    });
+    expect(moduleWithAdapters.normalizeCotiaPercentPointsInput?.("0,25")).toEqual({
+      status: "valid",
+      points: "0,25",
+      decimalRate: "0.0025",
+    });
+    expect(moduleWithAdapters.normalizeCotiaPercentPointsInput?.("101")).toMatchObject({ status: "invalid" });
+    expect(moduleWithAdapters.normalizeCotiaPercentPointsInput?.("-1")).toMatchObject({ status: "invalid" });
+    expect(moduleWithAdapters.normalizeCotiaPercentPointsInput?.("")).toEqual({ status: "empty" });
   });
 
   it("sinaliza alterações Cotia ainda não registradas com CTA explícito", () => {
@@ -109,6 +126,6 @@ describe("CotiaProjectMatrix · estabilidade de listas", () => {
 
     expect(html).toContain("ALTERAÇÕES NÃO REGISTRADAS");
     expect(html).toContain("Registrar alterações da Página 1");
-    expect(html).toContain('name="eficiencia" value="0,2"');
+    expect(html).toContain('name="eficiencia" value="20"');
   });
 });

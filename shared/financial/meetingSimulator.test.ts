@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { simulateCaptadorChange } from "./meetingSimulator";
 import type { FinancialInputSnapshot } from "./types";
+import { createHarmonyNatalInputs } from "./harmonyNatal";
 import { GOLDEN_NATAL_PONTA_NEGRA_2026 } from "./natalGolden";
 
 const provided = (value: string) => ({ status: "provided" as const, value, sourceType: "assumption" as const, sourceRef: "meeting-simulator-test" });
@@ -16,6 +17,40 @@ const inputs: FinancialInputSnapshot = {
 };
 
 describe("simulateCaptadorChange", () => {
+  it("usa Harmony de ponta a ponta na reunião 100 -> 120 e preserva o baseline", () => {
+    const harmonyInputs = createHarmonyNatalInputs();
+    const original = structuredClone(harmonyInputs);
+    const result = simulateCaptadorChange({
+      financialModelMode: "HARMONY_COMPAT_V1",
+      inputs: harmonyInputs,
+      horizonMonths: 120,
+      calculationOptions: { maxContracts: "3120" },
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "120",
+      includeLeverBreakdown: false,
+    });
+
+    expect(result.financialModelMode).toBe("HARMONY_COMPAT_V1");
+    for (const key of ["capitalRequired", "npv", "irrAnnual", "paybackMonths", "sellOutMonth"] as const) {
+      expect(result.after.kpis[key]).not.toBe(result.before.kpis[key]);
+    }
+    expect(harmonyInputs).toEqual(original);
+  });
+
+  it("recusa comissão mensal antes de invalidar silenciosamente o motor Harmony", () => {
+    expect(() => simulateCaptadorChange({
+      financialModelMode: "HARMONY_COMPAT_V1",
+      inputs: createHarmonyNatalInputs(),
+      horizonMonths: 120,
+      calculationOptions: { maxContracts: "3120" },
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      variableCostMonthlyDelta: "1000",
+    })).toThrow("não é uma alavanca suportada em HARMONY_COMPAT_V1");
+  });
   it("simula a retirada de captadores sem alterar o input original", () => {
     const result = simulateCaptadorChange({ inputs, horizonMonths: 12, captadorDelta: "-2", qualifiedCouplesPerCaptadorMonth: "12", loadedCostPerCaptadorMonth: "3500" });
     expect(result.mode).toBe("non_persistent");

@@ -38,5 +38,7 @@ describe("DashboardLayout", () => {
     expect(html).toContain('aria-orientation="vertical"');
     expect(html).toContain('aria-label="Redimensionar navegação lateral"');
     expect(html).toContain('tabindex="0"');
+    expect(html).toContain("w-3");
+    expect(html).toContain("focus-visible:ring-2");
   });
 });

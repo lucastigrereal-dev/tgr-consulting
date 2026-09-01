@@ -7,7 +7,12 @@ import {
   type FinancialCalculation,
   type FinancialInput,
   type FinancialInputSnapshot,
+  type FinancialModelMode,
 } from "../../shared/financial/types";
+import {
+  getFinancialModelModeDefinition,
+  resolveLegacyFinancialModelMode,
+} from "../../shared/financial/modelMode";
 
 const NAVY = "0B1220";
 const PANEL = "111C2F";
@@ -49,6 +54,8 @@ export type ExportMetadata = {
   };
   lifecycleStatus: "baseline";
   approvalStatus: "approved";
+  financialModelMode?: FinancialModelMode;
+  financialModelModeLabel?: string;
 };
 
 export type ExportableSnapshot = FinancialCalculation & {
@@ -60,6 +67,7 @@ export type ExportableSnapshot = FinancialCalculation & {
   domainInvalidities?: string[];
   scenarioComparison?: ExportPackScenarioComparison;
   exportMetadata?: ExportMetadata;
+  financialModelModeLabel?: string;
 };
 
 function stableSerialize(value: unknown): string {
@@ -131,6 +139,17 @@ export function createExportPackHash(params: {
   scenarioComparison?: ExportPackScenarioComparison;
   exportMetadata?: ExportMetadata;
 }): string {
+  const metadataModel = params.exportMetadata?.financialModelMode
+    ? getFinancialModelModeDefinition(params.exportMetadata.financialModelMode)
+    : undefined;
+  if (
+    metadataModel &&
+    params.exportMetadata?.financialModelModeLabel !== undefined &&
+    params.exportMetadata.financialModelModeLabel !== metadataModel.label
+  )
+    throw new Error(
+      `Label financeiro inválido para ${metadataModel.id}; esperado ${metadataModel.label}.`
+    );
   return sha256({
     source: "investor_export_pack.v1",
     snapshotHash: params.snapshotHash,
@@ -141,6 +160,12 @@ export function createExportPackHash(params: {
           versionId: params.exportMetadata.versionId,
           lifecycleStatus: params.exportMetadata.lifecycleStatus,
           approvalStatus: params.exportMetadata.approvalStatus,
+          ...(params.exportMetadata.financialModelMode
+            ? {
+                financialModelMode: params.exportMetadata.financialModelMode,
+                financialModelModeLabel: metadataModel!.label,
+              }
+            : {}),
         }
       : null,
   });
@@ -154,15 +179,87 @@ export function createExportableSnapshot(
 ): ExportableSnapshot {
   if (!snapshotHash)
     throw new Error("Snapshot autoritativo sem hash não pode ser exportado.");
+  if (
+    calculation.financialModelMode &&
+    exportMetadata?.financialModelMode &&
+    calculation.financialModelMode !== exportMetadata.financialModelMode
+  )
+    throw new Error(
+      `Modo financeiro do cálculo ${calculation.financialModelMode} diverge do metadata ${exportMetadata.financialModelMode}.`
+    );
+  const explicitFinancialModelMode =
+    calculation.financialModelMode ?? exportMetadata?.financialModelMode;
+  const inferredLegacyFinancialModelMode = explicitFinancialModelMode
+    ? null
+    : resolveLegacyFinancialModelMode(
+        calculation.formulaSetVersion,
+        calculation.engineVersion
+      );
+  const financialModelMode =
+    explicitFinancialModelMode ?? inferredLegacyFinancialModelMode ?? undefined;
+  if (!financialModelMode)
+    throw new Error(
+      `Cálculo legado sem modo não permite inferência para formula ${calculation.formulaSetVersion} / engine ${calculation.engineVersion}.`
+    );
+  const modelDefinition = getFinancialModelModeDefinition(financialModelMode);
+  const effectiveInputs = (
+    calculation as FinancialCalculation & { effectiveInputs?: FinancialInputSnapshot }
+  ).effectiveInputs;
+  if (
+    financialModelMode === "HARMONY_COMPAT_V1" &&
+    effectiveInputs &&
+    Object.values(effectiveInputs).some(input =>
+      input.sourceRef?.toUpperCase().includes("TEST_DATA")
+    )
+  )
+    throw new Error(
+      "Snapshot Harmony com proveniência TEST_DATA não pode gerar artefato aprovado."
+    );
+  if (
+    explicitFinancialModelMode &&
+    calculation.formulaSetVersion !==
+      modelDefinition.formulaSetVersion.semanticVersion
+  )
+    throw new Error(
+      `Formula Set ${calculation.formulaSetVersion} incompatível com ${financialModelMode}; esperado ${modelDefinition.formulaSetVersion.semanticVersion}.`
+    );
+  if (
+    explicitFinancialModelMode &&
+    calculation.engineVersion !== modelDefinition.formulaSetVersion.engineVersion
+  )
+    throw new Error(
+      `Engine ${calculation.engineVersion} incompatível com ${financialModelMode}; esperado ${modelDefinition.formulaSetVersion.engineVersion}.`
+    );
+  if (
+    exportMetadata?.financialModelModeLabel !== undefined &&
+    exportMetadata.financialModelModeLabel !== modelDefinition.label
+  )
+    throw new Error(
+      `Label financeiro inválido para ${financialModelMode}; esperado ${modelDefinition.label}.`
+    );
+  const financialModelModeLabel = modelDefinition.label;
+  const hasExplicitModelIdentity =
+    explicitFinancialModelMode !== undefined ||
+    exportMetadata?.financialModelModeLabel !== undefined;
+  const normalizedMetadata = exportMetadata
+    ? {
+        ...exportMetadata,
+        ...(hasExplicitModelIdentity
+          ? { financialModelMode, financialModelModeLabel }
+          : {}),
+      }
+    : undefined;
   return {
     ...calculation,
+    financialModelMode,
+    financialModelModeLabel,
     snapshotHash,
     scenarioComparison,
-    exportMetadata,
+    exportMetadata: normalizedMetadata,
     exportPackHash: createExportPackHash({
       snapshotHash,
       scenarioComparison,
-      exportMetadata,
+      exportMetadata: normalizedMetadata,
     }),
   };
 }
@@ -176,7 +273,15 @@ function exportAuthor(metadata: ExportMetadata | undefined): string {
 
 function exportProvenance(snapshot: ExportableSnapshot): string {
   const metadata = snapshot.exportMetadata;
-  if (!metadata) return `Snapshot ${snapshot.snapshotHash}`;
+  const financialModel = snapshot.financialModelMode
+    ? ` | financial model ${snapshot.financialModelMode} (${snapshot.financialModelModeLabel ?? getFinancialModelModeDefinition(snapshot.financialModelMode).label})`
+    : "";
+  const compatibilityAuthority = compatibilityAuthorityLines(snapshot);
+  if (!metadata)
+    return [
+      `Snapshot ${snapshot.snapshotHash}${financialModel}`,
+      ...compatibilityAuthority,
+    ].join(" | ");
   return [
     `Snapshot hash ${snapshot.snapshotHash}`,
     `snapshot ${metadata.snapshotId}`,
@@ -186,7 +291,48 @@ function exportProvenance(snapshot: ExportableSnapshot): string {
     `lifecycle ${metadata.lifecycleStatus}`,
     `approval ${metadata.approvalStatus}`,
     `pack ${snapshot.exportPackHash}`,
+    `formula set ${snapshot.formulaSetVersion}`,
+    `engine ${snapshot.engineVersion}`,
+    ...(snapshot.financialModelMode
+      ? [
+          `financial model ${snapshot.financialModelMode}`,
+          `financial model label ${snapshot.financialModelModeLabel ?? getFinancialModelModeDefinition(snapshot.financialModelMode).label}`,
+        ]
+      : []),
+    ...compatibilityAuthority,
   ].join(" | ");
+}
+
+function compatibilityAuthorityLines(snapshot: ExportableSnapshot): string[] {
+  const evidence = snapshot.compatibilityEvidence;
+  if (!evidence) return [];
+  return [
+    `authority ${evidence.authorityStatus}`,
+    `available source ${evidence.availableSource}`,
+    `missing source ${evidence.missingSource}`,
+    "workbook parity not certified while the declared source is missing",
+  ];
+}
+
+function compatibilityAuthorityVisibleLine(snapshot: ExportableSnapshot): string | null {
+  const evidence = snapshot.compatibilityEvidence;
+  if (!evidence) return null;
+  return `${evidence.authorityStatus} · FONTE AUSENTE ${evidence.missingSource} · PARIDADE NÃO CERTIFICADA`;
+}
+
+export function visibleExportModelProvenance(snapshot: ExportableSnapshot) {
+  const mode = snapshot.financialModelMode ?? resolveLegacyFinancialModelMode(
+    snapshot.formulaSetVersion,
+    snapshot.engineVersion
+  );
+  const definition = mode ? getFinancialModelModeDefinition(mode) : null;
+  const label = definition?.label ?? "Modelo não identificado";
+  return {
+    modeId: mode ?? "UNIDENTIFIED",
+    label,
+    identityLine: `MODELO FINANCEIRO ${mode ?? "UNIDENTIFIED"} · ${label}`,
+    technicalLine: `FORMULA SET ${snapshot.formulaSetVersion} · ENGINE ${snapshot.engineVersion} · SNAPSHOT HASH ${snapshot.snapshotHash}`,
+  };
 }
 
 function shortHash(hash: string) {
@@ -268,11 +414,39 @@ function textValue(value: unknown): string {
 
 function domainRecords(snapshot: ExportableSnapshot) {
   const domains = snapshot.authoritativeDomains ?? {};
+  const model = visibleExportModelProvenance(snapshot);
   const rows: Array<[string, string, string, string, string]> = [
     ["snapshot", "hash", snapshot.status, "snapshot", snapshot.snapshotHash],
+    ["snapshot", "financialModelMode", snapshot.status, "model", model.modeId],
+    ["snapshot", "financialModelModeLabel", snapshot.status, "model", model.label],
     ["snapshot", "formulaSet", snapshot.status, "formula", snapshot.formulaSetVersion],
     ["snapshot", "engine", snapshot.status, "engine", snapshot.engineVersion],
   ];
+  if (snapshot.compatibilityEvidence) {
+    rows.push(
+      [
+        "compatibility_authority",
+        "authorityStatus",
+        snapshot.compatibilityEvidence.authorityStatus,
+        "compatibility_evidence",
+        "Paridade com o workbook ausente não certificada",
+      ],
+      [
+        "compatibility_authority",
+        "availableSource",
+        snapshot.compatibilityEvidence.authorityStatus,
+        "current_document",
+        snapshot.compatibilityEvidence.availableSource,
+      ],
+      [
+        "compatibility_authority",
+        "missingSource",
+        snapshot.compatibilityEvidence.authorityStatus,
+        "missing_source",
+        snapshot.compatibilityEvidence.missingSource,
+      ]
+    );
+  }
   const pushRecord = (domain: string, label: string, record: Record<string, unknown>) => {
     rows.push([
       domain,
@@ -347,6 +521,8 @@ export async function buildBoardroomPdf(
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   const provenance = exportProvenance(snapshot);
+  const modelProvenance = visibleExportModelProvenance(snapshot);
+  const compatibilityAuthority = compatibilityAuthorityVisibleLine(snapshot);
   pdf.setTitle("TGR Consulting Boardroom Snapshot");
   pdf.setAuthor(exportAuthor(snapshot.exportMetadata));
   pdf.setCreator("TGR Consulting");
@@ -406,13 +582,27 @@ export async function buildBoardroomPdf(
     { x: 64, y: 456, size: 11, font: regular, color: rgb(0.58, 0.63, 0.71) }
   );
   page.drawText(
-    `HASH ${snapshot.snapshotHash} · FORMULA SET ${snapshot.formulaSetVersion}`,
-    { x: 64, y: 435, size: 9, font: bold, color: rgb(0.91, 0.74, 0.35) }
+    modelProvenance.identityLine,
+    { x: 64, y: 440, size: 8, font: bold, color: rgb(0.91, 0.74, 0.35), maxWidth: 710 }
   );
+  page.drawText(
+    modelProvenance.technicalLine,
+    { x: 64, y: 426, size: 6.5, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 710 }
+  );
+  if (compatibilityAuthority) {
+    page.drawText(compatibilityAuthority, {
+      x: 64,
+      y: 402,
+      size: 6.5,
+      font: bold,
+      color: rgb(0.91, 0.74, 0.35),
+      maxWidth: 710,
+    });
+  }
   if (snapshot.exportMetadata) {
     page.drawText(
       `SNAPSHOT ${snapshot.exportMetadata.snapshotId} · VERSION ${snapshot.exportMetadata.versionId}`,
-      { x: 64, y: 421, size: 7, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 710 }
+      { x: 64, y: 414, size: 7, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 710 }
     );
   }
   const metrics = [
@@ -482,8 +672,8 @@ export async function buildBoardroomPdf(
     );
   });
   page.drawText(
-    "TGR Consulting · Este arquivo não substitui as premissas e a decisão aprovada no sistema.",
-    { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71) }
+    modelProvenance.technicalLine,
+    { x: 44, y: 28, size: 6.5, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 754 }
   );
   const addChapterPage = (
     title: string,
@@ -523,12 +713,13 @@ export async function buildBoardroomPdf(
         maxWidth: 730,
       });
     });
-    chapter.drawText(`HASH ${shortHash(snapshot.snapshotHash)}`, {
+    chapter.drawText(`${modelProvenance.identityLine} · ${modelProvenance.technicalLine}`, {
       x: 44,
       y: 28,
-      size: 8,
+      size: 5.8,
       font: bold,
       color: rgb(0.91, 0.74, 0.35),
+      maxWidth: 754,
     });
   };
   const inputs = inputPayload(snapshot);
@@ -641,6 +832,9 @@ export async function buildBoardroomPdf(
       `Reconciliação · produção ${snapshot.pointEconomics.totals.reconciliation.productionDifference} · valor de vendas ${snapshot.pointEconomics.totals.reconciliation.salesValueDifference}`,
       { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71) }
     );
+    pointsPage.drawText(`${modelProvenance.identityLine} · ${modelProvenance.technicalLine}`, {
+      x: 44, y: 14, size: 5.2, font: bold, color: rgb(0.91, 0.74, 0.35), maxWidth: 754,
+    });
   }
   if (snapshot.commercialOperations) {
     const operationsPage = pdf.addPage([842, 595]);
@@ -692,6 +886,9 @@ export async function buildBoardroomPdf(
       snapshot.commercialOperations.room.alerts[0]?.message ?? "Sem alertas críticos de capacidade.",
       { x: 44, y: 28, size: 8, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 746 }
     );
+    operationsPage.drawText(`${modelProvenance.identityLine} · ${modelProvenance.technicalLine}`, {
+      x: 44, y: 14, size: 5.2, font: bold, color: rgb(0.91, 0.74, 0.35), maxWidth: 754,
+    });
   }
   return pdf.save();
 }
@@ -700,6 +897,8 @@ export async function buildBoardroomPptx(
   snapshot: ExportableSnapshot
 ): Promise<Buffer> {
   const zip = new JSZip();
+  const modelProvenance = visibleExportModelProvenance(snapshot);
+  const compatibilityAuthority = compatibilityAuthorityVisibleLine(snapshot);
   const metrics = [
     ["VPL", display(snapshot.kpis.npv)],
     ["TIR ANUAL", display(snapshot.kpis.irrAnnual)],
@@ -749,13 +948,21 @@ export async function buildBoardroomPptx(
       7,
       "Hash",
       0.72,
-      1.87,
-      7.2,
-      0.18,
+      1.93,
+      11.6,
+      0.22,
       PANEL,
-      `HASH ${snapshot.snapshotHash} · FORMULA SET ${snapshot.formulaSetVersion}`,
-      { color: GOLD, size: 700, bold: true, margin: 0 }
+      modelProvenance.technicalLine,
+      { color: GOLD, size: 560, bold: true, margin: 0 }
     ),
+    shape(31, "Financial model", 0.72, 1.7, 8.8, 0.18, PANEL, modelProvenance.identityLine, {
+      color: LIGHT, size: 720, bold: true, margin: 0,
+    }),
+    ...(compatibilityAuthority
+      ? [shape(32, "Compatibility authority", 0.72, 2.2, 11.6, 0.18, PANEL, compatibilityAuthority, {
+          color: GOLD, size: 520, bold: true, margin: 0,
+        })]
+      : []),
     ...metrics.flatMap(([label, value], index) => {
       const x = 0.45 + index * 3.12;
       return [
@@ -847,7 +1054,7 @@ export async function buildBoardroomPptx(
           { color: index === 0 ? LIGHT : MUTED, size: 760, margin: 0.07, line: "263750" }
         )
       ),
-      shape(20, "Hash", 0.55, 6.95, 8, 0.2, NAVY, `HASH ${shortHash(snapshot.snapshotHash)}`, { color: GOLD, size: 700, bold: true, margin: 0 }),
+      shape(20, "Model provenance", 0.55, 6.95, 12.2, 0.2, NAVY, `${modelProvenance.identityLine} · ${modelProvenance.technicalLine}`, { color: GOLD, size: 520, bold: true, margin: 0 }),
     ].join("");
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${shapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
   };
@@ -918,6 +1125,7 @@ export async function buildBoardroomPptx(
             { color: index === 0 ? LIGHT : MUTED, size: 720, margin: 0.07, line: "263750" }
           )
         ),
+        shape(30, "Model provenance", 0.55, 6.95, 12.2, 0.2, NAVY, `${modelProvenance.identityLine} · ${modelProvenance.technicalLine}`, { color: GOLD, size: 520, bold: true, margin: 0 }),
       ].join("")
     : null;
   const pointSlide = pointSlideShapes
@@ -969,6 +1177,7 @@ export async function buildBoardroomPptx(
           `Treinamento ${snapshot.commercialOperations.training[0]?.trainingId ?? "N/D"} · ${snapshot.commercialOperations.training[0]?.role ?? "sem plano"} · certificados ${snapshot.commercialOperations.training[0]?.summary.certifiedPeople ?? "N/D"}  |  Ledger de comissões · competência ${snapshot.commissionLedger?.totals.accrued ?? "N/D"} · holdback ${snapshot.commissionLedger?.totals.held ?? "N/D"} · pagável ${snapshot.commissionLedger?.totals.payable ?? "N/D"}`,
           { color: LIGHT, size: 760, bold: true, margin: 0.08, line: "263750" }
         ),
+        shape(30, "Model provenance", 0.55, 6.95, 12.2, 0.2, NAVY, `${modelProvenance.identityLine} · ${modelProvenance.technicalLine}`, { color: GOLD, size: 520, bold: true, margin: 0 }),
       ].join("")
     : null;
   const operationsSlide = operationsSlideShapes
@@ -1212,6 +1421,18 @@ export async function buildBoardroomXlsx(
           ]),
         ]),
   ].join("");
+  const visibleModel = visibleExportModelProvenance(snapshot);
+  const modelOutputEntries = [
+    ["Financial model mode", visibleModel.modeId],
+    ["Financial model label", visibleModel.label],
+    ["Formula Set", snapshot.formulaSetVersion],
+    ["Engine", snapshot.engineVersion],
+    ["Snapshot hash", snapshot.snapshotHash],
+  ] as const;
+  const outputTailStart = KPI_ROWS.length +
+    (snapshot.domainBlockers?.length ?? 0) +
+    (snapshot.domainInvalidities?.length ?? 0) +
+    2;
   const outputRows = [
     xlsxRow(1, [
       xlsxTextCell("A1", "Output"),
@@ -1244,6 +1465,15 @@ export async function buildBoardroomXlsx(
         xlsxTextCell(`E${row}`, invalidity),
       ]);
     }),
+    ...modelOutputEntries.map(([label, value], offset) => {
+      const row = outputTailStart + offset;
+      return xlsxRow(row, [
+        xlsxTextCell(`A${row}`, label),
+        xlsxTextCell(`B${row}`, value),
+        xlsxTextCell(`C${row}`, snapshot.status),
+        xlsxTextCell(`D${row}`, snapshot.snapshotHash),
+      ]);
+    }),
     ...(snapshot.exportMetadata
       ? [
           ["Snapshot ID", snapshot.exportMetadata.snapshotId],
@@ -1254,11 +1484,7 @@ export async function buildBoardroomXlsx(
           ["Approval", snapshot.exportMetadata.approvalStatus],
           ["Export pack hash", snapshot.exportPackHash],
         ].map(([label, value], offset) => {
-          const row = KPI_ROWS.length +
-            (snapshot.domainBlockers?.length ?? 0) +
-            (snapshot.domainInvalidities?.length ?? 0) +
-            offset +
-            2;
+          const row = outputTailStart + modelOutputEntries.length + offset;
           return xlsxRow(row, [
             xlsxTextCell(`A${row}`, label),
             xlsxTextCell(`B${row}`, value),
@@ -1503,7 +1729,7 @@ export async function buildBoardroomXlsx(
     { name: "Monthly Projection", rows: projectionRows, maxColumn: "Z", maxRow: snapshot.projections.length + 1 },
     { name: "Scenarios", rows: scenarioRows, maxColumn: "H", maxRow: comparison && comparison.entries.length ? comparison.entries.length + 2 : 2 },
     { name: "Formulas", rows: formulaRows, maxColumn: "F", maxRow: Math.max(2, snapshot.memory.length + 1) },
-    { name: "Outputs", rows: outputRows, maxColumn: "E", maxRow: KPI_ROWS.length + (snapshot.domainBlockers?.length ?? 0) + (snapshot.domainInvalidities?.length ?? 0) + (snapshot.exportMetadata ? 7 : 0) + 1 },
+    { name: "Outputs", rows: outputRows, maxColumn: "E", maxRow: KPI_ROWS.length + (snapshot.domainBlockers?.length ?? 0) + (snapshot.domainInvalidities?.length ?? 0) + modelOutputEntries.length + (snapshot.exportMetadata ? 7 : 0) + 1 },
     { name: "Point Economics", rows: pointRows, maxColumn: "S", maxRow: (snapshot.pointEconomics?.points.length ?? 0) + 2 },
     { name: "Commercial Operations", rows: operationsRowsXml, maxColumn: "P", maxRow: operationsRowIndex - 1 },
   ];

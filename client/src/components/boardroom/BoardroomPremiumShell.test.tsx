@@ -13,7 +13,7 @@ import { LIVE_DOCUMENT_CHAPTERS } from "@/lib/liveDocumentStructure";
 const escaped = (value: string) => value.replaceAll("&", "&amp;");
 
 describe("BoardroomPremiumShell", () => {
-  it("renders a dedicated 16:9 presenter shell with all BRD chapters", () => {
+  it("renderiza modo padrão fluido, sem forçar viewport 16:9 nem scroll interno", () => {
     const html = renderToStaticMarkup(
       <BoardroomPremiumShell projectSelector={<span>Projeto Cotia</span>}>
         <section>Conteúdo executivo</section>
@@ -21,8 +21,11 @@ describe("BoardroomPremiumShell", () => {
     );
 
     expect(html).toContain('data-boardroom-shell="premium"');
-    expect(html).toContain("aspect-video");
-    expect(html).toContain("Presenter mode");
+    expect(html).not.toContain("aspect-video");
+    expect(html).not.toContain("max-h-[calc(100vh-9.5rem)]");
+    expect(html).toContain('data-boardroom-stage="standard"');
+    expect(html).toContain("overflow-visible");
+    expect(html).toContain("Modo apresentação");
     expect(html).toContain("Tela cheia");
     for (const chapter of LIVE_DOCUMENT_CHAPTERS) {
       expect(html).toContain(escaped(chapter.title));
@@ -101,5 +104,6 @@ describe("BoardroomPremiumShell", () => {
     expect(html).toContain("fixed inset-0");
     expect(html).toContain('data-boardroom-stage="presenter"');
     expect(html).toContain("max-h-none");
+    expect(html).toContain("aspect-video");
   });
 });

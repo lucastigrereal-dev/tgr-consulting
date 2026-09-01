@@ -1,9 +1,17 @@
-import { PDFDocument } from "pdf-lib";
+import {
+  PDFArray,
+  PDFDocument,
+  PDFRawStream,
+  decodePDFRawStream,
+} from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import { calculatePointEconomics } from "../../shared/financial/pointEconomics";
 import { calculateCommercialOperations } from "../../shared/financial/commercialOperations";
-import { IGR_CORE_FORMULA_SET_V1 } from "../../shared/financial/formulas";
+import {
+  HARMONY_COMPAT_FORMULA_SET_V1,
+  IGR_CORE_FORMULA_SET_V1,
+} from "../../shared/financial/formulas";
 import type { FinancialCalculation, FinancialInputSnapshot } from "../../shared/financial/types";
 import { calculateAuthoritativeSnapshot } from "./snapshot";
 import {
@@ -96,6 +104,7 @@ const authoritativeDomains = {
   },
 };
 const snapshot = calculateAuthoritativeSnapshot({
+  projectVersionId: "version-base-approved",
   inputs,
   calculationInputs: inputs,
   calculationOptions: { pointEconomics, commercialOperations },
@@ -109,6 +118,7 @@ const scenarioInputs: FinancialInputSnapshot = {
   fixedCostMonthly: provided("100"),
 };
 const scenarioSnapshot = calculateAuthoritativeSnapshot({
+  projectVersionId: "version-scenario-approved",
   inputs: scenarioInputs,
   calculationInputs: scenarioInputs,
   calculationOptions: { pointEconomics, commercialOperations },
@@ -153,6 +163,18 @@ const scenarioComparison = createScenarioComparisonPayload({
 
 const workbookSheet = async (archive: JSZip, sheetNumber: number) =>
   archive.file(`xl/worksheets/sheet${sheetNumber}.xml`)?.async("string");
+
+function pdfVisibleText(pdf: PDFDocument, pageNumber = 0) {
+  const contents = pdf.getPages()[pageNumber]?.node.Contents();
+  if (!(contents instanceof PDFArray)) return "";
+  const operators = Array.from({ length: contents.size() }, (_, index) => {
+    const stream = pdf.context.lookup(contents.get(index), PDFRawStream);
+    return Buffer.from(decodePDFRawStream(stream).decode()).toString("latin1");
+  }).join("\n");
+  return [...operators.matchAll(/<([0-9A-F]+)>\s*Tj/g)]
+    .map(match => Buffer.from(match[1], "hex").toString("latin1"))
+    .join("\n");
+}
 
 const exportMetadata = {
   snapshotId: "snapshot-natal-approved",
@@ -211,6 +233,220 @@ function withoutSnapshotData(overrides: Partial<FinancialCalculation> = {}) {
 }
 
 describe("geradores de artefato Boardroom", () => {
+  it("transporta modo financeiro e label no payload e na proveniência quando fornecidos", async () => {
+    const harmonyPersistedPayload: FinancialCalculation = {
+      ...withoutSnapshotData(),
+      financialModelMode: "HARMONY_COMPAT_V1",
+      formulaSetVersion: HARMONY_COMPAT_FORMULA_SET_V1.semanticVersion,
+      engineVersion: HARMONY_COMPAT_FORMULA_SET_V1.engineVersion,
+      compatibilityEvidence: {
+        authorityStatus: "SOURCE_CONFLICT",
+        availableSource: "PR #1 review Harmony reference",
+        missingSource: "COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1",
+        adoptedGrossContracts: "3120.00000000",
+        sourceConflicts: [],
+      },
+    };
+    const exportable = createExportableSnapshot(
+      harmonyPersistedPayload,
+      "h".repeat(64),
+      undefined,
+      {
+        ...exportMetadata,
+        financialModelMode: "HARMONY_COMPAT_V1",
+      }
+    );
+
+    expect(exportable).toMatchObject({
+      financialModelMode: "HARMONY_COMPAT_V1",
+      exportMetadata: {
+        financialModelMode: "HARMONY_COMPAT_V1",
+        financialModelModeLabel: "Harmony Compatível V1",
+      },
+    });
+    const pdf = await PDFDocument.load(await buildBoardroomPdf(exportable));
+    expect(pdf.getSubject()).toContain("HARMONY_COMPAT_V1");
+    expect(pdf.getSubject()).toContain("Harmony Compatível V1");
+    expect(pdf.getSubject()).toContain("SOURCE_CONFLICT");
+    expect(pdf.getSubject()).toContain("COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1");
+    expect(pdf.getSubject()).toContain("parity not certified");
+    const pdfCover = pdfVisibleText(pdf);
+    expect(pdfCover).toContain("MODELO FINANCEIRO HARMONY_COMPAT_V1");
+    expect(pdfCover).toContain("FORMULA SET 1.0.0");
+    expect(pdfCover).toContain("ENGINE harmony-compat-engine-v1");
+    expect(pdfCover).toContain("SNAPSHOT HASH");
+    expect(pdfCover).toContain("SOURCE_CONFLICT");
+    expect(pdfCover).toContain("PARIDADE NÃO CERTIFICADA");
+
+    const pptx = await JSZip.loadAsync(await buildBoardroomPptx(exportable));
+    const cover = await pptx.file("ppt/slides/slide1.xml")?.async("string");
+    expect(cover).toContain("MODELO FINANCEIRO HARMONY_COMPAT_V1");
+    expect(cover).toContain("Harmony Compatível V1");
+    expect(cover).toContain("harmony-compat-engine-v1");
+    expect(cover).toContain("SOURCE_CONFLICT");
+    expect(cover).toContain("COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1");
+    expect(cover).toContain("PARIDADE NÃO CERTIFICADA");
+
+    const xlsx = await JSZip.loadAsync(await buildBoardroomXlsx(exportable));
+    const visibleProvenance = await workbookSheet(xlsx, 2);
+    expect(visibleProvenance).toContain("HARMONY_COMPAT_V1");
+    expect(visibleProvenance).toContain("Harmony Compatível V1");
+    expect(visibleProvenance).toContain("harmony-compat-engine-v1");
+    expect(visibleProvenance).toContain("SOURCE_CONFLICT");
+    expect(visibleProvenance).toContain("COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1");
+    expect(visibleProvenance).toContain("não certificada");
+  });
+
+  it("recusa exportar Harmony aprovado quando qualquer input ainda deriva de TEST_DATA", () => {
+    const contaminated = {
+      ...withoutSnapshotData(),
+      financialModelMode: "HARMONY_COMPAT_V1" as const,
+      formulaSetVersion: HARMONY_COMPAT_FORMULA_SET_V1.semanticVersion,
+      engineVersion: HARMONY_COMPAT_FORMULA_SET_V1.engineVersion,
+      effectiveInputs: {
+        ...inputs,
+        fixedCostMonthly: {
+          ...inputs.fixedCostMonthly,
+          sourceRef: "TEST_DATA:fixture-antigo",
+        },
+      },
+    } as FinancialCalculation & { effectiveInputs: FinancialInputSnapshot };
+
+    expect(() =>
+      createExportableSnapshot(contaminated, "h".repeat(64), undefined, {
+        ...exportMetadata,
+        financialModelMode: "HARMONY_COMPAT_V1",
+      })
+    ).toThrow("Snapshot Harmony com proveniência TEST_DATA não pode gerar artefato aprovado.");
+  });
+
+  it("rejeita conflito entre modo do cálculo e modo do metadata", () => {
+    expect(() =>
+      createExportableSnapshot(snapshot, snapshot.snapshotHash, undefined, {
+        ...exportMetadata,
+        financialModelMode: "HARMONY_COMPAT_V1",
+      })
+    ).toThrow("Modo financeiro do cálculo TGR_CANONICAL_V2 diverge do metadata HARMONY_COMPAT_V1.");
+  });
+
+  it("rejeita versões e label que não correspondem ao registry do modo", () => {
+    const harmonyCalculation: FinancialCalculation = {
+      ...withoutSnapshotData(),
+      financialModelMode: "HARMONY_COMPAT_V1",
+      formulaSetVersion: HARMONY_COMPAT_FORMULA_SET_V1.semanticVersion,
+      engineVersion: HARMONY_COMPAT_FORMULA_SET_V1.engineVersion,
+    };
+
+    expect(() =>
+      createExportableSnapshot(
+        { ...harmonyCalculation, formulaSetVersion: IGR_CORE_FORMULA_SET_V1.semanticVersion },
+        "h".repeat(64)
+      )
+    ).toThrow("Formula Set 1.9.0 incompatível com HARMONY_COMPAT_V1; esperado 1.0.0.");
+    expect(() =>
+      createExportableSnapshot(
+        { ...harmonyCalculation, engineVersion: IGR_CORE_FORMULA_SET_V1.engineVersion },
+        "h".repeat(64)
+      )
+    ).toThrow("Engine igr-engine-1.9.0 incompatível com HARMONY_COMPAT_V1; esperado harmony-compat-engine-v1.");
+    expect(() =>
+      createExportableSnapshot(harmonyCalculation, "h".repeat(64), undefined, {
+        ...exportMetadata,
+        financialModelMode: "HARMONY_COMPAT_V1",
+        financialModelModeLabel: "Harmony inventado",
+      })
+    ).toThrow("Label financeiro inválido para HARMONY_COMPAT_V1; esperado Harmony Compatível V1.");
+  });
+
+  it.each([
+    ["1.3.0", "igr-engine-1.3.0"],
+    ["1.4.0", "igr-engine-1.4.0"],
+    ["1.5.0", "igr-engine-1.5.0"],
+    ["1.6.0", "igr-engine-1.6.0"],
+    ["1.7.0", "igr-engine-1.7.0"],
+    ["1.8.0", "igr-engine-1.8.0"],
+    ["1.9.0", "igr-engine-1.9.0"],
+  ])(
+    "infere canônico para cálculo legado %s/%s sem mudar o hash do pack",
+    (formulaSetVersion, engineVersion) => {
+    const {
+      financialModelMode: _mode,
+      snapshotHash: _snapshotHash,
+      ...legacyCalculation
+    } = snapshot;
+    legacyCalculation.formulaSetVersion = formulaSetVersion;
+    legacyCalculation.engineVersion = engineVersion;
+    const legacyMetadata = {
+      ...exportMetadata,
+    };
+    const expectedLegacyHash = createExportPackHash({
+      snapshotHash: snapshot.snapshotHash,
+      exportMetadata: legacyMetadata,
+    });
+    const exportable = createExportableSnapshot(
+      legacyCalculation,
+      snapshot.snapshotHash,
+      undefined,
+      legacyMetadata
+    );
+
+    expect(exportable.financialModelMode).toBe("TGR_CANONICAL_V2");
+    expect(exportable.financialModelModeLabel).toBe("TGR Canônico V2");
+    expect(exportable.exportMetadata?.financialModelMode).toBeUndefined();
+    expect(exportable.exportPackHash).toBe(expectedLegacyHash);
+    }
+  );
+
+  it("identifica o modo canônico inferido de um snapshot legado também no conteúdo visível", async () => {
+    const {
+      financialModelMode: _mode,
+      snapshotHash: _snapshotHash,
+      ...legacyCalculation
+    } = snapshot;
+    legacyCalculation.formulaSetVersion = "1.8.0";
+    legacyCalculation.engineVersion = "igr-engine-1.8.0";
+    const legacy = createExportableSnapshot(
+      legacyCalculation,
+      snapshot.snapshotHash
+    );
+
+    const pdf = await PDFDocument.load(await buildBoardroomPdf(legacy));
+    expect(pdfVisibleText(pdf)).toContain("MODELO FINANCEIRO TGR_CANONICAL_V2");
+
+    const pptx = await JSZip.loadAsync(await buildBoardroomPptx(legacy));
+    expect(await pptx.file("ppt/slides/slide1.xml")?.async("string")).toContain(
+      "TGR Canônico V2"
+    );
+
+    const xlsx = await JSZip.loadAsync(await buildBoardroomXlsx(legacy));
+    const provenance = await workbookSheet(xlsx, 2);
+    expect(provenance).toContain("TGR_CANONICAL_V2");
+    expect(provenance).toContain("TGR Canônico V2");
+  });
+
+  it.each([
+    ["1.3.0", "igr-engine-1.4.0"],
+    ["1.9.0", "igr-engine-1.8.0"],
+    ["9.9.9", "igr-engine-9.9.9"],
+    ["1.0.0", "harmony-compat-engine-v1"],
+  ])(
+    "não infere modo legado para par desconhecido ou cruzado %s/%s",
+    (formulaSetVersion, engineVersion) => {
+    expect(() =>
+      createExportableSnapshot(
+        {
+          ...withoutSnapshotData(),
+          formulaSetVersion,
+          engineVersion,
+        },
+        "h".repeat(64)
+      )
+    ).toThrow(
+      `Cálculo legado sem modo não permite inferência para formula ${formulaSetVersion} / engine ${engineVersion}.`
+    );
+    }
+  );
+
   it("inclui toda a proveniência no hash determinístico do pack", () => {
     const first = createExportPackHash({
       snapshotHash: snapshot.snapshotHash,
@@ -240,6 +476,22 @@ describe("geradores de artefato Boardroom", () => {
     expect(first).not.toBe(anotherVersion);
   });
 
+  it("preserva o hash legado quando o consumidor não fornece modo financeiro", () => {
+    expect(
+      createExportPackHash({
+        snapshotHash: "x".repeat(64),
+        exportMetadata: {
+          snapshotId: "snapshot-legacy",
+          versionId: "version-legacy",
+          generatedAt: "2026-08-31T12:34:56.000Z",
+          generatedBy: { id: 42, name: "Lucas Tigre", email: null },
+          lifecycleStatus: "baseline",
+          approvalStatus: "approved",
+        },
+      })
+    ).toBe("ce192e1bf91ad13987c69014de665c4906169f548186f2b4f32d71ae1af0f295");
+  });
+
   it("transporta hash completo, versão, geração, autor e lifecycle no PDF/PPTX/XLSX", async () => {
     const pdf = await PDFDocument.load(await buildBoardroomPdf(provenanceSnapshot));
     expect(pdf.getSubject()).toContain(snapshot.snapshotHash);
@@ -248,6 +500,15 @@ describe("geradores de artefato Boardroom", () => {
     expect(pdf.getSubject()).toContain(exportMetadata.lifecycleStatus);
     expect(pdf.getAuthor()).toBe("Lucas Tigre <lucas@example.com>");
     expect(pdf.getCreationDate()?.toISOString()).toBe(exportMetadata.generatedAt);
+    expect(pdf.getSubject()).toContain("TGR_CANONICAL_V2");
+    expect(pdf.getSubject()).toContain("TGR Canônico V2");
+    expect(pdf.getSubject()).toContain(snapshot.formulaSetVersion);
+    expect(pdf.getSubject()).toContain(snapshot.engineVersion);
+    const visiblePdfCover = pdfVisibleText(pdf);
+    expect(visiblePdfCover).toContain("MODELO FINANCEIRO TGR_CANONICAL_V2");
+    expect(visiblePdfCover).toContain(`FORMULA SET ${snapshot.formulaSetVersion}`);
+    expect(visiblePdfCover).toContain(`ENGINE ${snapshot.engineVersion}`);
+    expect(visiblePdfCover).toContain(`SNAPSHOT HASH ${snapshot.snapshotHash}`);
 
     const pptx = await JSZip.loadAsync(await buildBoardroomPptx(provenanceSnapshot));
     const cover = await pptx.file("ppt/slides/slide1.xml")?.async("string");
@@ -258,6 +519,10 @@ describe("geradores de artefato Boardroom", () => {
     expect(cover).toContain(exportMetadata.generatedAt);
     expect(cover).toContain("Lucas Tigre");
     expect(cover).toContain("baseline");
+    expect(cover).toContain("MODELO FINANCEIRO TGR_CANONICAL_V2");
+    expect(cover).toContain("TGR Canônico V2");
+    expect(cover).toContain(snapshot.formulaSetVersion);
+    expect(cover).toContain(snapshot.engineVersion);
     expect(pptxCore).toContain("Lucas Tigre &lt;lucas@example.com&gt;");
 
     const xlsx = await JSZip.loadAsync(await buildBoardroomXlsx(provenanceSnapshot));
@@ -269,6 +534,10 @@ describe("geradores de artefato Boardroom", () => {
     expect(outputs).toContain(exportMetadata.generatedAt);
     expect(outputs).toContain("Lucas Tigre");
     expect(outputs).toContain("baseline");
+    expect(outputs).toContain("TGR_CANONICAL_V2");
+    expect(outputs).toContain("TGR Canônico V2");
+    expect(outputs).toContain(snapshot.formulaSetVersion);
+    expect(outputs).toContain(snapshot.engineVersion);
     expect(xlsxCore).toContain("Lucas Tigre &lt;lucas@example.com&gt;");
   });
 
@@ -399,6 +668,11 @@ describe("geradores de artefato Boardroom", () => {
     expect(provenanceSheet).toContain("Ata de carteira");
     expect(provenanceSheet).toContain("Cadastro de pontos");
     expect(provenanceSheet).toContain(snapshot.snapshotHash);
+    expect(provenanceSheet).toContain("financialModelMode");
+    expect(provenanceSheet).toContain("TGR_CANONICAL_V2");
+    expect(provenanceSheet).toContain("TGR Canônico V2");
+    expect(provenanceSheet).toContain(snapshot.formulaSetVersion);
+    expect(provenanceSheet).toContain(snapshot.engineVersion);
     expect(scenarios).toContain("Snapshot sem cenários anexados");
     expect(scenarios).not.toContain("Base aprovada");
     expect(formulas).toContain(snapshot.memory[0].label);

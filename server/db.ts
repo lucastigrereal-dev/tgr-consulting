@@ -32,7 +32,12 @@ import {
   users,
   workflowEvents,
 } from "../drizzle/schema";
-import { IGR_CORE_FORMULA_SET_V1 } from "../shared/financial/formulas";
+import {
+  DEFAULT_FINANCIAL_MODEL_MODE,
+  getFinancialModelModeDefinition,
+  resolveFinancialModelModeByFormulaSetId,
+} from "../shared/financial/modelMode";
+import { calculateStudyProjection } from "../shared/financial/studyProjection";
 import { calculateAuthoritativeSnapshot } from "./financial/snapshot";
 import {
   calculateCapitalEnvelope,
@@ -45,7 +50,6 @@ import {
   type GoalSeekVariableKey,
 } from "../shared/financial/goalseek";
 import {
-  calculateFinancialProjection,
   FinanceDecimal,
   type FinancialProjectionOptions,
 } from "../shared/financial/engine";
@@ -95,6 +99,7 @@ import {
   type FinancialCalculation,
   type FinancialInputKey,
   type FinancialInputSnapshot,
+  type FinancialModelMode,
 } from "../shared/financial/types";
 import { buildCotiaFinancialMappings } from "../shared/financial/cotiaFinancialAdapter";
 import { buildCotiaAuthoritativePayload } from "../shared/financial/cotiaAuthoritativeAdapter";
@@ -194,23 +199,56 @@ export async function getUserByOpenId(openId: string) {
   return result[0];
 }
 
-async function ensureCoreFormulaSet(actorId: number): Promise<string> {
+export async function ensureFormulaSet(
+  actorId: number,
+  financialModelMode: FinancialModelMode = DEFAULT_FINANCIAL_MODEL_MODE
+): Promise<string> {
   const db = await requireDb();
+  const formulaSet = getFinancialModelModeDefinition(financialModelMode)
+    .formulaSetVersion;
   const existing = await db
+    .select({
+      id: formulaSetVersions.id,
+      semanticVersion: formulaSetVersions.semanticVersion,
+      engineVersion: formulaSetVersions.engineVersion,
+      status: formulaSetVersions.status,
+      definitions: formulaSetVersions.definitions,
+    })
+    .from(formulaSetVersions)
+    .where(eq(formulaSetVersions.id, formulaSet.id))
+    .limit(1);
+  if (existing[0]) {
+    if (
+      existing[0].semanticVersion !== formulaSet.semanticVersion ||
+      existing[0].engineVersion !== formulaSet.engineVersion ||
+      existing[0].status !== formulaSet.status ||
+      stableSerialize(existing[0].definitions) !==
+        stableSerialize(formulaSet.definitions)
+    ) {
+      throw new Error(
+        `Conjunto de fórmulas persistido diverge do registro imutável: ${formulaSet.id}.`
+      );
+    }
+    return formulaSet.id;
+  }
+  const semanticConflict = await db
     .select({ id: formulaSetVersions.id })
     .from(formulaSetVersions)
-    .where(eq(formulaSetVersions.id, IGR_CORE_FORMULA_SET_V1.id))
+    .where(eq(formulaSetVersions.semanticVersion, formulaSet.semanticVersion))
     .limit(1);
-  if (existing[0]) return IGR_CORE_FORMULA_SET_V1.id;
+  if (semanticConflict[0]?.id !== undefined)
+    throw new Error(
+      `Versão semântica ${formulaSet.semanticVersion} já pertence ao conjunto ${semanticConflict[0].id}.`
+    );
   await db.transaction(async transaction => {
     await transaction
       .insert(formulaSetVersions)
       .values({
-        id: IGR_CORE_FORMULA_SET_V1.id,
-        semanticVersion: IGR_CORE_FORMULA_SET_V1.semanticVersion,
-        engineVersion: IGR_CORE_FORMULA_SET_V1.engineVersion,
+        id: formulaSet.id,
+        semanticVersion: formulaSet.semanticVersion,
+        engineVersion: formulaSet.engineVersion,
         status: "published",
-        definitions: IGR_CORE_FORMULA_SET_V1.definitions as unknown as Record<
+        definitions: formulaSet.definitions as unknown as Record<
           string,
           unknown
         >,
@@ -218,28 +256,28 @@ async function ensureCoreFormulaSet(actorId: number): Promise<string> {
         publishedAt: new Date(),
       })
       .onDuplicateKeyUpdate({
-        set: { id: IGR_CORE_FORMULA_SET_V1.id },
+        set: { id: formulaSet.id },
       });
     await transaction
       .insert(formulaDefinitionProvenance)
       .values(
-        IGR_CORE_FORMULA_SET_V1.definitions.map(definition => ({
+        formulaSet.definitions.map(definition => ({
           id: nanoid(),
-          formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id,
+          formulaSetVersionId: formulaSet.id,
           formulaId: definition.id,
           formulaVersion: definition.version,
           expression: definition.expression,
           dependencyKeys: definition.dependencies,
           description: definition.description,
-          sourceRef: "IGR_CORE_FORMULA_SET_V1",
+          sourceRef: definition.sourceRef ?? `model:${financialModelMode}`,
           publishedBy: actorId,
         }))
       )
       .onDuplicateKeyUpdate({
-        set: { formulaSetVersionId: IGR_CORE_FORMULA_SET_V1.id },
+        set: { formulaSetVersionId: formulaSet.id },
       });
   });
-  return IGR_CORE_FORMULA_SET_V1.id;
+  return formulaSet.id;
 }
 
 async function recordWorkflowEvent(params: {
@@ -293,9 +331,15 @@ export async function createProjectForTenant(params: {
   actorId: number;
   name: string;
   inputs: FinancialInputSnapshot;
+  financialModelMode?: FinancialModelMode;
 }) {
   const db = await requireDb();
-  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
+  const financialModelMode =
+    params.financialModelMode ?? DEFAULT_FINANCIAL_MODEL_MODE;
+  const formulaSetVersionId = await ensureFormulaSet(
+    params.actorId,
+    financialModelMode
+  );
   const projectId = nanoid();
   const versionId = nanoid();
   const inputHash = sha256(params.inputs);
@@ -347,10 +391,16 @@ export async function createProjectForTenant(params: {
       actorId: params.actorId,
       beforeHash: null,
       afterHash: inputHash,
-      metadata: { versionId, formulaSetVersionId },
+      metadata: { versionId, formulaSetVersionId, financialModelMode },
     });
   });
-  return { projectId, versionId, formulaSetVersionId, inputHash };
+  return {
+    projectId,
+    versionId,
+    formulaSetVersionId,
+    financialModelMode,
+    inputHash,
+  };
 }
 
 export async function listProjectsForTenant(tenantId: number) {
@@ -527,6 +577,16 @@ export async function getScenarioComparisonForTenant(
   const latestSnapshotByVersion = new Map(
     snapshots.map(snapshot => [snapshot.projectVersionId, snapshot])
   );
+  const financialModelModeByVersion = new Map(
+    context.versions.map(version => [
+      version.id,
+      resolveFinancialModelModeByFormulaSetId(version.formulaSetVersionId),
+    ])
+  );
+  if (new Set(financialModelModeByVersion.values()).size > 1)
+    throw new Error(
+      "Comparação de cenários recusada: o projeto contém modos financeiros diferentes."
+    );
   return context.versions.map(version => {
     const snapshot = latestSnapshotByVersion.get(version.id);
     const branch = branches.find(
@@ -546,6 +606,7 @@ export async function getScenarioComparisonForTenant(
       reason: branch?.reason ?? null,
       snapshotId: snapshot?.id ?? null,
       snapshotHash: snapshot?.snapshotHash ?? null,
+      financialModelMode: financialModelModeByVersion.get(version.id)!,
       kpis: payload?.kpis ?? null,
     };
   });
@@ -1110,6 +1171,7 @@ export async function createProjectFromCotiaAssemblyForTenant(params: {
   assemblyName: string;
   payload: Record<string, string>;
   sourceRef?: string;
+  financialModelMode?: FinancialModelMode;
 }) {
   const db = await requireDb();
   const projectId = nanoid();
@@ -1123,7 +1185,10 @@ export async function createProjectFromCotiaAssemblyForTenant(params: {
     sourceRef: params.sourceRef,
   };
   const prepared = prepareCotiaAssembly(registrationParams);
-  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
+  const formulaSetVersionId = await ensureFormulaSet(
+    params.actorId,
+    params.financialModelMode ?? DEFAULT_FINANCIAL_MODEL_MODE
+  );
   const pendingInputs = Object.fromEntries(
     FINANCIAL_INPUT_KEYS.map(key => [
       key,
@@ -1170,6 +1235,8 @@ export async function createProjectFromCotiaAssemblyForTenant(params: {
   return {
     projectId,
     formulaSetVersionId,
+    financialModelMode:
+      params.financialModelMode ?? DEFAULT_FINANCIAL_MODEL_MODE,
     ...registration,
   };
 }
@@ -2612,10 +2679,9 @@ async function getAuthoritativeCalculationContext(params: {
   horizonMonths: number;
 }) {
   const version = await getVersionForTenant(params.versionId, params.tenantId);
-  if (version.formulaSetVersionId !== IGR_CORE_FORMULA_SET_V1.id)
-    throw new Error(
-      `A versão usa o conjunto de fórmulas ${version.formulaSetVersionId}; crie um novo cenário para calcular com ${IGR_CORE_FORMULA_SET_V1.id}.`
-    );
+  const financialModelMode = resolveFinancialModelModeByFormulaSetId(
+    version.formulaSetVersionId
+  );
   const inputs = await getInputsForVersion(version.id);
   const productCatalog = await getProductCatalogForTenant(
     version.id,
@@ -2880,24 +2946,28 @@ async function getAuthoritativeCalculationContext(params: {
             sourceType: "derived_analysis" as const,
             sourceRef: "authoritative-point-economics",
           },
-          ...(hasIncrementalCatalogCosts && costCatalogCashflowAdjustments.status === "valid" ? {
+          ...(financialModelMode === "TGR_CANONICAL_V2" && hasIncrementalCatalogCosts && costCatalogCashflowAdjustments.status === "valid" ? {
             fixedCostMonthly: addCatalogAdjustment("fixedCostMonthly", costCatalogCashflowAdjustments.fixedCostMonthly),
             payrollMonthly: addCatalogAdjustment("payrollMonthly", costCatalogCashflowAdjustments.payrollMonthly),
             capexInitial: addCatalogAdjustment("capexInitial", costCatalogCashflowAdjustments.capexInitial),
           } : {}),
         }
       : undefined;
-  const calculationOptions = calculationInputs
-    ? {
-        maxContracts: commercialModel!.derived.maxContracts,
-        paymentSchedulePerContract:
-          commercialModel!.derived.paymentSchedulePerContract,
-        receivablesPolicy: authoritativeReceivablesPolicy!,
-        pointEconomics: pointEconomics!,
-        commercialOperations: commercialOperations!,
-      }
-    : undefined;
+  const calculationOptions: FinancialProjectionOptions | undefined =
+    calculationInputs
+      ? financialModelMode === "HARMONY_COMPAT_V1"
+        ? { maxContracts: commercialModel!.derived.maxContracts }
+        : {
+            maxContracts: commercialModel!.derived.maxContracts,
+            paymentSchedulePerContract:
+              commercialModel!.derived.paymentSchedulePerContract,
+            receivablesPolicy: authoritativeReceivablesPolicy!,
+            pointEconomics: pointEconomics!,
+            commercialOperations: commercialOperations!,
+          }
+      : undefined;
   return {
+    financialModelMode,
     version,
     inputs,
     authoritativeDomains,
@@ -2938,8 +3008,11 @@ export async function createCalculationSnapshot(params: {
     calculationOptions,
   } = context;
   const calculation = calculateAuthoritativeSnapshot({
+    projectVersionId: version.id,
+    financialModelMode: context.financialModelMode,
     inputs,
     horizonMonths: params.horizonMonths,
+    asOfMonth: params.asOfMonth ?? 0,
     formulaSetVersionId: version.formulaSetVersionId,
     authoritativeDomains,
     domainBlockers,
@@ -3071,6 +3144,7 @@ export async function createCalculationSnapshot(params: {
       afterHash: calculation.snapshotHash,
       metadata: {
         versionId: version.id,
+        financialModelMode: context.financialModelMode,
         status: calculation.status,
         horizonMonths: params.horizonMonths,
         asOfMonth: params.asOfMonth ?? 0,
@@ -3104,26 +3178,53 @@ async function prepareMeetingSimulation(params: MeetingSimulationParams) {
     asOfMonth: params.asOfMonth ?? 0,
     horizonMonths: params.horizonMonths,
   });
+  if (
+    context.financialModelMode === "HARMONY_COMPAT_V1" &&
+    params.variableCostMonthlyDelta !== undefined &&
+    !new FinanceDecimal(params.variableCostMonthlyDelta).eq(0)
+  ) {
+    throw new Error(
+      "variableCostMonthlyDelta não é suportada no modo HARMONY_COMPAT_V1; a comissão Harmony permanece na política compatível fixa."
+    );
+  }
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
     throw new Error("A simulação exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
   let simulatedCalculationOptions: FinancialProjectionOptions | undefined = context.calculationOptions;
   let scaledPointInputs: PointEconomicsInput[] | undefined;
-  if (params.targetGrossSalesMonth1 !== undefined) {
+  const captadorDelta = new FinanceDecimal(params.captadorDelta);
+  if (params.targetGrossSalesMonth1 !== undefined || !captadorDelta.eq(0)) {
     const pointInputs = context.authoritativeDomains?.capturePoints.authoritativeInputs;
     const operationsDefinition = context.authoritativeDomains?.commercialOperations?.definition;
     const baselinePointSales = context.pointEconomics
       ? new FinanceDecimal(context.pointEconomics.totals.production.totalSales)
       : null;
-    const targetSales = new FinanceDecimal(params.targetGrossSalesMonth1);
+    const baselineQualified = context.pointEconomics
+      ? new FinanceDecimal(context.pointEconomics.totals.funnel.qualified)
+      : null;
+    const targetSales = params.targetGrossSalesMonth1 === undefined
+      ? null
+      : new FinanceDecimal(params.targetGrossSalesMonth1);
     if (!pointInputs?.length || !context.pointEconomics || !operationsDefinition || !baselinePointSales) {
       throw new Error("A meta de vendas exige Point Economics e operações comerciais autoritativos.");
     }
-    if (baselinePointSales.eq(0) && targetSales.gt(0)) {
+    if (targetSales?.isNegative())
+      throw new Error("A meta de vendas brutas/mês deve ser não negativa.");
+    const targetQualified = targetSales === null
+      ? FinanceDecimal.max(
+          new FinanceDecimal(0),
+          baselineQualified!.plus(
+            captadorDelta.times(params.qualifiedCouplesPerCaptadorMonth)
+          )
+        )
+      : baselinePointSales.eq(0)
+        ? new FinanceDecimal(0)
+        : baselineQualified!.times(targetSales).div(baselinePointSales);
+    if (baselineQualified!.eq(0) && targetQualified.gt(0)) {
       throw new Error("A meta de vendas não pode ser derivada quando a produção autoritativa atual é zero.");
     }
-    const demandFactor = baselinePointSales.eq(0)
+    const demandFactor = baselineQualified!.eq(0)
       ? new FinanceDecimal(0)
-      : targetSales.div(baselinePointSales);
+      : targetQualified.div(baselineQualified!);
     scaledPointInputs = pointInputs.map(point => ({
         ...point,
         approaches: new FinanceDecimal(point.approaches)
@@ -3139,13 +3240,78 @@ async function prepareMeetingSimulation(params: MeetingSimulationParams) {
         salesMonthly: simulatedPointEconomics.totals.production.totalSales,
       },
     });
+    simulatedCalculationOptions = context.financialModelMode === "HARMONY_COMPAT_V1"
+      ? { maxContracts: context.calculationOptions?.maxContracts }
+      : {
+          ...context.calculationOptions,
+          pointEconomics: simulatedPointEconomics,
+          commercialOperations: simulatedCommercialOperations,
+        };
+  }
+  const averageTicketDelta = new FinanceDecimal(
+    params.averageTicketDelta ?? "0"
+  );
+  if (
+    context.financialModelMode === "TGR_CANONICAL_V2" &&
+    !averageTicketDelta.eq(0)
+  ) {
+    const productEvaluation =
+      context.authoritativeDomains?.productCatalog.evaluation;
+    const authoritativeConditions =
+      context.authoritativeDomains?.commercialConditions;
+    if (!productEvaluation || !authoritativeConditions)
+      throw new Error(
+        "A simulação de ticket exige produto e condição comercial autoritativos."
+      );
+    const simulatedCommercialModel = resolveAuthoritativeCommercialModel({
+      asOfMonth: params.asOfMonth ?? 0,
+      skus: productEvaluation.skus.map(sku => ({
+        id: sku.id,
+        name: sku.name,
+        unitType: sku.unitType,
+        unitQuantity: sku.unitQuantity,
+        sharesPerUnit: sku.sharesPerUnit,
+        grossSoldShares: sku.grossSoldShares,
+        returnedShares: sku.returnedShares,
+        blockedShares: sku.blockedShares,
+        pricePhases: sku.pricePhases.map(phase => ({
+          ...phase,
+          price: new FinanceDecimal(phase.price)
+            .plus(averageTicketDelta)
+            .toFixed(8),
+        })),
+      })),
+      conditions: authoritativeConditions.map(item => ({
+        productSkuCode: item.productSkuCode,
+        condition: {
+          ...item.condition,
+          listPrice: new FinanceDecimal(item.condition.listPrice)
+            .plus(averageTicketDelta)
+            .toFixed(8),
+          balance: {
+            ...item.condition.balance,
+            principal: new FinanceDecimal(item.condition.balance.principal)
+              .plus(averageTicketDelta)
+              .toFixed(8),
+          },
+        },
+      })),
+    });
+    if (simulatedCommercialModel.status !== "valid")
+      throw new Error(
+        `A variação de ticket torna o modelo comercial inválido: ${simulatedCommercialModel.violations
+          .map(violation => violation.code)
+          .join(", ")}.`
+      );
     simulatedCalculationOptions = {
-      ...context.calculationOptions,
-      pointEconomics: simulatedPointEconomics,
-      commercialOperations: simulatedCommercialOperations,
+      ...simulatedCalculationOptions,
+      maxContracts: simulatedCommercialModel.derived.maxContracts,
+      paymentSchedulePerContract:
+        simulatedCommercialModel.derived.paymentSchedulePerContract,
     };
   }
   const simulation = simulateCaptadorChange({
+    financialModelMode: context.financialModelMode,
     inputs: context.calculationInputs,
     calculationOptions: context.calculationOptions,
     simulatedCalculationOptions,
@@ -3419,7 +3585,14 @@ async function createScenarioInTransaction(params: {
       entityId: branchId,
       action: "scenario.created",
       actorId: params.actorId,
-      metadata: { baseVersionId: currentBase.id, branchVersionId: versionId },
+      metadata: {
+        baseVersionId: currentBase.id,
+        branchVersionId: versionId,
+        formulaSetVersionId: params.formulaSetVersionId,
+        financialModelMode: resolveFinancialModelModeByFormulaSetId(
+          params.formulaSetVersionId
+        ),
+      },
     });
   return { branchId, versionId };
 }
@@ -3433,7 +3606,8 @@ export async function createScenarioForTenant(params: {
 }) {
   const db = await requireDb();
   const baseVersion = await getVersionForTenant(params.baseVersionId, params.tenantId);
-  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
+  resolveFinancialModelModeByFormulaSetId(baseVersion.formulaSetVersionId);
+  const formulaSetVersionId = baseVersion.formulaSetVersionId;
   return db.transaction(transaction => createScenarioInTransaction({
     ...params,
     baseVersion,
@@ -3452,33 +3626,72 @@ export async function promoteMeetingSimulationToScenarioForTenant(params: Meetin
   const db = await requireDb();
   const prepared = await prepareMeetingSimulation(params);
   const baseVersion = prepared.context.version;
-  const formulaSetVersionId = await ensureCoreFormulaSet(params.actorId);
+  resolveFinancialModelModeByFormulaSetId(baseVersion.formulaSetVersionId);
+  const formulaSetVersionId = baseVersion.formulaSetVersionId;
   const sourceRef = params.sourceRef.trim();
   if (!sourceRef) throw new Error("Salvar cenário de reunião exige fonte ou ata explícita.");
 
+  const catalogAdjustments =
+    prepared.context.authoritativeDomains?.costCatalog.cashflowAdjustments;
+  const catalogAdjustmentByLever =
+    prepared.context.financialModelMode === "TGR_CANONICAL_V2" &&
+    catalogAdjustments?.status === "valid"
+      ? {
+          fixedCostMonthly: catalogAdjustments.fixedCostMonthly,
+          payrollMonthly: catalogAdjustments.payrollMonthly,
+          capexInitial: catalogAdjustments.capexInitial,
+        }
+      : {
+          fixedCostMonthly: "0",
+          payrollMonthly: "0",
+          capexInitial: "0",
+        };
+  const normalizeCatalogBackedValue = (
+    key: keyof typeof catalogAdjustmentByLever,
+    effectiveValue: string
+  ) => {
+    const persistedBaseValue = new FinanceDecimal(effectiveValue).minus(
+      catalogAdjustmentByLever[key]
+    );
+    if (!persistedBaseValue.isFinite() || persistedBaseValue.isNegative())
+      throw new Error(
+        `A hipótese efetiva de ${key} não cobre o ajuste incremental de ${catalogAdjustmentByLever[key]} do Cost Catalog.`
+      );
+    return persistedBaseValue.toFixed(8);
+  };
   const candidateValues: Partial<Record<FinancialInputKey, string>> = {
-    qualifiedCouplesMonth1: prepared.simulation.after.qualifiedCouplesMonth1,
-    payrollMonthly: prepared.simulation.after.payrollMonthly,
-    averageTicket: prepared.simulation.after.averageTicket,
-    fixedCostMonthly: prepared.simulation.after.fixedCostMonthly,
+    payrollMonthly: normalizeCatalogBackedValue(
+      "payrollMonthly",
+      prepared.simulation.after.payrollMonthly
+    ),
+    fixedCostMonthly: normalizeCatalogBackedValue(
+      "fixedCostMonthly",
+      prepared.simulation.after.fixedCostMonthly
+    ),
     variableCostRate: prepared.simulation.after.variableCostRate,
-    capexInitial: prepared.simulation.after.capexInitial,
+    capexInitial: normalizeCatalogBackedValue(
+      "capexInitial",
+      prepared.simulation.after.capexInitial
+    ),
   };
   const changedInputKeys = (Object.entries(candidateValues) as Array<[FinancialInputKey, string]>)
     .filter(([key, value]) => {
-      const current = prepared.context.calculationInputs?.[key];
+      const current = prepared.context.inputs[key];
       return current?.status !== "provided" || current.value === undefined || !new FinanceDecimal(current.value).eq(value);
     })
     .map(([key]) => key);
+  const averageTicketDelta = new FinanceDecimal(
+    prepared.simulation.after.averageTicket
+  ).minus(prepared.context.commercialModel!.derived.averageTicket);
+  const averageTicketChanged = !averageTicketDelta.eq(0);
   const pointsChanged = Boolean(
-    params.targetGrossSalesMonth1 !== undefined &&
     prepared.scaledPointInputs &&
     prepared.context.pointEconomics &&
-    !new FinanceDecimal(params.targetGrossSalesMonth1).eq(
-      prepared.context.pointEconomics.totals.production.totalSales
+    !new FinanceDecimal(prepared.simulation.after.qualifiedCouplesMonth1).eq(
+      prepared.context.pointEconomics.totals.funnel.qualified
     )
   );
-  if (!changedInputKeys.length && !pointsChanged) {
+  if (!changedInputKeys.length && !averageTicketChanged && !pointsChanged) {
     throw new Error("A hipótese é idêntica à baseline; nenhum cenário foi criado.");
   }
 
@@ -3537,6 +3750,104 @@ export async function promoteMeetingSimulationToScenarioForTenant(params: Meetin
           .where(and(eq(inputValues.versionId, versionId), eq(inputValues.key, key)));
       }
 
+      if (averageTicketChanged) {
+        const scenarioConditions = await transaction
+          .select()
+          .from(commercialConditions)
+          .where(and(
+            eq(commercialConditions.versionId, versionId),
+            eq(commercialConditions.status, "provided")
+          ));
+        if (!scenarioConditions.length)
+          throw new Error(
+            "A promoção do ticket exige condição comercial autoritativa na branch."
+          );
+        for (const condition of scenarioConditions) {
+          const listPrice = new FinanceDecimal(condition.listPriceText).plus(
+            averageTicketDelta
+          );
+          const balancePrincipal = new FinanceDecimal(
+            condition.balancePrincipalText
+          ).plus(averageTicketDelta);
+          if (
+            !listPrice.isFinite() ||
+            !balancePrincipal.isFinite() ||
+            listPrice.isNegative() ||
+            balancePrincipal.isNegative()
+          )
+            throw new Error(
+              `A variação de ticket torna a condição ${condition.conditionCode} inválida.`
+            );
+          await transaction
+            .update(commercialConditions)
+            .set({
+              listPriceText: listPrice.toFixed(8),
+              balancePrincipalText: balancePrincipal.toFixed(8),
+              sourceType: "current_decision",
+              sourceRef,
+              updatedBy: params.actorId,
+            })
+            .where(eq(commercialConditions.id, condition.id));
+        }
+
+        const scenarioSkus = await transaction
+          .select()
+          .from(productSkus)
+          .where(and(
+            eq(productSkus.versionId, versionId),
+            eq(productSkus.status, "provided")
+          ));
+        if (!scenarioSkus.length)
+          throw new Error(
+            "A promoção do ticket exige catálogo de produto autoritativo na branch."
+          );
+        const scenarioPhases = await transaction
+          .select()
+          .from(productPricePhases)
+          .where(inArray(
+            productPricePhases.productSkuId,
+            scenarioSkus.map(sku => sku.id)
+          ));
+        if (!scenarioPhases.length)
+          throw new Error(
+            "A promoção do ticket exige fase de preço autoritativa na branch."
+          );
+        for (const phase of scenarioPhases) {
+          const price = new FinanceDecimal(phase.priceText).plus(
+            averageTicketDelta
+          );
+          const promotionalPrice = phase.promotionalPriceText === null
+            ? null
+            : new FinanceDecimal(phase.promotionalPriceText).plus(
+                averageTicketDelta
+              );
+          if (
+            !price.isFinite() ||
+            price.isNegative() ||
+            (promotionalPrice !== null &&
+              (!promotionalPrice.isFinite() || promotionalPrice.isNegative()))
+          )
+            throw new Error(
+              `A variação de ticket torna a fase ${phase.phaseCode} inválida.`
+            );
+          await transaction
+            .update(productPricePhases)
+            .set({
+              priceText: price.toFixed(8),
+              promotionalPriceText: promotionalPrice?.toFixed(8) ?? null,
+            })
+            .where(eq(productPricePhases.id, phase.id));
+        }
+        await transaction
+          .update(productSkus)
+          .set({
+            sourceType: "current_decision",
+            sourceRef,
+            updatedBy: params.actorId,
+          })
+          .where(eq(productSkus.versionId, versionId));
+      }
+
       if (prepared.scaledPointInputs && pointsChanged) {
         const approachesByPoint = new Map(
           prepared.scaledPointInputs.map(point => [point.pointId, point.approaches])
@@ -3576,7 +3887,12 @@ export async function promoteMeetingSimulationToScenarioForTenant(params: Meetin
         action: "meeting_simulation.promoted",
         actorId: params.actorId,
         beforeHash: lockedSnapshot.snapshotHash,
-        afterHash: sha256({ inputs: nextInputs, points: prepared.scaledPointInputs ?? null }),
+        afterHash: sha256({
+          inputs: nextInputs,
+          points: prepared.scaledPointInputs ?? null,
+          averageTicketDelta: averageTicketDelta.toFixed(8),
+          catalogAdjustments: catalogAdjustmentByLever,
+        }),
         metadata: {
           baseVersionId: baseVersion.id,
           baseSnapshotId: params.baseSnapshotId,
@@ -3584,12 +3900,33 @@ export async function promoteMeetingSimulationToScenarioForTenant(params: Meetin
           horizonMonths: params.horizonMonths,
           asOfMonth: params.asOfMonth ?? 0,
           changedInputKeys,
+          averageTicketChanged,
+          averageTicketDelta: averageTicketDelta.toFixed(8),
+          catalogAdjustments: catalogAdjustmentByLever,
           sourceRef,
           targetGrossSalesMonth1: params.targetGrossSalesMonth1 ?? null,
         },
       });
     },
-  })).then(result => ({ ...result, changedInputKeys, simulation: prepared.simulation }));
+  })).then(result => ({
+    ...result,
+    changedInputKeys,
+    averageTicketChanged,
+    simulation: prepared.simulation,
+  }));
+}
+
+function payloadContainsTestDataSourceRef(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value))
+    return value.some(payloadContainsTestDataSourceRef);
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, nested]) =>
+      (key === "sourceRef" &&
+        typeof nested === "string" &&
+        /TEST_DATA/i.test(nested)) ||
+      payloadContainsTestDataSourceRef(nested)
+  );
 }
 
 export async function approveSnapshotForTenant(params: {
@@ -3609,6 +3946,16 @@ export async function approveSnapshotForTenant(params: {
     snapshot[0].projectVersionId,
     params.tenantId
   );
+  const financialModelMode = resolveFinancialModelModeByFormulaSetId(
+    version.formulaSetVersionId
+  );
+  if (
+    financialModelMode === "HARMONY_COMPAT_V1" &&
+    payloadContainsTestDataSourceRef(snapshot[0].payload)
+  )
+    throw new Error(
+      "Snapshot Harmony com sourceRef TEST_DATA não pode ser aprovado; substitua a premissa por fonte autoritativa ou PENDING explícito."
+    );
   if (
     !snapshot[0].isAuthoritative ||
     snapshot[0].validationStatus !== "valid"
@@ -3843,7 +4190,8 @@ export async function calculateCapitalEnvelopeForTenant(params: {
   });
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
     throw new Error("Capital Envelope exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
-  const calculation = calculateFinancialProjection(
+  const calculation = calculateStudyProjection(
+    context.financialModelMode,
     context.calculationInputs,
     params.horizonMonths,
     context.calculationOptions
@@ -3862,6 +4210,14 @@ export type ProjectGoalSeekVariable = GoalSeekVariableKey;
 export type ProjectGoalSeekKpi = GoalSeekTargetKey;
 export const PROJECT_GOAL_SEEK_VARIABLES = GOAL_SEEK_LEVER_KEYS;
 export const PROJECT_GOAL_SEEK_KPIS = GOAL_SEEK_TARGET_KEYS;
+
+const GOAL_SEEK_AUTHORITATIVE_DOMAIN_OWNERS = {
+  averageTicket: "commercial_conditions",
+  entryValuePerContract: "commercial_conditions",
+  qualifiedCouplesMonth1: "capture_points",
+  qualifiedCouplesGrowthRate: "capture_points",
+  conversionRate: "capture_points",
+} as const satisfies Partial<Record<ProjectGoalSeekVariable, string>>;
 
 export async function applyGoalSeekToScenarioForTenant(params: {
   tenantId: number;
@@ -3885,6 +4241,14 @@ export async function applyGoalSeekToScenarioForTenant(params: {
   const sourceVersion = await getVersionForTenant(params.sourceVersionId, params.tenantId);
   if (targetVersion.projectId !== sourceVersion.projectId)
     throw new Error("Goal Seek só pode ser aplicado em branch do mesmo projeto da análise.");
+  if (targetVersion.formulaSetVersionId !== sourceVersion.formulaSetVersionId)
+    throw new Error("Goal Seek não pode misturar modos financeiros entre fonte e cenário.");
+  const authoritativeOwner =
+    GOAL_SEEK_AUTHORITATIVE_DOMAIN_OWNERS[params.variableKey as keyof typeof GOAL_SEEK_AUTHORITATIVE_DOMAIN_OWNERS];
+  if (authoritativeOwner)
+    throw new Error(
+      `${params.variableKey} é controlada pelo domínio ${authoritativeOwner}; aplicar Goal Seek exige um adaptador autoritativo desse domínio.`
+    );
   if (targetVersion.kind !== "scenario")
     throw new Error("Goal Seek só pode ser aplicado em branch de cenário.");
   if (targetVersion.isImmutable || targetVersion.state !== "draft")
@@ -4012,11 +4376,42 @@ export async function applyGoalSeekToScenarioForTenant(params: {
     serverResult.targetKpi !== params.targetKpi
   )
     throw new Error("Payload do Goal Seek diverge do resultado recalculado no servidor.");
+  const targetCalculationContext = await getAuthoritativeCalculationContext({
+    tenantId: params.tenantId,
+    versionId: targetVersion.id,
+    asOfMonth,
+    horizonMonths,
+  });
+  const catalogAdjustments =
+    targetCalculationContext.authoritativeDomains?.costCatalog.cashflowAdjustments;
+  const catalogAdjustmentByLever = catalogAdjustments?.status === "valid"
+    ? {
+        fixedCostMonthly: catalogAdjustments.fixedCostMonthly,
+        payrollMonthly: catalogAdjustments.payrollMonthly,
+        capexInitial: catalogAdjustments.capexInitial,
+      }
+    : null;
+  const catalogAdjustment =
+    targetCalculationContext.financialModelMode === "TGR_CANONICAL_V2" &&
+    catalogAdjustmentByLever &&
+    params.variableKey in catalogAdjustmentByLever
+      ? new FinanceDecimal(
+          catalogAdjustmentByLever[
+            params.variableKey as keyof typeof catalogAdjustmentByLever
+          ]
+        )
+      : new FinanceDecimal(0);
+  const persistedBaseValue = value.minus(catalogAdjustment);
+  if (!persistedBaseValue.isFinite() || persistedBaseValue.isNegative())
+    throw new Error(
+      `O resultado efetivo do Goal Seek para ${params.variableKey} não cobre o ajuste incremental de ${catalogAdjustment.toFixed(8)} do Cost Catalog.`
+    );
+  const normalizedPersistedBaseValue = persistedBaseValue.toFixed(8);
   const nextInputs: FinancialInputSnapshot = {
     ...previousInputs,
     [params.variableKey]: {
       status: "provided",
-      value: normalizedValue,
+      value: normalizedPersistedBaseValue,
       sourceType: "derived_analysis",
       sourceRef,
       updatedBy: String(params.actorId),
@@ -4026,6 +4421,7 @@ export async function applyGoalSeekToScenarioForTenant(params: {
   const rationale = [
     `Goal Seek ${params.targetKpi} = ${normalizedTarget}.`,
     `Objetivo calculado ${normalizedObjective}; resíduo ${normalizedResidual}.`,
+    `Valor efetivo ${normalizedValue}; base persistida ${normalizedPersistedBaseValue}; ajuste incremental ${catalogAdjustment.toFixed(8)}.`,
     `${params.iterations} iterações.`,
   ].join(" ");
   const decision = {
@@ -4101,13 +4497,13 @@ export async function applyGoalSeekToScenarioForTenant(params: {
       versionId: targetVersion.id,
       key: params.variableKey,
       status: "provided",
-      valueText: normalizedValue,
+      valueText: normalizedPersistedBaseValue,
       sourceType: "derived_analysis",
       sourceRef,
       updatedBy: params.actorId,
     }).onDuplicateKeyUpdate({ set: {
       status: "provided",
-      valueText: normalizedValue,
+      valueText: normalizedPersistedBaseValue,
       sourceType: "derived_analysis",
       sourceRef,
       updatedBy: params.actorId,
@@ -4158,6 +4554,9 @@ export async function applyGoalSeekToScenarioForTenant(params: {
           targetVersionId: targetVersion.id,
           variableKey: params.variableKey,
           targetKpi: params.targetKpi,
+          effectiveValue: normalizedValue,
+          persistedBaseValue: normalizedPersistedBaseValue,
+          catalogAdjustment: catalogAdjustment.toFixed(8),
           financialRevisionBefore: targetVersion.financialRevision,
           financialRevisionAfter: targetVersion.financialRevision + 1,
         },
@@ -4176,6 +4575,9 @@ export async function applyGoalSeekToScenarioForTenant(params: {
           source: "goal_seek",
           sourceVersionId: sourceVersion.id,
           decisionId,
+          effectiveValue: normalizedValue,
+          persistedBaseValue: normalizedPersistedBaseValue,
+          catalogAdjustment: catalogAdjustment.toFixed(8),
           financialRevisionBefore: targetVersion.financialRevision,
           financialRevisionAfter: targetVersion.financialRevision + 1,
         },
@@ -4229,7 +4631,28 @@ export async function runProjectGoalSeekForTenant(params: {
   if (!context.calculationInputs || context.domainBlockers.length || context.domainInvalidities.length)
     throw new Error("Goal Seek exige produto, condição comercial, política de carteira, pontos de captação e operações comerciais válidos, sem itens pendentes.");
   const inputs = context.calculationInputs;
-  const baseline = calculateFinancialProjection(inputs, params.horizonMonths, context.calculationOptions);
+  if (
+    context.financialModelMode === "HARMONY_COMPAT_V1" &&
+    (params.variableKey === "variableCostRate" ||
+      params.variableKey === "partnerShareRate")
+  ) {
+    return runGoalSeekV1({
+      targetKpi: params.targetKpi,
+      variableKey: params.variableKey,
+      target: params.target,
+      lowerBound: params.lowerBound,
+      upperBound: params.upperBound,
+      evaluate: () => {
+        throw new Error("Alavanca sem suporte no modo Harmony.");
+      },
+    });
+  }
+  const baseline = calculateStudyProjection(
+    context.financialModelMode,
+    inputs,
+    params.horizonMonths,
+    context.calculationOptions
+  );
   if (baseline.status !== "valid")
     throw new Error(
       "Goal Seek exige todas as premissas obrigatórias informadas na versão selecionada."
@@ -4250,7 +4673,8 @@ export async function runProjectGoalSeekForTenant(params: {
           sourceRef: "goal_seek",
         },
       } as FinancialInputSnapshot;
-      const calculation = calculateFinancialProjection(
+      const calculation = calculateStudyProjection(
+        context.financialModelMode,
         nextInputs,
         params.horizonMonths,
         context.calculationOptions
@@ -4314,6 +4738,7 @@ async function getExportScenarioComparisonEntries(params: {
     kind: "working" | "scenario" | "approval" | "baseline";
     state: "draft" | "in_review" | "approved" | "baseline";
     isImmutable: boolean;
+    formulaSetVersionId: string;
   };
   baseSnapshot: {
     id: string;
@@ -4345,6 +4770,20 @@ async function getExportScenarioComparisonEntries(params: {
         .from(projectVersions)
         .where(inArray(projectVersions.id, scenarioVersionIds))
     : [];
+  const baseFinancialModelMode = resolveFinancialModelModeByFormulaSetId(
+    params.baseVersion.formulaSetVersionId
+  );
+  for (const scenarioVersion of scenarioVersions) {
+    if (
+      resolveFinancialModelModeByFormulaSetId(
+        scenarioVersion.formulaSetVersionId
+      ) !== baseFinancialModelMode
+    ) {
+      throw new Error(
+        "Comparação para exportação recusada: cenário e baseline usam modos financeiros diferentes."
+      );
+    }
+  }
   const scenarioSnapshotMetadata = scenarioVersionIds.length
     ? await db
         .select({
@@ -4462,6 +4901,12 @@ export async function generateAuthorizedExportForTenant(params: {
       .limit(1)
   )[0];
   const generatedAt = new Date().toISOString();
+  const exportFinancialModelMode = resolveFinancialModelModeByFormulaSetId(
+    exportVersion.formulaSetVersionId
+  );
+  const exportFinancialModelDefinition = getFinancialModelModeDefinition(
+    exportFinancialModelMode
+  );
   const exportMetadata: ExportMetadata = {
     snapshotId: snapshotRows[0].id,
     versionId: exportVersion.id,
@@ -4476,6 +4921,8 @@ export async function generateAuthorizedExportForTenant(params: {
     },
     lifecycleStatus: "baseline",
     approvalStatus: "approved",
+    financialModelMode: exportFinancialModelMode,
+    financialModelModeLabel: exportFinancialModelDefinition.label,
   };
   const artifactId = nanoid();
   await db.insert(exportArtifacts).values({

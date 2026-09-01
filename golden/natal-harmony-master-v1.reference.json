@@ -1,0 +1,164 @@
+{
+  "id": "natal-harmony-completo-v1",
+  "modelMode": "HARMONY_COMPAT_V1",
+  "authority": {
+    "availableSource": "PR #1 review on bd7848b and user execution prompt",
+    "reviewUrl": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+    "reviewedCommit": "bd7848b3f6f8c7bbbf6142c68f4fb0cdf09f233e",
+    "missingSource": "COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1",
+    "sourceStatus": "SOURCE_CONFLICT",
+    "note": "The complete Harmony workbook was not found. This reference never claims workbook parity."
+  },
+  "assertions": {
+    "classification": "SOURCE_REVIEW_ASSERTION",
+    "physicalContracts": 3120,
+    "pricePerContract": 28000,
+    "entryTotal": 3200,
+    "entryInstallments": 8,
+    "balanceTotal": 24800,
+    "balanceInstallments": 84,
+    "grossSalesPerMonth": 100,
+    "conversionRate": 0.2,
+    "cancellationRate": 0.3,
+    "delinquencyRate": 0.25,
+    "firstBalanceMonthOffset": 4,
+    "preOperationalInvestment": 985500,
+    "nominalAnnualDiscountRate": 0.18,
+    "fixedCostMonths1To12": 117203,
+    "fixedCostMonths13To48": 195339
+  },
+  "derivedRules": {
+    "classification": "DERIVED_FROM_REVIEW_RULES",
+    "finalCohortRounding": "ceil remaining physical contracts / 0.70; cancellation is the residual so net inventory never exceeds 3120",
+    "entryCollection": "8 monthly installments of 400 per net contract",
+    "balanceCollection": "84 monthly installments of 24800/84 per net contract, first due at cohort month + 4",
+    "delinquency": "informational exposure only; does not reduce scheduled cash",
+    "commission": "8 installments of 187.50 per net contract, aligned with entry collection"
+  },
+  "reviewKpiTargets": {
+    "capitalRequired": { "target": "1791990", "absoluteTolerance": "1000", "relativeTolerance": "0.001", "classification": "SOURCE_REVIEW_ASSERTION_APPROXIMATE", "observedAtImplementation": { "obtained": "1876899.20000000", "absoluteDelta": "84909.20000000", "relativeDelta": "0.04738263", "status": "SOURCE_CONFLICT" } },
+    "npv": { "target": "21612036", "absoluteTolerance": "10000", "relativeTolerance": "0.001", "classification": "SOURCE_REVIEW_ASSERTION_APPROXIMATE", "observedAtImplementation": { "obtained": "21991533.92547929", "absoluteDelta": "379497.92547929", "relativeDelta": "0.01755956", "status": "SOURCE_CONFLICT" } },
+    "irrAnnual": { "target": "1.308", "absoluteTolerance": "0.0001", "relativeTolerance": "0.001", "classification": "SOURCE_REVIEW_ASSERTION_APPROXIMATE", "observedAtImplementation": { "obtained": "1.31184626", "absoluteDelta": "0.00384626", "relativeDelta": "0.00294057", "status": "SOURCE_CONFLICT" } },
+    "paybackMonths": { "target": "25", "absoluteTolerance": "0.1", "relativeTolerance": "0.001", "classification": "SOURCE_REVIEW_ASSERTION_APPROXIMATE", "observedAtImplementation": { "obtained": "25.70445412", "absoluteDelta": "0.70445412", "relativeDelta": "0.02817816", "status": "SOURCE_CONFLICT" } },
+    "sellOutMonth": { "target": "45", "absoluteTolerance": "0", "relativeTolerance": "0", "classification": "SOURCE_REVIEW_ASSERTION_APPROXIMATE", "observedAtImplementation": { "obtained": "45.00000000", "absoluteDelta": "0.00000000", "relativeDelta": "0.00000000", "status": "MATCH" } }
+  },
+  "kpiConflicts": [
+    {
+      "id": "capital-target-source-gap",
+      "metric": "capitalRequired",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "A curva de custo posterior a M48 e o timing integral das rubricas não estão disponíveis.",
+      "adoptedRule": "Usar apenas as competências afirmadas no review, sem calibrar o caixa.",
+      "causalConflictIds": ["fixed-cost-after-month-48", "payroll-split", "card-and-tax-timing"]
+    },
+    {
+      "id": "npv-target-source-gap",
+      "metric": "npv",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "O VPL depende da curva e dos timings ausentes na fonte disponível.",
+      "adoptedRule": "Descontar o caixa não calibrado pela taxa nominal de 18%/12.",
+      "causalConflictIds": ["fixed-cost-after-month-48", "card-and-tax-timing"]
+    },
+    {
+      "id": "irr-target-source-gap",
+      "metric": "irrAnnual",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "A TIR depende dos timings de custos não disponíveis.",
+      "adoptedRule": "Anualizar a TIR mensal do fluxo determinístico não calibrado.",
+      "causalConflictIds": ["card-and-tax-timing"]
+    },
+    {
+      "id": "payback-target-source-gap",
+      "metric": "paybackMonths",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "O payback depende dos timings de custos não disponíveis.",
+      "adoptedRule": "Interpolar o cruzamento do caixa acumulado determinístico.",
+      "causalConflictIds": ["payroll-split", "card-and-tax-timing"]
+    }
+  ],
+  "regressionConflictCauses": [
+    {
+      "id": "cross-mode-sales-inventory",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "Harmony usa cancelamento imediato e arredondamento inteiro da última coorte; o canônico preserva sua política própria.",
+      "adoptedRule": "Comparar sem misturar modos e justificar somente células divergentes.",
+      "metrics": ["qualifiedCouples", "contracts", "grossContracts", "canceledContracts", "netContracts", "cumulativeGrossContracts", "activeContracts", "returnedToInventory", "availableInventory", "sellOutRate", "grossSales"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-receivables",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "Harmony recebe entrada em 8x e saldo em M5; o cálculo canônico de comparação usa seu calendário próprio.",
+      "adoptedRule": "Preservar os dois calendários e registrar as células divergentes.",
+      "metrics": ["recognizedRevenue", "grossEntryGenerated", "grossEntrySettled", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "canceledReceivables", "delinquentBalance", "curedCollections", "writtenOffBalance", "healthyD90", "netCollections"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-costs",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "As rubricas compatíveis e a curva M13-M48 não pertencem à política canônica.",
+      "adoptedRule": "Manter custos por modo e justificar somente as competências divergentes.",
+      "metrics": ["variableCosts", "partnerShare", "taxes", "fixedCosts", "commercialOperationsCosts", "commissionPayments", "payroll", "capex", "preOperationalInvestment", "paymentFees"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-cash-dre",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "DRE e caixa são consequências dos calendários e custos próprios de cada modo.",
+      "adoptedRule": "Derivar caixa em cada engine sem calibrar e justificar as células divergentes.",
+      "metrics": ["cashOpening", "cashInflows", "cashOutflows", "contributionMargin", "operatingResult", "cashClosing", "operatingCashFlow", "cumulativeCashFlow", "discountedCashFlow"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-kpis",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "https://github.com/lucastigrereal-dev/tgr-consulting/pull/1",
+      "reason": "Os KPIs refletem fluxos produzidos por metodologias diferentes.",
+      "adoptedRule": "Comparar sem promover equivalência e justificar apenas KPIs divergentes.",
+      "metrics": ["capitalRequired", "npv", "irrAnnual", "paybackMonths", "sellOutMonth", "totalGrossContracts", "totalNetContracts", "delinquentBalance"],
+      "monthFrom": null,
+      "monthTo": null
+    }
+  ],
+  "sourceConflicts": [
+    {
+      "id": "gross-sales-total",
+      "status": "SOURCE_CONFLICT",
+      "values": { "table": 4457, "indicator": 4458 },
+      "adopted": 4458,
+      "reason": "Integer final-cohort rounding preserves physical net stock exactly."
+    },
+    {
+      "id": "fixed-cost-months13-to48",
+      "status": "SOURCE_CONFLICT",
+      "adopted": 195339,
+      "reason": "O review afirma o total mensal, mas a abertura por rubrica e a relação com fixedCostMonthly não estão disponíveis."
+    },
+    {
+      "id": "fixed-cost-after-month-48",
+      "status": "PENDING",
+      "adopted": 0,
+      "reason": "The later Harmony curve is absent from the available review extract."
+    },
+    {
+      "id": "payroll-split",
+      "status": "SOURCE_CONFLICT",
+      "adopted": "payrollMonthly is a separate consumed line; the Golden value remains 0 because the review provides no payroll amount",
+      "reason": "The source gap is whether the asserted fixed totals already include payroll, which could otherwise double count it."
+    },
+    {
+      "id": "card-and-tax-timing",
+      "status": "SOURCE_CONFLICT",
+      "adopted": "card stress at sale; provisional tax at collection",
+      "reason": "Only amounts are available; the complete workbook timing is missing."
+    }
+  ]
+}

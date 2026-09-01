@@ -275,7 +275,7 @@ export function BoardroomPremiumShell({
         >
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
-              Boardroom Premium · 16:9
+              Sala executiva premium · 16:9
             </p>
             <p className="mt-1 truncate text-sm text-slate-300">
               {activeChapter.number} · {activeChapter.title}
@@ -291,7 +291,7 @@ export function BoardroomPremiumShell({
               className="border-white/15 bg-white/5 text-slate-100"
               onClick={() => setPresenterMode(value => !value)}
             >
-              Presenter mode
+              Modo apresentação
             </Button>
             <Button
               type="button"
@@ -345,7 +345,7 @@ export function BoardroomPremiumShell({
           className={
             isPresenter
               ? "flex-1 overflow-hidden rounded-lg border border-amber-200/20 bg-slate-950 shadow-[0_0_80px_rgba(251,191,36,.16)]"
-              : "flex-1 overflow-hidden rounded-lg border border-white/10 bg-slate-950 shadow-2xl"
+              : "flex-1 overflow-visible rounded-lg border border-white/10 bg-slate-950 shadow-2xl"
           }
         >
           <div
@@ -354,7 +354,7 @@ export function BoardroomPremiumShell({
             className={
               isPresenter
                 ? "aspect-video h-full max-h-none min-h-0 w-full overflow-y-auto p-3 text-[1.08rem] sm:p-5 xl:p-7"
-                : "aspect-video h-full max-h-[calc(100vh-9.5rem)] min-h-[28rem] w-full overflow-y-auto p-4 sm:p-6"
+                : "min-h-0 w-full overflow-visible p-4 sm:p-6"
             }
           >
             {children}
@@ -380,7 +380,7 @@ export function BoardroomPremiumShell({
             Anterior
           </Button>
           <p className="text-xs text-muted-foreground">
-            Use ArrowLeft/ArrowRight para navegar, F para tela cheia e Escape para sair.
+            Use as setas esquerda/direita para navegar, F para tela cheia e Escape para sair.
           </p>
           <Button
             type="button"

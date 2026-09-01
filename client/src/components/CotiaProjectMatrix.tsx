@@ -121,26 +121,36 @@ function isPercentField(key: string) {
     && key !== "encargosExplicitos";
 }
 
-function scaledDecimal(value: string, factor: number) {
-  if (!value.trim() || value === "PENDENTE") return value;
-  const normalized = normalizeBrazilianDecimal(value);
-  if (normalized === null) return value;
-  const scaled = Number(normalized) * factor;
-  if (!Number.isFinite(scaled)) return value;
-  return String(Number(scaled.toPrecision(15)));
-}
+export type CotiaPercentInputState =
+  | { status: "empty" }
+  | { status: "invalid" }
+  | { status: "valid"; points: string; decimalRate: string };
 
 /**
- * A Cotia historicamente persiste percentuais como pontos (25 = 25%).
- * A UI usa a fração canônica do restante do produto (0,25 = 25%) sem migrar
- * nem reinterpretar registros existentes.
+ * A folha Cotia edita percentuais em pontos: 25 significa 25%, enquanto
+ * 0,25 significa 0,25%. O motor recebe a fração decimal equivalente.
  */
-export function cotiaPercentPointsToDecimalInput(value: string) {
-  return scaledDecimal(value, 0.01).replace(".", ",");
+export function normalizeCotiaPercentPointsInput(value: string): CotiaPercentInputState {
+  if (!value.trim()) return { status: "empty" };
+  const normalized = normalizeBrazilianDecimal(value);
+  if (normalized === null) return { status: "invalid" };
+  const points = Number(normalized);
+  if (!Number.isFinite(points) || points < 0 || points > 100) {
+    return { status: "invalid" };
+  }
+  return {
+    status: "valid",
+    points: value.trim(),
+    decimalRate: String(Number((points / 100).toPrecision(15))),
+  };
 }
 
-export function decimalInputToCotiaPercentPoints(value: string) {
-  return scaledDecimal(value, 100);
+export function cotiaPercentPointsToDecimalRate(value: string) {
+  const normalized = normalizeCotiaPercentPointsInput(value);
+  if (normalized.status !== "valid") {
+    throw new Error("Percentual Cotia deve estar entre 0 e 100 pontos.");
+  }
+  return normalized.decimalRate;
 }
 
 function MatrixSection({
@@ -180,32 +190,49 @@ export function CotiaProjectMatrix({
     const accessibleLabel = label ?? fieldLabels[key] ?? humanizeField(key);
     const percentField = isPercentField(key);
     const percentHint = percentField
-      ? " Digite 0,01 para 1% e 0,005 para 0,5%. A interface usa fração decimal canônica."
+      ? " Digite 25 para 25%. 0,25 significa 0,25%. Valores válidos: 0 a 100."
       : "";
-    return <Input
+    const percentState = percentField
+      ? normalizeCotiaPercentPointsInput(v(key))
+      : null;
+    const input = <Input
       id={`cotia-${key}`}
       name={key}
       aria-label={accessibleLabel}
+      aria-describedby={percentField ? `cotia-${key}-percent-help` : undefined}
+      aria-invalid={percentState?.status === "invalid" ? true : undefined}
       title={`Premissa editável: ${accessibleLabel}. Campo vazio permanece PENDENTE.${percentHint}`}
       disabled={disabled}
       inputMode={mode === "text" ? "text" : "decimal"}
-      value={percentField ? cotiaPercentPointsToDecimalInput(v(key)) : v(key)}
-      onChange={event => onChange(
-        key,
-        percentField
-          ? decimalInputToCotiaPercentPoints(event.target.value)
-          : event.target.value,
-      )}
-      data-percent-semantics={percentField ? "decimal-rate" : undefined}
+      value={v(key)}
+      onChange={event => {
+        if (!percentField) {
+          onChange(key, event.target.value);
+          return;
+        }
+        const next = normalizeCotiaPercentPointsInput(event.target.value);
+        if (next.status !== "invalid") onChange(key, event.target.value);
+      }}
+      data-percent-semantics={percentField ? "percentage-points" : undefined}
       placeholder={placeholder}
-      className="h-9 min-w-0 border-0 bg-amber-50/60 px-2 text-right text-sm font-semibold text-slate-900 shadow-none focus-visible:ring-2 focus-visible:ring-amber-500"
+      className={`h-9 min-w-0 border-0 bg-amber-50/60 px-2 text-right text-sm font-semibold text-slate-900 shadow-none focus-visible:ring-2 focus-visible:ring-amber-500 ${percentField ? "pr-7" : ""}`}
     />;
+    if (!percentField) return input;
+    return (
+      <div className="relative min-w-0">
+        {input}
+        <span aria-hidden="true" className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs font-black text-slate-600">%</span>
+        <span id={`cotia-${key}-percent-help`} className="sr-only">
+          Digite o percentual em pontos. 25 significa 25%; 0,25 significa 0,25%. Aceita valores entre zero e cem.
+        </span>
+      </div>
+    );
   };
   const calculations = calculateCotiaMatrix(values);
   const has = (...keys: string[]) => keys.every(key => Boolean(v(key).trim()));
 
   return (
-    <div className="space-y-5 text-slate-900">
+    <div className="space-y-5 text-slate-900 [&_.overflow-x-auto]:overscroll-x-contain [&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_th:first-child]:sticky [&_th:first-child]:left-0 [&_th:first-child]:z-20">
       <div className="rounded-xl border border-slate-900/30 bg-slate-950 px-4 py-3 text-white">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -227,6 +254,10 @@ export function CotiaProjectMatrix({
           </div>
         ) : null}
       </div>
+
+      <p id="cotia-horizontal-table-help" className="rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700 sm:hidden">
+        No celular, Deslize horizontalmente para consultar as tabelas. A primeira coluna permanece visível.
+      </p>
 
       <MatrixSection title="TGR Consulting · Dados do projeto">
         <div className="grid border-collapse sm:grid-cols-2 lg:grid-cols-4">

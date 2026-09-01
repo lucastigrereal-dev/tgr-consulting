@@ -54,6 +54,7 @@ export const OPTIONAL_FINANCIAL_INPUT_KEYS = [
 ] as const satisfies readonly FinancialInputKey[];
 export type OptionalFinancialInputKey = (typeof OPTIONAL_FINANCIAL_INPUT_KEYS)[number];
 export type DecimalText = string;
+export type FinancialModelMode = "HARMONY_COMPAT_V1" | "TGR_CANONICAL_V2";
 export type InputStatus = "provided" | "pending";
 export type SourceType =
   | "current_decision"
@@ -80,6 +81,8 @@ export type FormulaDefinition = {
   expression: string;
   dependencies: FinancialInputKey[] | string[];
   description: string;
+  /** Referência lógica estável para rastrear a regra de negócio de origem. */
+  sourceRef?: string;
 };
 
 export type FormulaSetVersion = {
@@ -153,7 +156,23 @@ export type MonthlyProjection = {
 
 export type CalculationStatus = "valid" | "blocked_by_pending_inputs" | "invalid";
 
+export type CompatibilitySourceStatus = "SOURCE_REVIEW_ASSERTION" | "DERIVED_FROM_REVIEW_RULES" | "SOURCE_CONFLICT" | "PENDING";
+
+export type FinancialCompatibilityEvidence = {
+  authorityStatus: "SOURCE_CONFLICT";
+  availableSource: string;
+  missingSource: string;
+  adoptedGrossContracts: DecimalText;
+  sourceConflicts: Array<{
+    id: string;
+    status: Extract<CompatibilitySourceStatus, "SOURCE_CONFLICT" | "PENDING">;
+    adoptedRule: string;
+  }>;
+};
+
 export type FinancialCalculation = {
+  /** Metodologia explícita quando o cálculo foi selado em snapshot autoritativo. */
+  financialModelMode?: FinancialModelMode;
   status: CalculationStatus;
   horizonMonths: number;
   missingInputKeys: FinancialInputKey[];
@@ -192,6 +211,8 @@ export type FinancialCalculation = {
   pointEconomics?: PointEconomicsPortfolio;
   commercialOperations?: CommercialOperationsResult;
   commissionLedger?: CommissionLedger;
+  /** Proveniência e conflitos somente quando um modo de compatibilidade exige reconciliação externa. */
+  compatibilityEvidence?: FinancialCompatibilityEvidence;
 };
 
 export type ProjectLifecycleState = "draft" | "in_review" | "approved" | "baseline";

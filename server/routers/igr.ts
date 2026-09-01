@@ -56,6 +56,10 @@ const builderComponentSchema = z.enum(["project_assembly", "product_stock", "pri
 const costCategorySchema = z.enum(["payroll", "occupancy", "technology", "marketing", "partner", "legal", "operations", "other"]);
 const goalSeekTargetSchema = z.enum(PROJECT_GOAL_SEEK_KPIS as [ProjectGoalSeekKpi, ...ProjectGoalSeekKpi[]]);
 const goalSeekVariableSchema = z.enum(PROJECT_GOAL_SEEK_VARIABLES as [ProjectGoalSeekVariable, ...ProjectGoalSeekVariable[]]);
+const financialModelModeSchema = z.enum([
+  "HARMONY_COMPAT_V1",
+  "TGR_CANONICAL_V2",
+]);
 
 const nonNegativeDecimalSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
 const unitRateSchema = nonNegativeDecimalSchema.refine(value => Number(value) <= 1, {
@@ -565,7 +569,11 @@ export const igrRouter = router({
     status: z.enum(["provided", "pending"]), metrics: z.record(z.string(), z.unknown()), sourceType: provenanceSourceSchema, sourceRef: z.string().trim().max(500).optional(),
   }).refine((data) => data.status === "pending" || Boolean(data.sourceRef?.trim()), { message: "Benchmark informado exige fonte primária.", path: ["sourceRef"] })).mutation(({ ctx, input }) => createHistoricalBenchmarkForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   createProject: protectedProcedure
-    .input(z.object({ name: z.string().trim().min(3).max(255), inputs: FinancialInputSnapshotSchema }))
+    .input(z.object({
+      name: z.string().trim().min(3).max(255),
+      inputs: FinancialInputSnapshotSchema,
+      financialModelMode: financialModelModeSchema.default("TGR_CANONICAL_V2"),
+    }))
     .mutation(({ ctx, input }) => createProjectForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   createProjectFromCotiaAssembly: protectedProcedure
     .input(z.object({
@@ -573,6 +581,7 @@ export const igrRouter = router({
       assemblyName: z.string().trim().min(2).max(255),
       payload: z.record(z.string(), z.string()),
       sourceRef: z.string().trim().max(500).optional(),
+      financialModelMode: financialModelModeSchema.default("TGR_CANONICAL_V2"),
     }))
     .mutation(({ ctx, input }) => createProjectFromCotiaAssemblyForTenant({
       tenantId: tenantIdFromUser(ctx.user.id),

@@ -273,7 +273,7 @@ function DashboardLayoutContent({
           aria-valuemax={MAX_WIDTH}
           aria-valuemin={MIN_WIDTH}
           aria-valuenow={sidebarWidth}
-          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isCollapsed ? "hidden" : ""}`}
+          className={`absolute -right-1 top-0 h-full w-3 cursor-col-resize transition-colors hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${isCollapsed ? "hidden" : ""}`}
           onMouseDown={() => {
             if (isCollapsed) return;
             setIsResizing(true);

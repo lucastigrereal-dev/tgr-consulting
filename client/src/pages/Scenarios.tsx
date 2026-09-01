@@ -11,6 +11,10 @@ import {
 } from "@/lib/financialPresentation";
 import { trpc } from "@/lib/trpc";
 import {
+  isGoalSeekLeverApplyable,
+  resolveFinancialModelModeFromFormulaSet,
+} from "@/lib/financialModelOwnership";
+import {
   GOAL_SEEK_LEVERS,
   GOAL_SEEK_TARGETS,
   type GoalSeekTargetKey,
@@ -39,6 +43,7 @@ export type ScenarioVersionCandidate = {
   state: "draft" | "in_review" | "approved" | "baseline";
   kind: string;
   isImmutable: boolean;
+  formulaSetVersionId?: string;
 };
 
 export function selectScenarioBaseVersion(
@@ -167,10 +172,10 @@ export default function Scenarios() {
   );
   const [goal, setGoal] = useState<GoalSeekSelection>({
     targetKpi: "npv" as GoalSeekTargetKey,
-    variableKey: "qualifiedCouplesMonth1" as GoalSeekVariableKey,
+    variableKey: "capexInitial" as GoalSeekVariableKey,
     target: "0",
-    lowerBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.lowerBound,
-    upperBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.upperBound,
+    lowerBound: GOAL_SEEK_LEVERS.capexInitial.lowerBound,
+    upperBound: GOAL_SEEK_LEVERS.capexInitial.upperBound,
   });
   const [capital, setCapital] = useState("");
   const [asOfMonth, setAsOfMonth] = useState(0);
@@ -190,6 +195,10 @@ export default function Scenarios() {
   const draftBranch = selectGoalSeekDraftBranch(versions);
   const scenarioBaseVersionId = scenarioBaseVersion?.id ?? "";
   const activeVersionId = draftBranch?.id ?? scenarioBaseVersionId;
+  const activeVersion = draftBranch ?? scenarioBaseVersion;
+  const financialModelMode = resolveFinancialModelModeFromFormulaSet(
+    activeVersion?.formulaSetVersionId
+  );
   const createBranch = trpc.igr.createScenario.useMutation({
     onSuccess: async result => {
       await contextQuery.refetch();
@@ -230,6 +239,10 @@ export default function Scenarios() {
     result,
     goal
   );
+  const goalLeverApplyable = isGoalSeekLeverApplyable(
+    financialModelMode,
+    goal.variableKey
+  );
   const capitalResult = capitalEnvelope.data;
   const goalReady =
     isDecimal(goal.target) &&
@@ -243,6 +256,7 @@ export default function Scenarios() {
       !result.objectiveValue ||
       result.residual === null ||
       !goalResultMatchesSelection ||
+      !goalLeverApplyable ||
       !activeVersionId
     )
       return;
@@ -514,6 +528,15 @@ export default function Scenarios() {
                 A busca usa a versão atual e recalcula o KPI escolhido. Não
                 altera nada até você decidir aplicar o resultado em um cenário.
               </p>
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="border-amber-200/25 text-amber-100">
+                  MODELO FINANCEIRO — {financialModelMode === "HARMONY_COMPAT_V1"
+                    ? "HARMONY COMPAT V1"
+                    : financialModelMode === "TGR_CANONICAL_V2"
+                      ? "TGR CANÔNICO V2"
+                      : "NÃO IDENTIFICADO"}
+                </Badge>
+              </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                 <div>
                   <Label htmlFor="goal-kpi">KPI-meta</Label>
@@ -660,7 +683,8 @@ export default function Scenarios() {
                     </Badge>
                     {result.status === "converged" &&
                     result.result !== null &&
-                    goalResultMatchesSelection ? (
+                    goalResultMatchesSelection &&
+                    goalLeverApplyable ? (
                       <Button
                         variant="outline"
                         className="border-emerald-300/30 bg-emerald-300/5 text-emerald-100 hover:bg-emerald-300/10"
@@ -685,6 +709,15 @@ export default function Scenarios() {
                   </div>
                 ) : null}
               </div>
+              {financialModelMode === "HARMONY_COMPAT_V1" && !goalLeverApplyable ? (
+                <p role="status" className="mt-4 rounded-lg border border-amber-200/20 bg-amber-200/[0.04] p-3 text-xs leading-5 text-amber-100">
+                  Somente prévia: esta alavanca pertence a um domínio autoritativo. No Harmony, aplique apenas CAPEX inicial, custo fixo mensal ou folha mensal; nenhuma branch será criada para esta seleção.
+                </p>
+              ) : financialModelMode === null ? (
+                <p role="alert" className="mt-4 rounded-lg border border-rose-200/20 bg-rose-200/[0.04] p-3 text-xs leading-5 text-rose-100">
+                  Aplicação bloqueada: a metodologia financeira da versão ativa não foi identificada.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
           <Card className="border-white/10 bg-card/80 shadow-none">

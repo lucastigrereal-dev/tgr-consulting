@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import Decimal from "decimal.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { projectVersions } from "../../drizzle/schema";
 import {
@@ -21,6 +22,8 @@ const ids = {
   divergedBranchVersionId: "",
   raceBranchId: "",
   raceBranchVersionId: "",
+  adjustedBranchId: "",
+  adjustedBranchVersionId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -308,13 +311,16 @@ afterAll(async () => {
     sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.baseVersionId}, ${ids.branchId}, ${ids.branchVersionId}) OR tenantId = ${tenantId}`
   );
   await db.execute(
-    sql`DELETE FROM decision_records WHERE versionId IN (${ids.branchVersionId}, ${ids.divergedBranchVersionId}, ${ids.raceBranchVersionId})`
+    sql`DELETE FROM decision_records WHERE versionId IN (${ids.branchVersionId}, ${ids.divergedBranchVersionId}, ${ids.raceBranchVersionId}, ${ids.adjustedBranchVersionId})`
   );
   await db.execute(
     sql`DELETE FROM workflow_events WHERE projectId = ${ids.projectId}`
   );
   await db.execute(
-    sql`DELETE FROM input_values WHERE versionId IN (${ids.baseVersionId}, ${ids.branchVersionId}, ${ids.divergedBranchVersionId}, ${ids.raceBranchVersionId})`
+    sql`DELETE FROM cost_catalog_items WHERE versionId IN (${ids.branchVersionId}, ${ids.divergedBranchVersionId}, ${ids.raceBranchVersionId}, ${ids.adjustedBranchVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId IN (${ids.baseVersionId}, ${ids.branchVersionId}, ${ids.divergedBranchVersionId}, ${ids.raceBranchVersionId}, ${ids.adjustedBranchVersionId})`
   );
   await db.execute(
     sql`DELETE FROM scenario_branches WHERE id = ${ids.branchId}`
@@ -326,6 +332,9 @@ afterAll(async () => {
     sql`DELETE FROM scenario_branches WHERE id = ${ids.raceBranchId}`
   );
   await db.execute(
+    sql`DELETE FROM scenario_branches WHERE id = ${ids.adjustedBranchId}`
+  );
+  await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.branchVersionId}`
   );
   await db.execute(
@@ -333,6 +342,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.raceBranchVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.adjustedBranchVersionId}`
   );
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.baseVersionId}`
@@ -357,7 +369,7 @@ describe("Goal Seek aplicado em branch", () => {
     ids.branchVersionId = scenario.versionId;
     expect(await getFinancialRevision(scenario.versionId)).toBe(0);
 
-    const solved = await owner.goalSeek({
+    const domainOwnedSolved = await owner.goalSeek({
       versionId: created.versionId,
       horizonMonths: 24,
       asOfMonth: 0,
@@ -367,28 +379,72 @@ describe("Goal Seek aplicado em branch", () => {
       lowerBound: "0",
       upperBound: "1000000",
     });
-    expect(solved).toMatchObject({
+    expect(domainOwnedSolved).toMatchObject({
       status: "converged",
       targetKpi: "grossSales",
       variableKey: "averageTicket",
     });
-    expect(solved.result).toMatch(/^\d+\.\d{8}$/);
-    expect(Math.abs(Number(solved.objectiveValue) - 500000)).toBeLessThanOrEqual(
+    expect(domainOwnedSolved.result).toMatch(/^\d+\.\d{8}$/);
+    expect(Math.abs(Number(domainOwnedSolved.objectiveValue) - 500000)).toBeLessThanOrEqual(
       0.0001
     );
-    expect(Math.abs(Number(solved.residual))).toBeLessThanOrEqual(0.0001);
+    expect(Math.abs(Number(domainOwnedSolved.residual))).toBeLessThanOrEqual(0.0001);
+
+    const domainOwnedCommand = {
+      targetVersionId: scenario.versionId,
+      sourceVersionId: created.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+      variableKey: "averageTicket" as const,
+      value: domainOwnedSolved.result!,
+      targetKpi: "grossSales" as const,
+      target: domainOwnedSolved.target,
+      lowerBound: "0",
+      upperBound: "1000000",
+      objectiveValue: domainOwnedSolved.objectiveValue!,
+      residual: domainOwnedSolved.residual!,
+      iterations: domainOwnedSolved.iterations,
+    };
+    await expect(owner.applyGoalSeek(domainOwnedCommand)).rejects.toThrow(
+      "averageTicket é controlada pelo domínio commercial_conditions"
+    );
+
+    const simulatedCapex = await owner.simulateCaptadores({
+      versionId: created.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "0",
+      loadedCostPerCaptadorMonth: "0",
+      capexInitialDelta: "5000",
+    });
+    const solved = await owner.goalSeek({
+      versionId: created.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+      targetKpi: "npv",
+      variableKey: "capexInitial",
+      target: simulatedCapex.after.kpis.npv!,
+      lowerBound: "5000",
+      upperBound: "15000",
+    });
+    expect(solved).toMatchObject({
+      status: "converged",
+      targetKpi: "npv",
+      variableKey: "capexInitial",
+    });
 
     const command = {
       targetVersionId: scenario.versionId,
       sourceVersionId: created.versionId,
       horizonMonths: 24,
       asOfMonth: 0,
-      variableKey: "averageTicket" as const,
+      variableKey: "capexInitial" as const,
       value: solved.result!,
-      targetKpi: "grossSales" as const,
+      targetKpi: "npv" as const,
       target: solved.target,
-      lowerBound: "0",
-      upperBound: "1000000",
+      lowerBound: "5000",
+      upperBound: "15000",
       objectiveValue: solved.objectiveValue!,
       residual: solved.residual!,
       iterations: solved.iterations,
@@ -429,9 +485,9 @@ describe("Goal Seek aplicado em branch", () => {
 
     await expect(
       owner.applyGoalSeek({ ...command, value: "1.00000000" })
-    ).rejects.toThrow("diverge do resultado recalculado");
+    ).rejects.toThrow(/entre 0|diverge do resultado recalculado/);
     expect(
-      (await owner.versionInputs({ versionId: scenario.versionId })).averageTicket
+      (await owner.versionInputs({ versionId: scenario.versionId })).capexInitial
         .value
     ).not.toBe("1.00000000");
 
@@ -445,22 +501,22 @@ describe("Goal Seek aplicado em branch", () => {
     const branchInputs = await owner.versionInputs({
       versionId: scenario.versionId,
     });
-    expect(branchInputs.averageTicket).toMatchObject({
+    expect(branchInputs.capexInitial).toMatchObject({
       status: "provided",
       value: solved.result,
       sourceType: "derived_analysis",
     });
-    expect(branchInputs.averageTicket.sourceRef).toMatch(
+    expect(branchInputs.capexInitial.sourceRef).toMatch(
       /^goal_seek:/
     );
     expect(
       (await owner.versionInputs({ versionId: created.versionId }))
-        .averageTicket.value
-    ).toBe("1000");
+        .capexInitial.value
+    ).toBe("5000");
     const decisions = await owner.decisions({ versionId: scenario.versionId });
     expect(decisions).toHaveLength(1);
     expect(decisions[0]).toMatchObject({
-      inputKey: "averageTicket",
+      inputKey: "capexInitial",
       decisionValue: solved.result,
       status: "accepted",
     });
@@ -474,6 +530,80 @@ describe("Goal Seek aplicado em branch", () => {
     expect(
       await owner.decisions({ versionId: scenario.versionId })
     ).toHaveLength(1);
+    const appliedSnapshot = await owner.calculate({
+      versionId: scenario.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+    });
+    expect(appliedSnapshot.kpis.npv).toBe(solved.objectiveValue);
+    expect(appliedSnapshot.kpis.npv).not.toBe(simulatedCapex.before.kpis.npv);
+
+    const adjustedScenario = await owner.createScenario({
+      baseVersionId: created.versionId,
+      name: "Branch Goal Seek com CAPEX incremental",
+      reason: "Provar que o ajuste do catálogo não é somado duas vezes ao aplicar Goal Seek.",
+    });
+    ids.adjustedBranchId = adjustedScenario.branchId;
+    ids.adjustedBranchVersionId = adjustedScenario.versionId;
+    await owner.createCostCatalogItem({
+      versionId: adjustedScenario.versionId,
+      category: "operations",
+      name: "Implantação incremental Goal Seek",
+      frequency: "one_time",
+      cashflowTreatment: "incremental",
+      amountText: "1000",
+      status: "provided",
+      sourceType: "current_document",
+      sourceRef: "igr.goalseek.database.integration.test:incremental-capex",
+    });
+    const adjustedSimulation = await owner.simulateCaptadores({
+      versionId: adjustedScenario.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "0",
+      loadedCostPerCaptadorMonth: "0",
+      capexInitialDelta: "5000",
+    });
+    const adjustedSolved = await owner.goalSeek({
+      versionId: adjustedScenario.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+      targetKpi: "npv",
+      variableKey: "capexInitial",
+      target: adjustedSimulation.after.kpis.npv!,
+      lowerBound: "0",
+      upperBound: "50000",
+    });
+    expect(adjustedSolved.status).toBe("converged");
+    const adjustedCommand = {
+      targetVersionId: adjustedScenario.versionId,
+      sourceVersionId: adjustedScenario.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+      variableKey: "capexInitial" as const,
+      value: adjustedSolved.result!,
+      targetKpi: "npv" as const,
+      target: adjustedSolved.target,
+      lowerBound: "0",
+      upperBound: "50000",
+      objectiveValue: adjustedSolved.objectiveValue!,
+      residual: adjustedSolved.residual!,
+      iterations: adjustedSolved.iterations,
+    };
+    await owner.applyGoalSeek(adjustedCommand);
+    const adjustedBranchInputs = await owner.versionInputs({
+      versionId: adjustedScenario.versionId,
+    });
+    expect(adjustedBranchInputs.capexInitial.value).toBe(
+      new Decimal(adjustedSolved.result!).minus("1000").toFixed(8)
+    );
+    const adjustedSnapshot = await owner.calculate({
+      versionId: adjustedScenario.versionId,
+      horizonMonths: 24,
+      asOfMonth: 0,
+    });
+    expect(adjustedSnapshot.kpis.npv).toBe(adjustedSolved.objectiveValue);
 
     const divergedBranch = await owner.createScenario({
       baseVersionId: created.versionId,

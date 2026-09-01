@@ -6,15 +6,19 @@ import {
   calculationSnapshots,
   costCatalogItems,
   exportArtifacts,
+  formulaDefinitionProvenance,
   historicalBenchmarks,
   kpiMemoryRecords,
+  projectVersions,
   workflowEvents,
 } from "../drizzle/schema";
+import { HARMONY_COMPAT_FORMULA_SET_V1 } from "../shared/financial/formulas";
 import { FinanceDecimal } from "../shared/financial/engine";
 import type { CommercialOperationsDefinition } from "../shared/financial/commercialOperations";
 import type { FinancialInputSnapshot } from "../shared/financial/types";
 import {
   approveSnapshotForTenant,
+  calculateCapitalEnvelopeForTenant,
   createCalculationSnapshot,
   createCostCatalogItemForTenant,
   createProjectForTenant,
@@ -28,6 +32,9 @@ import {
   getProjectContextForTenant,
   getScenarioComparisonForTenant,
   getProjectForTenant,
+  promoteMeetingSimulationToScenarioForTenant,
+  runProjectGoalSeekForTenant,
+  simulateCaptadorChangeForTenant,
   listCommercialConditionsForTenant,
   listCostCatalogForTenant,
   listHistoricalBenchmarksForTenant,
@@ -77,6 +84,27 @@ const ids = {
   ordinalScenarioVersionId: "",
   inputRaceProjectId: "",
   inputRaceVersionId: "",
+  harmonyProjectId: "",
+  harmonyVersionId: "",
+  harmonySnapshotId: "",
+  harmonyBlockedSnapshotId: "",
+  harmonyScenarioVersionId: "",
+  harmonyScenarioSnapshotId: "",
+  harmonyBranchId: "",
+  meetingBranchId: "",
+  meetingScenarioVersionId: "",
+  meetingScenarioSnapshotId: "",
+  collisionProjectA: "",
+  collisionProjectB: "",
+  collisionVersionA: "",
+  collisionVersionB: "",
+  collisionBlockedA: "",
+  collisionBlockedB: "",
+  collisionValidA: "",
+  collisionValidB: "",
+  collisionBranchId: "",
+  collisionScenarioVersionId: "",
+  collisionScenarioSnapshotId: "",
 };
 const provided = (value: string) => ({
   status: "provided" as const,
@@ -167,7 +195,18 @@ const commercialOperationsDefinition: CommercialOperationsDefinition = {
 
 async function seedAuthoritativeCommercialDomains(
   versionId: string,
-  listPrice: string
+  listPrice: string,
+  overrides?: {
+    unitQuantity?: number;
+    sharesPerUnit?: number;
+    entry?: string;
+    balanceInstallments?: number;
+    balanceFirstDueMonth?: number;
+    approaches?: string;
+    saleRate?: string;
+    cancellationRate?: string;
+    delinquencyRate?: string;
+  }
 ) {
   await replaceProductCatalogForTenant({
     tenantId,
@@ -178,8 +217,8 @@ async function seedAuthoritativeCommercialDomains(
       id: "default-sku",
       name: "Produto de integração",
       unitType: "Cota",
-      unitQuantity: 100,
-      sharesPerUnit: 100,
+      unitQuantity: overrides?.unitQuantity ?? 100,
+      sharesPerUnit: overrides?.sharesPerUnit ?? 100,
       grossSoldShares: 0,
       returnedShares: 0,
       blockedShares: 0,
@@ -202,12 +241,16 @@ async function seedAuthoritativeCommercialDomains(
       name: "Condição de integração",
       listPrice,
       discount: "0",
-      entry: { total: "100", installments: 1, firstDueMonth: 0 },
+      entry: {
+        total: overrides?.entry ?? "100",
+        installments: overrides?.entry ? 8 : 1,
+        firstDueMonth: 0,
+      },
       balance: {
-        principal: new FinanceDecimal(listPrice).minus(100).toFixed(8),
-        installments: 1,
-        graceMonths: 0,
-        firstDueMonth: 1,
+        principal: new FinanceDecimal(listPrice).minus(overrides?.entry ?? "100").toFixed(8),
+        installments: overrides?.balanceInstallments ?? 1,
+        graceMonths: overrides?.balanceFirstDueMonth ?? 0,
+        firstDueMonth: overrides?.balanceFirstDueMonth ?? 1,
       },
       explicitCharges: "0",
       correctionRate: "0",
@@ -224,14 +267,14 @@ async function seedAuthoritativeCommercialDomains(
     sourceRef: "db.integration.test:receivables-policy",
     policy: {
       cancellationCurve: {
-        d7: "0.01",
-        d30: "0.02",
-        d60: "0.03",
-        d90: "0.04",
-        d180: "0.05",
-        lifetime: "0.06",
+        d7: overrides?.cancellationRate ?? "0.01",
+        d30: overrides?.cancellationRate ?? "0.02",
+        d60: overrides?.cancellationRate ?? "0.03",
+        d90: overrides?.cancellationRate ?? "0.04",
+        d180: overrides?.cancellationRate ?? "0.05",
+        lifetime: overrides?.cancellationRate ?? "0.06",
       },
-      delinquencyRate: "0.08",
+      delinquencyRate: overrides?.delinquencyRate ?? "0.08",
       cureRates: {
         days1To30: "0.40",
         days31To60: "0.30",
@@ -258,14 +301,14 @@ async function seedAuthoritativeCommercialDomains(
         activationCost: "1000",
         monthlyFixedCost: "500",
         costPerSale: "10",
-        approaches: "100",
+        approaches: overrides?.approaches ?? "100",
         researchRate: "1",
         qualificationRate: "1",
         invitationRate: "1",
         appointmentRate: "1",
         showRate: "1",
         tourRate: "1",
-        saleRate: "0.1",
+        saleRate: overrides?.saleRate ?? "0.1",
         cannibalizationRate: "0",
         cashflowTreatment: "included_in_project_totals",
       },
@@ -292,7 +335,7 @@ afterAll(async () => {
     sql`DELETE FROM project_component_records WHERE sourceRef = ${"db.integration.test:commercial-operations"}`
   );
   await db.execute(
-    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId}, ${ids.missingDomainProjectId}, ${ids.missingDomainVersionId}, ${ids.missingDomainSnapshotId}, ${ids.missingDomainChangedSnapshotId}, ${ids.inputRaceProjectId}, ${ids.inputRaceVersionId})`
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.projectId}, ${ids.versionId}, ${ids.snapshotId}, ${ids.scenarioVersionId}, ${ids.scenarioSnapshotId}, ${ids.meetingBranchId}, ${ids.meetingScenarioVersionId}, ${ids.meetingScenarioSnapshotId}, ${ids.rollbackProjectId}, ${ids.rollbackVersionId}, ${ids.rollbackSnapshotId}, ${ids.snapshotRollbackProjectId}, ${ids.snapshotRollbackVersionId}, ${ids.baselineRollbackProjectId}, ${ids.baselineRollbackVersionId}, ${ids.baselineRollbackSnapshotId}, ${ids.exportRollbackProjectId}, ${ids.exportRollbackVersionId}, ${ids.exportRollbackSnapshotId}, ${ids.scenarioRollbackProjectId}, ${ids.scenarioRollbackVersionId}, ${ids.productProjectId}, ${ids.productVersionId}, ${ids.domainBlockedProjectId}, ${ids.domainBlockedVersionId}, ${ids.domainBlockedSnapshotId}, ${ids.missingDomainProjectId}, ${ids.missingDomainVersionId}, ${ids.missingDomainSnapshotId}, ${ids.missingDomainChangedSnapshotId}, ${ids.inputRaceProjectId}, ${ids.inputRaceVersionId})`
   );
   await db.execute(
     sql`DELETE FROM historical_benchmarks WHERE tenantId = ${tenantId} AND sourceRef = ${`snapshot:${ids.snapshotHash}`}`
@@ -319,6 +362,9 @@ afterAll(async () => {
     sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.scenarioSnapshotId}`
   );
   await db.execute(
+    sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.meetingScenarioSnapshotId}`
+  );
+  await db.execute(
     sql`DELETE FROM kpi_memory_records WHERE snapshotId = ${ids.rollbackSnapshotId}`
   );
   await db.execute(
@@ -335,6 +381,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.scenarioVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.meetingScenarioVersionId}`
   );
   await db.execute(
     sql`DELETE FROM calculation_snapshots WHERE projectVersionId = ${ids.rollbackVersionId}`
@@ -365,6 +414,9 @@ afterAll(async () => {
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.scenarioVersionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId = ${ids.meetingScenarioVersionId}`
   );
   await db.execute(
     sql`DELETE FROM input_values WHERE versionId = ${ids.rollbackVersionId}`
@@ -430,7 +482,62 @@ afterAll(async () => {
     sql`DELETE FROM scenario_branches WHERE projectId = ${ids.ordinalProjectId}`
   );
   await db.execute(
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.harmonyProjectId}, ${ids.harmonyVersionId}, ${ids.harmonySnapshotId}, ${ids.harmonyBlockedSnapshotId}, ${ids.harmonyScenarioVersionId}, ${ids.harmonyScenarioSnapshotId}, ${ids.harmonyBranchId})`
+  );
+  await db.execute(
+    sql`DELETE km FROM kpi_memory_records km INNER JOIN calculation_snapshots cs ON km.snapshotId = cs.id WHERE cs.projectVersionId IN (${ids.harmonyVersionId}, ${ids.harmonyScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId IN (${ids.harmonyVersionId}, ${ids.harmonyScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM cost_catalog_items WHERE versionId IN (${ids.harmonyVersionId}, ${ids.harmonyScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId IN (${ids.harmonyVersionId}, ${ids.harmonyScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId = ${ids.harmonyProjectId}`
+  );
+  await db.execute(
+    sql`DELETE FROM scenario_branches WHERE projectId = ${ids.harmonyProjectId}`
+  );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE projectId = ${ids.harmonyProjectId}`
+  );
+  await db.execute(sql`DELETE FROM projects WHERE id = ${ids.harmonyProjectId}`);
+  await db.execute(
+    sql`DELETE FROM audit_events WHERE entityId IN (${ids.collisionProjectA}, ${ids.collisionProjectB}, ${ids.collisionVersionA}, ${ids.collisionVersionB}, ${ids.collisionBlockedA}, ${ids.collisionBlockedB}, ${ids.collisionValidA}, ${ids.collisionValidB}, ${ids.collisionBranchId}, ${ids.collisionScenarioVersionId}, ${ids.collisionScenarioSnapshotId})`
+  );
+  await db.execute(
+    sql`DELETE km FROM kpi_memory_records km INNER JOIN calculation_snapshots cs ON km.snapshotId = cs.id WHERE cs.projectVersionId IN (${ids.collisionVersionA}, ${ids.collisionVersionB}, ${ids.collisionScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM calculation_snapshots WHERE projectVersionId IN (${ids.collisionVersionA}, ${ids.collisionVersionB}, ${ids.collisionScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM project_component_records WHERE versionId IN (${ids.collisionVersionA}, ${ids.collisionVersionB}, ${ids.collisionScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM input_values WHERE versionId IN (${ids.collisionVersionA}, ${ids.collisionVersionB}, ${ids.collisionScenarioVersionId})`
+  );
+  await db.execute(
+    sql`DELETE FROM workflow_events WHERE projectId IN (${ids.collisionProjectA}, ${ids.collisionProjectB})`
+  );
+  await db.execute(
+    sql`DELETE FROM scenario_branches WHERE projectId = ${ids.collisionProjectA}`
+  );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE projectId IN (${ids.collisionProjectA}, ${ids.collisionProjectB})`
+  );
+  await db.execute(
+    sql`DELETE FROM projects WHERE id IN (${ids.collisionProjectA}, ${ids.collisionProjectB})`
+  );
+  await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.versionId}`
+  );
+  await db.execute(
+    sql`DELETE FROM project_versions WHERE id = ${ids.meetingScenarioVersionId}`
   );
   await db.execute(
     sql`DELETE FROM project_versions WHERE id = ${ids.rollbackVersionId}`
@@ -492,6 +599,223 @@ afterAll(async () => {
 });
 
 describe("IGR database integration", () => {
+  it("escopa snapshots idênticos por versão sem remover a unicidade global", async () => {
+    const first = await createProjectForTenant({
+      tenantId, actorId, name: "[TEST] Snapshot scope A", inputs,
+    });
+    const second = await createProjectForTenant({
+      tenantId, actorId, name: "[TEST] Snapshot scope B", inputs,
+    });
+    ids.collisionProjectA = first.projectId;
+    ids.collisionProjectB = second.projectId;
+    ids.collisionVersionA = first.versionId;
+    ids.collisionVersionB = second.versionId;
+
+    const blockedA = await createCalculationSnapshot({
+      tenantId, actorId, versionId: first.versionId, horizonMonths: 24,
+    });
+    const blockedB = await createCalculationSnapshot({
+      tenantId, actorId, versionId: second.versionId, horizonMonths: 24,
+    });
+    ids.collisionBlockedA = blockedA.id;
+    ids.collisionBlockedB = blockedB.id;
+    expect(blockedA.snapshotHash).not.toBe(blockedB.snapshotHash);
+
+    await seedAuthoritativeCommercialDomains(first.versionId, "1000");
+    await seedAuthoritativeCommercialDomains(second.versionId, "1000");
+    const validA = await createCalculationSnapshot({
+      tenantId, actorId, versionId: first.versionId, horizonMonths: 24,
+    });
+    const validB = await createCalculationSnapshot({
+      tenantId, actorId, versionId: second.versionId, horizonMonths: 24,
+    });
+    ids.collisionValidA = validA.id;
+    ids.collisionValidB = validB.id;
+    expect(validA.snapshotHash).not.toBe(validB.snapshotHash);
+
+    const scenario = await createScenarioForTenant({
+      tenantId, actorId, baseVersionId: first.versionId,
+      name: "Clone financeiro idêntico", reason: "Provar escopo por versão.",
+    });
+    ids.collisionBranchId = scenario.branchId;
+    ids.collisionScenarioVersionId = scenario.versionId;
+    const scenarioSnapshot = await createCalculationSnapshot({
+      tenantId, actorId, versionId: scenario.versionId, horizonMonths: 24,
+    });
+    ids.collisionScenarioSnapshotId = scenarioSnapshot.id;
+    expect(scenarioSnapshot.status).toBe("valid");
+    expect(scenarioSnapshot.snapshotHash).not.toBe(validA.snapshotHash);
+    expect(new Set([
+      blockedA.snapshotHash, blockedB.snapshotHash,
+      validA.snapshotHash, validB.snapshotHash, scenarioSnapshot.snapshotHash,
+    ]).size).toBe(5);
+  }, 30_000);
+
+  it("persiste Harmony, calcula e reutiliza snapshot sem duplicar efeitos, e herda o modo no cenário", async () => {
+    const harmonyInputs: FinancialInputSnapshot = {
+      ...structuredClone(inputs),
+      qualifiedCouplesMonth1: provided("500"),
+      conversionRate: provided("0.20"),
+      averageTicket: provided("28000"),
+      collectionRate: provided("1"),
+      cancellationRate: provided("0.30"),
+      variableCostRate: provided("0"),
+      partnerShareRate: provided("0"),
+      fixedCostMonthly: {
+        ...provided("117203"),
+        sourceRef: "TEST_DATA:db-integration-approval-gate",
+      },
+      payrollMonthly: provided("0"),
+      capexInitial: provided("985500"),
+      entryValuePerContract: provided("3200"),
+      paymentCardViewMixRate: provided("0"),
+      paymentBoletoMixRate: provided("1"),
+      discountRateAnnual: provided("0.18"),
+    };
+    const created = await createProjectForTenant({
+      tenantId,
+      actorId,
+      name: "[TEST] Harmony persistido",
+      financialModelMode: "HARMONY_COMPAT_V1",
+      inputs: harmonyInputs,
+    });
+    ids.harmonyProjectId = created.projectId;
+    ids.harmonyVersionId = created.versionId;
+    expect(created.formulaSetVersionId).toBe(HARMONY_COMPAT_FORMULA_SET_V1.id);
+    expect(created.financialModelMode).toBe("HARMONY_COMPAT_V1");
+    const modelDb = await getDb();
+    if (!modelDb) throw new Error("Banco de integração indisponível.");
+    const harmonyProvenance = await modelDb
+      .select({ sourceRef: formulaDefinitionProvenance.sourceRef })
+      .from(formulaDefinitionProvenance)
+      .where(eq(formulaDefinitionProvenance.formulaSetVersionId, HARMONY_COMPAT_FORMULA_SET_V1.id));
+    expect(harmonyProvenance).toHaveLength(HARMONY_COMPAT_FORMULA_SET_V1.definitions.length);
+    expect(harmonyProvenance.every(item => item.sourceRef.startsWith("harmony_compat_v1."))).toBe(true);
+
+    const blocked = await createCalculationSnapshot({
+      tenantId, actorId, versionId: created.versionId, horizonMonths: 120,
+    });
+    ids.harmonyBlockedSnapshotId = blocked.id;
+    expect(blocked).toMatchObject({
+      status: "blocked_by_pending_inputs",
+      financialModelMode: "HARMONY_COMPAT_V1",
+    });
+    const repeatedBlocked = await createCalculationSnapshot({
+      tenantId, actorId, versionId: created.versionId, horizonMonths: 120,
+    });
+    expect(repeatedBlocked.id).toBe(blocked.id);
+
+    await seedAuthoritativeCommercialDomains(created.versionId, "28000", {
+      unitQuantity: 60,
+      sharesPerUnit: 52,
+      entry: "3200",
+      balanceInstallments: 84,
+      balanceFirstDueMonth: 4,
+      approaches: "500",
+      saleRate: "0.2",
+      cancellationRate: "0.30",
+      delinquencyRate: "0.25",
+    });
+
+    const snapshot = await createCalculationSnapshot({
+      tenantId, actorId, versionId: created.versionId, horizonMonths: 120,
+    });
+    ids.harmonySnapshotId = snapshot.id;
+    expect(snapshot).toMatchObject({
+      status: "valid",
+      financialModelMode: "HARMONY_COMPAT_V1",
+      formulaSetVersion: HARMONY_COMPAT_FORMULA_SET_V1.semanticVersion,
+      engineVersion: HARMONY_COMPAT_FORMULA_SET_V1.engineVersion,
+    });
+    expect(snapshot.kpis.sellOutMonth).toBe("45.00000000");
+    expect(snapshot.compatibilityEvidence).toBeTruthy();
+    await expect(approveSnapshotForTenant({
+      tenantId,
+      actorId,
+      snapshotId: snapshot.id,
+      rationale: "TEST_DATA jamais pode ser promovido a decisão Harmony.",
+    })).rejects.toThrow(
+      "Snapshot Harmony com sourceRef TEST_DATA não pode ser aprovado"
+    );
+    expect(
+      await modelDb
+        .select({ id: approvalDecisions.id })
+        .from(approvalDecisions)
+        .where(eq(approvalDecisions.snapshotId, snapshot.id))
+    ).toHaveLength(0);
+    expect(
+      await modelDb
+        .select({ id: workflowEvents.id })
+        .from(workflowEvents)
+        .where(and(
+          eq(workflowEvents.versionId, created.versionId),
+          eq(workflowEvents.action, "snapshot.approved")
+        ))
+    ).toHaveLength(0);
+    expect(await calculateCapitalEnvelopeForTenant({
+      tenantId, versionId: created.versionId, horizonMonths: 120,
+      availableCapital: "2000000",
+    })).toMatchObject({ requiredCapital: snapshot.kpis.capitalRequired });
+    expect(await runProjectGoalSeekForTenant({
+      tenantId, versionId: created.versionId, horizonMonths: 120,
+      targetKpi: "npv", variableKey: "qualifiedCouplesMonth1",
+      target: snapshot.kpis.npv!, lowerBound: "500", upperBound: "500",
+    })).toMatchObject({
+      status: "converged",
+      result: "500.00000000",
+      objectiveValue: snapshot.kpis.npv,
+    });
+    await expect(simulateCaptadorChangeForTenant({
+      tenantId, versionId: created.versionId, horizonMonths: 120,
+      captadorDelta: "0", qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0", variableCostMonthlyDelta: "1",
+    })).rejects.toThrow(
+      "variableCostMonthlyDelta não é suportada no modo HARMONY_COMPAT_V1"
+    );
+
+    const db = await getDb();
+    if (!db) throw new Error("Banco de integração indisponível.");
+    const beforeMemory = await db.select({ id: kpiMemoryRecords.id }).from(kpiMemoryRecords).where(eq(kpiMemoryRecords.snapshotId, snapshot.id));
+    const repeated = await createCalculationSnapshot({ tenantId, actorId, versionId: created.versionId, horizonMonths: 120 });
+    expect(repeated.id).toBe(snapshot.id);
+    expect(await db.select({ id: kpiMemoryRecords.id }).from(kpiMemoryRecords).where(eq(kpiMemoryRecords.snapshotId, snapshot.id))).toHaveLength(beforeMemory.length);
+    expect(await db.select({ id: workflowEvents.id }).from(workflowEvents).where(and(eq(workflowEvents.versionId, created.versionId), eq(workflowEvents.action, "snapshot.submitted_for_review")))).toHaveLength(1);
+    expect(await db.select({ id: auditEvents.id }).from(auditEvents).where(and(eq(auditEvents.entityId, snapshot.id), eq(auditEvents.action, "snapshot.created")))).toHaveLength(1);
+
+    const simulation = await simulateCaptadorChangeForTenant({
+      tenantId, versionId: created.versionId, horizonMonths: 120, captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25", loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "120",
+    });
+    expect(simulation.financialModelMode).toBe("HARMONY_COMPAT_V1");
+    for (const key of ["capitalRequired", "npv", "irrAnnual", "paybackMonths", "sellOutMonth"] as const)
+      expect(simulation.after.kpis[key]).not.toBe(simulation.before.kpis[key]);
+    expect((await getInputsForVersion(created.versionId)).qualifiedCouplesMonth1.value).toBe("500");
+
+    const scenario = await promoteMeetingSimulationToScenarioForTenant({
+      tenantId, actorId, versionId: created.versionId,
+      baseSnapshotId: snapshot.id, horizonMonths: 120,
+      captadorDelta: "0", qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0", targetGrossSalesMonth1: "120",
+      name: "Harmony 120 vendas", reason: "Provar herança estrita do modo.",
+      sourceRef: "db.integration.test:harmony-meeting",
+    });
+    ids.harmonyScenarioVersionId = scenario.versionId;
+    ids.harmonyBranchId = scenario.branchId;
+    expect((await db.select().from(projectVersions).where(eq(projectVersions.id, scenario.versionId)).limit(1))[0]?.formulaSetVersionId)
+      .toBe(HARMONY_COMPAT_FORMULA_SET_V1.id);
+    const scenarioSnapshot = await createCalculationSnapshot({
+      tenantId, actorId, versionId: scenario.versionId, horizonMonths: 120,
+    });
+    ids.harmonyScenarioSnapshotId = scenarioSnapshot.id;
+    expect(scenarioSnapshot.financialModelMode).toBe("HARMONY_COMPAT_V1");
+    expect(scenarioSnapshot.snapshotHash).not.toBe(snapshot.snapshotHash);
+    expect(scenarioSnapshot.kpis.sellOutMonth).not.toBe(snapshot.kpis.sellOutMonth);
+    expect(
+      (await getScenarioComparisonForTenant(created.projectId, tenantId))
+        .map(entry => entry.financialModelMode)
+    ).toEqual(["HARMONY_COMPAT_V1", "HARMONY_COMPAT_V1"]);
+  }, 30_000);
   it("seleciona o snapshot realmente mais recente por ordinal monotônico mesmo no mesmo segundo", async () => {
     const created = await createProjectForTenant({
       tenantId,
@@ -1303,6 +1627,99 @@ describe("IGR database integration", () => {
       (await getExportEligibilityForTenant(snapshot.id, tenantId)).eligible
     ).toBe(false);
 
+    const meetingSimulation = await simulateCaptadorChangeForTenant({
+      tenantId,
+      versionId: created.versionId,
+      horizonMonths: 24,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "12",
+      averageTicketDelta: "100",
+      fixedCostMonthlyDelta: "300",
+      payrollMonthlyDelta: "200",
+      capexInitialDelta: "400",
+    });
+    expect(meetingSimulation.after).toMatchObject({
+      qualifiedCouplesMonth1: "120.00000000",
+      averageTicket: "1200.00000000",
+      fixedCostMonthly: "13300.00000000",
+      payrollMonthly: "1200.00000000",
+      capexInitial: "5400.00000000",
+    });
+    const promotedMeeting = await promoteMeetingSimulationToScenarioForTenant({
+      tenantId,
+      actorId,
+      versionId: created.versionId,
+      baseSnapshotId: snapshot.id,
+      horizonMonths: 24,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "12",
+      averageTicketDelta: "100",
+      fixedCostMonthlyDelta: "300",
+      payrollMonthlyDelta: "200",
+      capexInitialDelta: "400",
+      name: "[TEST] Reproduz simulação de reunião",
+      reason: "Provar preço autoritativo e custo-base normalizado.",
+      sourceRef: "db.integration.test:meeting-promotion",
+    });
+    ids.meetingBranchId = promotedMeeting.branchId;
+    ids.meetingScenarioVersionId = promotedMeeting.versionId;
+    expect(promotedMeeting.changedInputKeys).not.toEqual(
+      expect.arrayContaining(["qualifiedCouplesMonth1", "averageTicket"])
+    );
+    const promotedInputs = await getInputsForVersion(
+      promotedMeeting.versionId
+    );
+    expect(promotedInputs).toMatchObject({
+      qualifiedCouplesMonth1: { value: "100" },
+      averageTicket: { value: "1100" },
+      fixedCostMonthly: { value: "1300.00000000" },
+      payrollMonthly: { value: "1200.00000000" },
+      capexInitial: { value: "5400.00000000" },
+    });
+    expect(
+      await listCommercialConditionsForTenant(
+        promotedMeeting.versionId,
+        tenantId
+      )
+    ).toEqual([
+      expect.objectContaining({
+        condition: expect.objectContaining({
+          listPrice: "1200.00000000",
+          balance: expect.objectContaining({ principal: "1100.00000000" }),
+        }),
+        reconciliation: expect.objectContaining({ status: "valid" }),
+      }),
+    ]);
+    expect(
+      (await getProductCatalogForTenant(
+        promotedMeeting.versionId,
+        tenantId,
+        0
+      )).evaluation.skus[0]?.activePrice
+    ).toBe("1200.00000000");
+    const promotedMeetingSnapshot = await createCalculationSnapshot({
+      tenantId,
+      actorId,
+      versionId: promotedMeeting.versionId,
+      horizonMonths: 24,
+    });
+    ids.meetingScenarioSnapshotId = promotedMeetingSnapshot.id;
+    expect(promotedMeetingSnapshot.status).toBe("valid");
+    expect(promotedMeetingSnapshot.effectiveInputs).toMatchObject({
+      qualifiedCouplesMonth1: { value: "120.00000000" },
+      averageTicket: { value: "1200.00000000" },
+      fixedCostMonthly: { value: "13300.00000000" },
+      payrollMonthly: { value: "1200.00000000" },
+      capexInitial: { value: "5400.00000000" },
+    });
+    expect(promotedMeetingSnapshot.kpis).toEqual(
+      meetingSimulation.after.kpis
+    );
+
     const initialKpiMemory = await db
       .select({ id: kpiMemoryRecords.id })
       .from(kpiMemoryRecords)
@@ -1489,7 +1906,10 @@ describe("IGR database integration", () => {
       tenantId
     );
     expect(context.project.status).toBe("baseline");
-    expect(context.versions[0]?.isImmutable).toBe(true);
+    expect(
+      context.versions.find(version => version.id === created.versionId)
+        ?.isImmutable
+    ).toBe(true);
     expect(
       (await getExportEligibilityForTenant(snapshot.id, tenantId)).eligible
     ).toBe(true);

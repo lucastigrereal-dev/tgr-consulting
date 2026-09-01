@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
+  formulaSetVersionId: "igr-core-formulas-v1-9",
   goalResult: null as null | {
     status:
       | "converged"
@@ -50,6 +51,7 @@ vi.mock("@/lib/trpc", () => ({
                 state: "in_review",
                 kind: "standard",
                 isImmutable: false,
+                formulaSetVersionId: state.formulaSetVersionId,
               },
             ],
           },
@@ -100,6 +102,7 @@ import Scenarios, {
 describe("Scenarios", () => {
   beforeEach(() => {
     state.goalResult = null;
+    state.formulaSetVersionId = "igr-core-formulas-v1-9";
   });
 
   it("prefere baseline, depois approved, in_review e por último draft como versão-base", () => {
@@ -144,13 +147,13 @@ describe("Scenarios", () => {
     state.goalResult = {
       status: "unreachable",
       targetKpi: "npv",
-      variableKey: "qualifiedCouplesMonth1",
+      variableKey: "capexInitial",
       target: "0.00000000",
       result: null,
       objectiveValue: null,
       residual: null,
       lowerBound: "0.00000000",
-      upperBound: "100000.00000000",
+      upperBound: "1000000000.00000000",
       iterations: 0,
     };
     expect(renderToStaticMarkup(<Scenarios />)).not.toContain(
@@ -166,6 +169,26 @@ describe("Scenarios", () => {
       iterations: 7,
     };
     expect(renderToStaticMarkup(<Scenarios />)).toContain("Aplicar em branch");
+  });
+
+  it("permite aplicar CAPEX no modo Harmony antes de criar branch", () => {
+    state.formulaSetVersionId = "harmony-compat-formulas-v1";
+    state.goalResult = {
+      status: "converged",
+      targetKpi: "npv",
+      variableKey: "capexInitial",
+      target: "0.00000000",
+      result: "42.00000000",
+      objectiveValue: "0.00000000",
+      residual: "0.00000000",
+      lowerBound: "0.00000000",
+      upperBound: "1000000000.00000000",
+      iterations: 7,
+    };
+
+    const html = renderToStaticMarkup(<Scenarios />);
+    expect(html).toContain("HARMONY COMPAT V1");
+    expect(html).toContain("Aplicar em branch");
   });
 
   it("bloqueia aplicação quando o resultado convergido não pertence à seleção atual", () => {

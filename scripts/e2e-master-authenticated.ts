@@ -1,7 +1,13 @@
 import { chromium, type Browser, type Page } from "playwright-core";
 import JSZip from "jszip";
+import {
+  PDFArray,
+  PDFDocument,
+  PDFRawStream,
+  decodePDFRawStream,
+} from "pdf-lib";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,7 +18,8 @@ import { LIVE_DOCUMENT_CHAPTERS } from "../client/src/lib/liveDocumentStructure"
 import { COOKIE_NAME } from "../shared/const";
 import type { FinancialInputSnapshot } from "../shared/financial/types";
 import { GOLDEN_NATAL_PONTA_NEGRA_2026 } from "../shared/financial/natalGolden";
-import goldenNatalExpected from "../golden/natal-ponta-negra-2026.expected.json";
+import { createHarmonyNatalInputs } from "../shared/financial/harmonyNatal";
+import harmonyNatalReference from "../golden/natal-harmony-master-v1.reference.json";
 
 type Evidence = {
   id: number;
@@ -107,6 +114,52 @@ function baseInputs(overrides: Partial<Record<keyof FinancialInputSnapshot, Retu
     discountRateAnnual: provided("0.12"),
     ...overrides,
   };
+}
+
+function pdfVisibleText(pdf: PDFDocument, pageNumber = 0) {
+  const contents = pdf.getPages()[pageNumber]?.node.Contents();
+  if (!(contents instanceof PDFArray)) return "";
+  const operators = Array.from({ length: contents.size() }, (_, index) => {
+    const stream = pdf.context.lookup(contents.get(index), PDFRawStream);
+    return Buffer.from(decodePDFRawStream(stream).decode()).toString("latin1");
+  }).join("\n");
+  return [...operators.matchAll(/<([0-9A-F]+)>\s*Tj/g)]
+    .map(match => Buffer.from(match[1], "hex").toString("latin1"))
+    .join("\n");
+}
+
+async function zipEntriesText(archive: JSZip, pattern: RegExp) {
+  return (
+    await Promise.all(
+      Object.values(archive.files)
+        .filter(file => pattern.test(file.name))
+        .map(file => file.async("string"))
+    )
+  ).join("\n");
+}
+
+function assertVisibleHarmonyIdentity(
+  artifact: "PDF" | "PPTX" | "XLSX",
+  visibleText: string,
+  snapshot: {
+    snapshotHash: string;
+    formulaSetVersion: string;
+    engineVersion: string;
+  }
+) {
+  const expected = [
+    "HARMONY_COMPAT_V1",
+    "Harmony Compatível V1",
+    snapshot.formulaSetVersion,
+    snapshot.engineVersion,
+    snapshot.snapshotHash,
+  ];
+  for (const value of expected) {
+    assert(
+      visibleText.includes(value),
+      `${artifact} Harmony não expôs a proveniência visível esperada: ${value}.`
+    );
+  }
 }
 
 function markCase(id: number, evidence: string) {
@@ -500,12 +553,67 @@ async function main() {
 
     await verifyUi(page, app.baseUrl, "/builder", /Montagem|Produto|Condição/i);
     await page.screenshot({ path: path.join(tempRoot, "screenshots", "01-builder-authenticated.png"), fullPage: true });
+    const harmonyUiProjectName = `Projeto Único Ponta Negra — Harmony UI ${Date.now()}`;
+    const natalSourceRef = harmonyNatalReference.authority.availableSource;
+    await page.locator("#financial-model-mode").selectOption("HARMONY_COMPAT_V1");
+    const cotiaNatalValues: Record<string, string> = {
+      nomeProjeto: harmonyUiProjectName,
+      nomeProduto: "Cota Ponta Negra",
+      praca: "Natal/RN",
+      dataBase: "09/2026",
+      inicioOperacao: "01/2027",
+      horizonteMeses: "120",
+      valorCota: "28000",
+      valorEntrada: "3200",
+      parcelasEntrada: "8",
+      primeiroVencimentoEntradaMes: "0",
+      parcelasSaldo: "84",
+      carenciaSaldoMeses: "4",
+      primeiroVencimentoSaldoMes: "4",
+      cotasPorApartamento: "52",
+      totalApartamentos: "60",
+      cotasBloqueadas: "0",
+      cotasVendidasAcumuladas: "0",
+      cotasRetornadas: "0",
+      cotasVendidasMes: "100",
+      eficiencia: "20",
+      taxaCancelamento: "30",
+      percentualAdimplente: "75",
+      descontoComercial: "0",
+      encargosExplicitos: "0",
+      toleranciaMaterialidade: "0.01",
+    };
+    for (const [key, value] of Object.entries(cotiaNatalValues)) {
+      await page.locator(`#cotia-${key}`).fill(value);
+    }
+    await page.locator("#cotia-sourceRef").fill(natalSourceRef);
+    await page.getByText(/SOURCE_CONFLICT · Compatibilidade documental/i).waitFor();
+    assert(
+      await page.locator("#financial-model-mode").inputValue() === "HARMONY_COMPAT_V1",
+      "Builder não manteve HARMONY_COMPAT_V1 no seletor de metodologia."
+    );
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "01c-harmony-natal-builder-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 375, height: 812 });
     const builderMobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert(builderMobileOverflow <= 2, `mobile Builder has ${builderMobileOverflow}px global horizontal overflow.`);
     await page.screenshot({ path: path.join(tempRoot, "screenshots", "01b-builder-mobile.png"), fullPage: true });
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "01d-harmony-natal-builder-mobile.png"), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 900 });
-
+    await page.getByRole("button", { name: /Registrar (alterações da )?Página 1/i }).click();
+    let natalUiProject = undefined as Awaited<ReturnType<typeof caller.igr.projects>>[number] | undefined;
+    for (let attempt = 0; attempt < 60 && !natalUiProject; attempt += 1) {
+      natalUiProject = (await caller.igr.projects()).find(project => project.name === harmonyUiProjectName);
+      if (!natalUiProject) await page.waitForTimeout(250);
+    }
+    assert(natalUiProject, "Página 1 Cotia não criou o projeto Natal pela UI.");
+    const natalUiContext = await caller.igr.projectContext({ projectId: natalUiProject.id });
+    assert(natalUiContext.workingVersion, "Projeto Natal criado pela UI não possui versão de trabalho.");
+    const natalProjectIdFromUi = natalUiProject.id;
+    const natalVersionIdFromUi = natalUiContext.workingVersion.id;
+    await caller.igr.updateInputs({
+      versionId: natalVersionIdFromUi,
+      inputs: createHarmonyNatalInputs("100"),
+    });
     const created = await caller.igr.createProject({ name: `TGR Master E2E ${Date.now()}`, inputs: baseInputs() });
     const versionId = created.versionId;
     const projectId = created.projectId;
@@ -539,11 +647,11 @@ async function main() {
     const capital = await caller.igr.capitalEnvelope({ versionId, horizonMonths: 24, asOfMonth: 0, availableCapital: "500000" });
     assert(capital.requiredCapital, "Capital envelope missing.");
     const scenario = await caller.igr.createScenario({ baseVersionId: versionId, name: "E2E Goal Seek", reason: "Master E2E scenario branch" });
-    const goalTarget = snapshot.kpis.healthyD90;
-    assert(goalTarget, "Healthy D90 KPI missing for Goal Seek target.");
-    const goal = await caller.igr.goalSeek({ versionId, horizonMonths: 24, asOfMonth: 0, targetKpi: "healthyD90", variableKey: "qualifiedCouplesMonth1", target: goalTarget, lowerBound: "1", upperBound: "250" });
+    const goalTarget = snapshot.kpis.npv;
+    assert(goalTarget, "NPV KPI missing for Goal Seek target.");
+    const goal = await caller.igr.goalSeek({ versionId, horizonMonths: 24, asOfMonth: 0, targetKpi: "npv", variableKey: "capexInitial", target: goalTarget, lowerBound: "0", upperBound: "500000" });
     assert(goal.status === "converged" && goal.result, `Goal Seek did not converge: ${JSON.stringify(goal)}`);
-    await caller.igr.applyGoalSeek({ targetVersionId: scenario.versionId, sourceVersionId: versionId, horizonMonths: 24, asOfMonth: 0, variableKey: "qualifiedCouplesMonth1", value: goal.result, targetKpi: "healthyD90", target: goalTarget, lowerBound: "1", upperBound: "250", objectiveValue: goal.objectiveValue, residual: goal.residual, iterations: goal.iterations });
+    await caller.igr.applyGoalSeek({ targetVersionId: scenario.versionId, sourceVersionId: versionId, horizonMonths: 24, asOfMonth: 0, variableKey: "capexInitial", value: goal.result, targetKpi: "npv", target: goalTarget, lowerBound: "0", upperBound: "500000", objectiveValue: goal.objectiveValue, residual: goal.residual, iterations: goal.iterations });
     const scenarioSnapshot = await caller.igr.calculate({ versionId: scenario.versionId, horizonMonths: 24, asOfMonth: 0 });
     assert(scenarioSnapshot.status === "valid", "Goal Seek scenario snapshot was not valid.");
     const scenarioCostDomain = scenarioSnapshot.authoritativeDomains as { costCatalog?: { cashflowAdjustments?: { fixedCostMonthly?: string } } };
@@ -559,6 +667,8 @@ async function main() {
     );
     await verifyUi(page, app.baseUrl, "/scenarios", /Goal Seek|Cenario|Cenário/i);
     await verifyUi(page, app.baseUrl, "/study", /Boardroom|Capital|Decis/i);
+    await page.locator(`#tgr-project option[value="${projectId}"]`).waitFor({ state: "attached", timeout: 30_000 });
+    await page.locator("#tgr-project").selectOption(projectId);
     await page.screenshot({ path: path.join(tempRoot, "screenshots", "02-boardroom-before-approval.png"), fullPage: true });
 
     const approval = await caller.igr.approveSnapshot({ snapshotId: snapshot.id, rationale: "Master authenticated E2E approval." });
@@ -591,17 +701,16 @@ async function main() {
     );
     const responsiveBoardroom = await verifyResponsiveBoardroom(page, app.baseUrl);
 
-    const natalCreated = await caller.igr.createProject({
-      name: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.project,
-      inputs: structuredClone(GOLDEN_NATAL_PONTA_NEGRA_2026.inputs) as FinancialInputSnapshot,
-    });
-    const natalVersionId = natalCreated.versionId;
-    const natalProjectId = natalCreated.projectId;
-    const natalSourceRef = "golden/natal-ponta-negra-2026:PRD-approved";
+    const natalVersionId = natalVersionIdFromUi;
+    const natalProjectId = natalProjectIdFromUi;
+    assert(
+      natalUiContext.workingVersion?.formulaSetVersionId === "harmony-compat-formulas-v1",
+      "A criação do projeto Natal pela Página 1 não selou HARMONY_COMPAT_V1."
+    );
     await caller.igr.upsertBuilderComponent({
       versionId: natalVersionId,
       componentType: "project_assembly",
-      name: "Golden Natal Ponta Negra 2026",
+      name: "Golden Natal Ponta Negra 2026 — Harmony Compat V1",
       status: "provided",
       payload: {
         praca: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.location,
@@ -617,7 +726,7 @@ async function main() {
       versionId: natalVersionId,
       asOfMonth: 0,
       skus: [{
-        id: "natal-ponta-negra",
+        id: "produto-principal",
         name: "Projeto Unico Ponta Negra",
         unitType: "UH",
         unitQuantity: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.units,
@@ -631,7 +740,7 @@ async function main() {
         pricePhases: [{ id: "natal-launch", startsAtMonth: 0, price: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.pricePerContract }],
       }],
       conditions: [{
-        productSkuCode: "natal-ponta-negra",
+        productSkuCode: "produto-principal",
         status: "provided",
         sourceType: "current_decision",
         sourceRef: natalSourceRef,
@@ -641,7 +750,7 @@ async function main() {
           listPrice: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.pricePerContract,
           discount: "0",
           entry: { total: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.entryTotal, installments: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.entryInstallments, firstDueMonth: 0 },
-          balance: { principal: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.balanceTotal, installments: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.balanceInstallments, graceMonths: 3, firstDueMonth: 3 },
+          balance: { principal: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.balanceTotal, installments: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.balanceInstallments, graceMonths: 4, firstDueMonth: 4 },
           explicitCharges: "0",
           explicitChargesDueMonth: 0,
           materialityTolerance: "0.01",
@@ -695,26 +804,45 @@ async function main() {
     await caller.igr.createCostCatalogItem({
       versionId: natalVersionId,
       category: "operations",
-      name: "Custos agregados Golden Natal (TEST DATA)",
+      name: "Custos agregados Golden Natal Harmony (SOURCE_CONFLICT)",
       frequency: "monthly",
       cashflowTreatment: "included_in_project_totals",
       amountText: "280000",
       status: "provided",
-      sourceType: "assumption",
-      sourceRef: "TEST_DATA:Natal-Ponta-Negra-2026-v1",
+      sourceType: "current_document",
+      sourceRef: natalSourceRef,
     });
     await caller.igr.upsertReceivablesPolicy({
       versionId: natalVersionId,
       status: "provided",
-      sourceType: "assumption",
-      sourceRef: "TEST_DATA:Natal-Ponta-Negra-2026-v1",
-      policy: structuredClone(GOLDEN_NATAL_PONTA_NEGRA_2026.options.receivablesPolicy),
+      sourceType: "current_document",
+      sourceRef: natalSourceRef,
+      policy: {
+        cancellationCurve: {
+          d7: "0.02",
+          d30: "0.05",
+          d60: "0.08",
+          d90: "0.12",
+          d180: "0.20",
+          lifetime: "0.30",
+        },
+        delinquencyRate: "0.25",
+        cureRates: {
+          days1To30: "0.20",
+          days31To60: "0.15",
+          days61To90: "0.10",
+          days90Plus: "0.05",
+        },
+        writeOffAfterDays: 180,
+        policyVersion: "harmony-source-review-v1",
+        sourceRef: natalSourceRef,
+      },
     });
     await caller.igr.createDecision({
       versionId: natalVersionId,
       title: "Validar Golden Natal",
       decisionValue: "100 vendas brutas por mes",
-      rationale: "Fixture oficial de regressao antes da simulacao ao vivo.",
+      rationale: "Regressão de compatibilidade documental com SOURCE_CONFLICT explícito; não declara paridade com o workbook ausente.",
       responsible: ownerName,
       sourceRef: natalSourceRef,
     });
@@ -723,17 +851,50 @@ async function main() {
       horizonMonths: GOLDEN_NATAL_PONTA_NEGRA_2026.horizonMonths,
       asOfMonth: 0,
     });
-    assert(natalSnapshot.status === "valid", `Golden Natal snapshot was not valid: ${natalSnapshot.status}`);
-    for (const [key, expected] of Object.entries(goldenNatalExpected.kpis)) {
+    assert(natalSnapshot.status === "valid", `Golden Natal Harmony snapshot was not valid: ${natalSnapshot.status}`);
+    assert(natalSnapshot.financialModelMode === "HARMONY_COMPAT_V1", "Snapshot Natal não preservou o modo Harmony.");
+    assert(natalSnapshot.formulaSetVersion === "1.0.0", `Formula Set Harmony inesperado: ${natalSnapshot.formulaSetVersion}`);
+    assert(natalSnapshot.engineVersion === "harmony-compat-engine-v1", `Engine Harmony inesperada: ${natalSnapshot.engineVersion}`);
+    assert(natalSnapshot.horizonMonths === 120 && natalSnapshot.projections.length === 120, "Snapshot Natal Harmony não calculou os 120 meses.");
+    assert(natalSnapshot.projections[0]?.grossContracts === "100.00000000", "Baseline Natal Harmony não iniciou com 100 vendas brutas.");
+    assert(
+      !JSON.stringify({
+        effectiveInputs: natalSnapshot.effectiveInputs,
+        authoritativeDomains: natalSnapshot.authoritativeDomains,
+      }).includes("TEST_DATA"),
+      "Snapshot Natal Harmony carregou proveniência TEST_DATA do Golden canônico."
+    );
+    assert(natalSnapshot.compatibilityEvidence?.authorityStatus === "SOURCE_CONFLICT", "Snapshot Harmony ocultou o SOURCE_CONFLICT de autoridade.");
+    assert(natalSnapshot.compatibilityEvidence.availableSource === harmonyNatalReference.authority.availableSource, "Snapshot Harmony perdeu a referência de fonte disponível.");
+    assert(natalSnapshot.compatibilityEvidence.missingSource === harmonyNatalReference.authority.missingSource, "Snapshot Harmony perdeu a identificação do workbook ausente.");
+    assert(
+      natalSnapshot.compatibilityEvidence.sourceConflicts.length === harmonyNatalReference.sourceConflicts.length,
+      "Snapshot Harmony não expôs integralmente os conflitos da referência disponível."
+    );
+    for (const [key, reference] of Object.entries(harmonyNatalReference.reviewKpiTargets)) {
       const obtained = natalSnapshot.kpis[key as keyof typeof natalSnapshot.kpis];
-      assert(obtained === expected, `Golden Natal KPI ${key} diverged: expected ${expected}, obtained ${obtained}`);
+      const expected = reference.observedAtImplementation.obtained;
+      assert(obtained === expected, `Natal Harmony KPI ${key} divergiu da regressão honesta: esperado ${expected}, obtido ${obtained}`);
     }
     await verifyUi(page, app.baseUrl, "/study", /Boardroom|Baseline|Snapshot/i);
     await page.locator("#tgr-project").selectOption(natalProjectId);
+    await page.getByText("MODELO FINANCEIRO — HARMONY COMPAT V1", { exact: true }).waitFor({ timeout: 30_000 });
+    await page.getByText(/SOURCE_CONFLICT · Compatibilidade documental em reconciliação/i).waitFor();
+    await page.getByText(`${harmonyNatalReference.sourceConflicts.length} conflitos de fonte · ver evidências`, { exact: true }).waitFor();
+    assert(
+      (await page.locator("main").innerText()).includes("não declara paridade com a fonte ausente"),
+      "Boardroom Harmony não apresentou a ressalva explícita contra paridade não comprovada."
+    );
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "03-harmony-natal-boardroom-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 375, height: 812 });
+    const harmonyBoardroomMobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(harmonyBoardroomMobileOverflow <= 2, `Boardroom Harmony mobile tem ${harmonyBoardroomMobileOverflow}px de overflow horizontal global.`);
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "04-harmony-natal-boardroom-mobile.png"), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.locator("#meta-vendas-brutas").scrollIntoViewIfNeeded();
     await page.locator("#meta-vendas-brutas").fill("120");
     await page.getByRole("button", { name: "Recalcular agora" }).click();
-    await page.getByText("HIPÓTESE ATUAL", { exact: true }).waitFor({ timeout: 30_000 });
+    await page.getByText("HIPÓTESE · MODELO FINANCEIRO — HARMONY COMPAT V1", { exact: true }).waitFor({ timeout: 30_000 });
     const liveSalesRow = page.getByRole("row").filter({ hasText: "Vendas brutas · mês 1" });
     const liveSalesCells = await liveSalesRow.locator("td").allInnerTexts();
     const parsePresentedNumber = (value: string) => Number(
@@ -753,6 +914,7 @@ async function main() {
       loadedCostPerCaptadorMonth: "0",
       targetGrossSalesMonth1: "120",
     });
+    assert(natalSimulation.financialModelMode === "HARMONY_COMPAT_V1", "Simulação Natal perdeu a identidade do modelo Harmony.");
     assert(natalSimulation.before.grossSalesMonth1 === "100.00000000", "Golden Natal Boardroom baseline was not 100 sales/month.");
     assert(natalSimulation.after.grossSalesMonth1 === "120.00000000", "Golden Natal Boardroom simulation did not reach 120 sales/month.");
     const promotedNatal = await caller.igr.promoteMeetingSimulationToScenario({
@@ -770,9 +932,29 @@ async function main() {
     });
     const unchangedNatalBaseline = await caller.igr.calculate({ versionId: natalVersionId, horizonMonths: 120, asOfMonth: 0 });
     assert(unchangedNatalBaseline.id === natalSnapshot.id && unchangedNatalBaseline.snapshotHash === natalSnapshot.snapshotHash, "Saving the Natal scenario mutated the official baseline snapshot.");
+    assert(promotedNatal.versionId !== natalVersionId, "A promoção Harmony não criou uma versão de cenário separada.");
     const natalScenarioSnapshot = await caller.igr.calculate({ versionId: promotedNatal.versionId, horizonMonths: 120, asOfMonth: 0 });
     assert(natalScenarioSnapshot.status === "valid", "Golden Natal 120-sales scenario was not valid.");
-    for (const kpi of ["grossSales", "totalOperatingCashFlow", "npv", "paybackMonths"] as const) {
+    assert(natalScenarioSnapshot.financialModelMode === "HARMONY_COMPAT_V1", "Cenário promovido trocou silenciosamente o modo Harmony.");
+    assert(natalScenarioSnapshot.snapshotHash !== natalSnapshot.snapshotHash, "Cenário Harmony 120 vendas reutilizou indevidamente o hash da baseline 100 vendas.");
+    for (const metric of ["qualifiedCouples", "grossContracts", "commissionPayments", "operatingCashFlow"] as const) {
+      assert(
+        natalScenarioSnapshot.projections[0]?.[metric] !== natalSnapshot.projections[0]?.[metric],
+        `Cenário Harmony 100 → 120 não alterou ${metric} no primeiro mês.`
+      );
+    }
+    for (const [monthIndex, metric] of [
+      [0, "availableInventory"],
+      [0, "grossEntrySettled"],
+      [4, "installmentCollections"],
+      [0, "operatingResult"],
+    ] as const) {
+      assert(
+        natalScenarioSnapshot.projections[monthIndex]?.[metric] !== natalSnapshot.projections[monthIndex]?.[metric],
+        `Cenário Harmony 100 → 120 não alterou ${metric} no mês ${monthIndex + 1}.`
+      );
+    }
+    for (const kpi of ["sellOutMonth", "capitalRequired", "npv", "irrAnnual", "paybackMonths"] as const) {
       assert(natalScenarioSnapshot.kpis[kpi] !== natalSnapshot.kpis[kpi], `Golden Natal scenario did not change ${kpi}.`);
     }
     const natalApproval = await caller.igr.approveSnapshot({ snapshotId: natalScenarioSnapshot.id, rationale: "Golden Natal scenario approved after baseline comparison." });
@@ -785,17 +967,32 @@ async function main() {
     assert(natalPdf.exportPackHash === natalPptx.exportPackHash && natalPptx.exportPackHash === natalXlsx.exportPackHash, "Golden Natal exports did not share one export pack hash.");
     const natalExportBuffers = [natalPdf, natalPptx, natalXlsx].map(item => storage.get(item.url.replace(/^\/manus-storage\//, "")));
     assert(natalExportBuffers.every(item => item && item.byteLength > 500), "Golden Natal export artifact was missing or too small.");
+    const natalArtifactDir = path.join(tempRoot, "artifacts");
+    await mkdir(natalArtifactDir, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(natalArtifactDir, "natal-harmony-compat-v1.pdf"), natalExportBuffers[0]!),
+      writeFile(path.join(natalArtifactDir, "natal-harmony-compat-v1.pptx"), natalExportBuffers[1]!),
+      writeFile(path.join(natalArtifactDir, "natal-harmony-compat-v1.xlsx"), natalExportBuffers[2]!),
+    ]);
+    const natalPdfDocument = await PDFDocument.load(natalExportBuffers[0]!);
+    const natalPdfCoverText = pdfVisibleText(natalPdfDocument);
+    assertVisibleHarmonyIdentity("PDF", natalPdfCoverText, natalScenarioSnapshot);
+    assert(natalPdfDocument.getSubject()?.includes("Harmony Compatível V1"), "PDF Harmony perdeu o label canônico na metadata de proveniência.");
+    assert(natalPdfDocument.getSubject()?.includes("SOURCE_CONFLICT"), "PDF Harmony ocultou a ressalva de autoridade.");
+    assert(natalPdfDocument.getSubject()?.includes(harmonyNatalReference.authority.missingSource), "PDF Harmony ocultou o workbook ausente.");
     const natalPptxArchive = await JSZip.loadAsync(natalExportBuffers[1]!);
-    const natalPptxXml = (await Promise.all(Object.values(natalPptxArchive.files).filter(file => /^ppt\/slides\/slide\d+\.xml$/.test(file.name)).map(file => file.async("string")))).join("\n");
-    assert(natalPptxXml.includes(natalScenarioSnapshot.snapshotHash.slice(0, 12).toUpperCase()), "Golden Natal PPTX did not identify the approved snapshot hash.");
+    const natalPptxXml = await zipEntriesText(natalPptxArchive, /^ppt\/slides\/slide\d+\.xml$/);
+    assertVisibleHarmonyIdentity("PPTX", natalPptxXml, natalScenarioSnapshot);
+    assert(natalPptxXml.includes("SOURCE_CONFLICT") && natalPptxXml.includes(harmonyNatalReference.authority.missingSource), "PPTX Harmony ocultou a ressalva de autoridade.");
     const natalXlsxArchive = await JSZip.loadAsync(natalExportBuffers[2]!);
-    const natalXlsxXml = (await Promise.all(Object.values(natalXlsxArchive.files).filter(file => /^xl\/worksheets\/sheet\d+\.xml$/.test(file.name)).map(file => file.async("string")))).join("\n");
-    assert(natalXlsxXml.includes(natalScenarioSnapshot.snapshotHash), "Golden Natal XLSX did not contain the approved snapshot hash.");
+    const natalXlsxXml = await zipEntriesText(natalXlsxArchive, /^xl\/worksheets\/sheet\d+\.xml$/);
+    assertVisibleHarmonyIdentity("XLSX", natalXlsxXml, natalScenarioSnapshot);
+    assert(natalXlsxXml.includes("SOURCE_CONFLICT") && natalXlsxXml.includes(harmonyNatalReference.authority.missingSource), "XLSX Harmony ocultou a ressalva de autoridade.");
     assert(natalXlsxXml.includes(natalScenarioSnapshot.kpis.npv ?? "__missing_npv__"), "Golden Natal XLSX did not contain the approved snapshot NPV.");
     await verifyUi(page, app.baseUrl, "/study", /Boardroom|Baseline|Snapshot/i);
-    await page.screenshot({ path: path.join(tempRoot, "screenshots", "03-golden-natal-baseline.png"), fullPage: true });
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "05-harmony-natal-approved-baseline-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 375, height: 812 });
-    await page.screenshot({ path: path.join(tempRoot, "screenshots", "04-golden-natal-mobile.png"), fullPage: true });
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "06-harmony-natal-approved-baseline-mobile.png"), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -858,6 +1055,13 @@ async function main() {
       exports: { pdfBytes: exportBytes[0], pptxBytes: exportBytes[1], xlsxBytes: exportBytes[2] },
       responsiveBoardroom,
       goldenNatal: {
+        financialModelMode: natalScenarioSnapshot.financialModelMode,
+        formulaSetVersion: natalScenarioSnapshot.formulaSetVersion,
+        engineVersion: natalScenarioSnapshot.engineVersion,
+        authorityStatus: natalSnapshot.compatibilityEvidence?.authorityStatus,
+        missingSource: natalSnapshot.compatibilityEvidence?.missingSource,
+        sourceConflictCount: natalSnapshot.compatibilityEvidence?.sourceConflicts.length,
+        workbookParityClaimed: false,
         projectId: natalProjectId,
         baseVersionId: natalVersionId,
         approvedVersionId: promotedNatal.versionId,

@@ -2,6 +2,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { BoardroomPremiumShell } from "@/components/boardroom/BoardroomPremiumShell";
 import { Badge } from "@/components/ui/badge";
 import { ChapterFormulaTrace } from "@/components/ChapterFormulaTrace";
+import { ResponsiveTableFrame } from "@/components/ResponsiveTableFrame";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,6 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { formatKpi, isDecimal, normalizeDecimalInput } from "@/lib/financialPresentation";
 import { getChapterFormulaTrace } from "@/lib/chapterFormulaTrace";
+import {
+  isGoalSeekLeverApplyable,
+  normalizeMeetingVariableCostDelta,
+} from "@/lib/financialModelOwnership";
 import { LIVE_DOCUMENT_CHAPTERS } from "@/lib/liveDocumentStructure";
 import { trpc } from "@/lib/trpc";
 import { getStudyImpacts } from "@shared/financial/impactMap";
@@ -22,10 +27,16 @@ import {
 import {
   FINANCIAL_INPUT_KEYS,
   type FinancialCalculation,
+  type FinancialModelMode,
   type FinancialInputKey,
   type FinancialInputSnapshot,
   type GoalSeekResult,
 } from "@shared/financial/types";
+import {
+  getFinancialModelModeDefinition,
+  resolveLegacyFinancialModelMode,
+  type FinancialModelModeDefinition,
+} from "@shared/financial/modelMode";
 import {
   calculateMeetingDelta,
   isCurrentMeetingActionGeneration,
@@ -53,6 +64,36 @@ import {
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
+
+function resolveCalculationFinancialModel(
+  calculation: FinancialCalculation | undefined
+): FinancialModelModeDefinition | null {
+  if (!calculation) return null;
+  const mode = calculation.financialModelMode ?? resolveLegacyFinancialModelMode(
+    calculation.formulaSetVersion,
+    calculation.engineVersion
+  );
+  return mode ? getFinancialModelModeDefinition(mode) : null;
+}
+
+export function validateMeetingFinancialModel(
+  baselineMode: FinancialModelMode | undefined,
+  simulationMode: FinancialModelMode | undefined
+): { matches: boolean; message: string | null } {
+  if (!baselineMode || !simulationMode) {
+    return {
+      matches: false,
+      message: "Simulação bloqueada: a metodologia financeira da baseline ou da hipótese não foi identificada.",
+    };
+  }
+  if (baselineMode !== simulationMode) {
+    return {
+      matches: false,
+      message: `Simulação bloqueada: baseline ${baselineMode} e hipótese ${simulationMode} usam metodologias diferentes.`,
+    };
+  }
+  return { matches: true, message: null };
+}
 
 function MetricCard({
   label,
@@ -103,6 +144,68 @@ function EmptyBoardroomChapter({
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {description}
           </p>
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function CashStudyChapter({
+  calculation,
+  snapshotHash,
+  formulaMemory,
+}: {
+  calculation: FinancialCalculation;
+  snapshotHash: string;
+  formulaMemory: ReturnType<typeof getChapterFormulaTrace>["formulas"];
+}) {
+  return (
+    <section id="study-cash" className="scroll-mt-24">
+      <Card className="border-white/10 bg-card/80 shadow-none">
+        <CardHeader className="flex-row items-start justify-between space-y-0">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 12 · Demonstrativo vivo</p>
+            <CardTitle className="mt-2 text-xl">Implantação, entrada líquida e caixa — primeiros 12 meses</CardTitle>
+            <ChapterFormulaTrace source="snapshot" memory={formulaMemory} />
+          </div>
+          <Badge variant="outline" className="border-white/15 bg-white/[0.03] text-slate-200">
+            Snapshot {snapshotHash.slice(0, 8).toUpperCase()}
+          </Badge>
+        </CardHeader>
+        <CardContent className="p-0">
+          <p className="px-5 pb-4 text-xs leading-5 text-muted-foreground">A venda gera entrada; cada forma de pagamento liquida no mês do seu prazo e já vem descontada do MDR. A implantação aparece antes da abertura operacional, sem ser maquiada como OPEX.</p>
+          <ResponsiveTableFrame label="Demonstrativo mensal de caixa" className="px-0">
+            <table className="w-full min-w-[1660px] text-left text-xs">
+              <thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                <tr>
+                  {[
+                    "Mês", "Qualificados", "Contratos", "Venda bruta", "Entrada gerada",
+                    "Recebíveis liquidados", "Parcelas líquidas", "Taxas / MDR", "Entrada líquida",
+                    "Pré-invest.", "Folha", "Caixa do mês", "Caixa acumulado",
+                  ].map(label => <th key={label} className="px-3 py-3 font-medium">{label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {calculation.projections.slice(0, 12).map(row => (
+                  <tr key={row.month} className="border-b border-white/[0.06] text-slate-200 last:border-0">
+                    <td className="px-3 py-3 font-medium">{row.month}</td>
+                    <td className="px-3 py-3 font-mono">{row.qualifiedCouples}</td>
+                    <td className="px-3 py-3 font-mono">{row.contracts}</td>
+                    <td className="px-3 py-3">{formatKpi("grossSales", row.grossSales)}</td>
+                    <td className="px-3 py-3">{formatKpi("grossEntryGenerated", row.grossEntryGenerated ?? "0")}</td>
+                    <td className="px-3 py-3">{formatKpi("grossReceivablesSettled", row.grossReceivablesSettled ?? row.grossEntrySettled ?? row.recognizedRevenue)}</td>
+                    <td className="px-3 py-3">{formatKpi("installmentCollections", row.installmentCollections ?? "0")}</td>
+                    <td className="px-3 py-3 text-rose-200">{formatKpi("paymentFees", row.paymentFees ?? "0")}</td>
+                    <td className="px-3 py-3 text-emerald-200">{formatKpi("netCollections", row.netCollections ?? row.recognizedRevenue)}</td>
+                    <td className="px-3 py-3 text-amber-200">{formatKpi("preOperationalInvestment", row.preOperationalInvestment ?? row.capex)}</td>
+                    <td className="px-3 py-3">{formatKpi("totalOperatingCashFlow", row.payroll)}</td>
+                    <td className="px-3 py-3">{formatKpi("totalOperatingCashFlow", row.operatingCashFlow)}</td>
+                    <td className="px-3 py-3 font-medium">{formatKpi("totalOperatingCashFlow", row.cumulativeCashFlow)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ResponsiveTableFrame>
         </CardContent>
       </Card>
     </section>
@@ -302,10 +405,10 @@ export default function Boardroom() {
   const [decisionSourceRef, setDecisionSourceRef] = useState("");
   const [goal, setGoal] = useState<BoardroomGoalSeekSelection>({
     targetKpi: "npv",
-    variableKey: "qualifiedCouplesMonth1",
+    variableKey: "capexInitial",
     target: "0",
-    lowerBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.lowerBound,
-    upperBound: GOAL_SEEK_LEVERS.qualifiedCouplesMonth1.upperBound,
+    lowerBound: GOAL_SEEK_LEVERS.capexInitial.lowerBound,
+    upperBound: GOAL_SEEK_LEVERS.capexInitial.upperBound,
   });
   const [goalRunContext, setGoalRunContext] =
     useState<BoardroomGoalSeekRunContext | null>(null);
@@ -332,6 +435,10 @@ export default function Boardroom() {
         };
       })
     | undefined;
+  const financialModelDefinition = resolveCalculationFinancialModel(calculation);
+  const financialModelMode = financialModelDefinition?.id;
+  const canUseFinancialModel = Boolean(financialModelDefinition);
+  const isHarmonyFinancialModel = financialModelMode === "HARMONY_COMPAT_V1";
   const approval = contextQuery.data?.latestApproval;
   const activeVersionId =
     snapshot?.projectVersionId ?? contextQuery.data?.workingVersion?.id ?? "";
@@ -445,11 +552,14 @@ export default function Boardroom() {
     goal
   );
   const goalReady =
+    canUseFinancialModel &&
     isDecimal(goal.target) &&
     isDecimal(goal.lowerBound) &&
     isDecimal(goal.upperBound) &&
     Boolean(snapshot?.projectVersionId);
-  const canApplyGoalSeek = canApplyBoardroomGoalSeekResult(goalSeekResult, goal);
+  const goalLeverApplyable = isGoalSeekLeverApplyable(financialModelMode, goal.variableKey);
+  const canApplyGoalSeek =
+    goalLeverApplyable && canApplyBoardroomGoalSeekResult(goalSeekResult, goal);
   const selectedGoalTarget = GOAL_SEEK_TARGETS[goal.targetKpi];
   const selectedGoalLever = GOAL_SEEK_LEVERS[goal.variableKey];
   const allowedGoalLevers = selectedGoalTarget.allowedVariables;
@@ -483,7 +593,7 @@ export default function Boardroom() {
     });
   };
   const applyBoardroomGoalSeek = async () => {
-    if (!snapshot?.projectVersionId || !canApplyGoalSeek || !goalSeekResult?.result || !goalSeekResult.objectiveValue || goalSeekResult.residual === null) {
+    if (!goalLeverApplyable || !snapshot?.projectVersionId || !canApplyGoalSeek || !goalSeekResult?.result || !goalSeekResult.objectiveValue || goalSeekResult.residual === null) {
       return;
     }
     try {
@@ -549,6 +659,7 @@ export default function Boardroom() {
 
   const createMeetingPayload = () => {
     if (
+      !canUseFinancialModel ||
       !snapshot?.projectVersionId ||
       !targetGrossSalesMonth1 ||
       !isDecimal(targetGrossSalesMonth1) ||
@@ -571,7 +682,10 @@ export default function Boardroom() {
       averageTicketDelta,
       fixedCostMonthlyDelta,
       payrollMonthlyDelta,
-      variableCostMonthlyDelta,
+      variableCostMonthlyDelta: normalizeMeetingVariableCostDelta(
+        financialModelMode,
+        variableCostMonthlyDelta
+      ),
       capexInitialDelta,
     };
   };
@@ -647,6 +761,13 @@ export default function Boardroom() {
     currentMeetingSignature
   );
   const meetingActionsBusy = Boolean(meetingAction) || promoteMeetingScenario.isPending || createMeetingDecision.isPending || calculateMeetingScenario.isPending || Boolean(meetingPromotionRef.current);
+  const meetingModelValidation = validateMeetingFinancialModel(
+    financialModelMode,
+    meetingResult?.financialModelMode
+  );
+  const meetingModelMismatch = Boolean(
+    isMeetingCurrent && meetingResult && !meetingModelValidation.matches
+  );
   const meetingChangedInputKeys: FinancialInputKey[] = !isMeetingCurrent || !meetingResult
     ? []
     : ([
@@ -663,6 +784,7 @@ export default function Boardroom() {
   const meetingHasDelta = Boolean(
     isMeetingCurrent &&
     meetingResult &&
+    meetingModelValidation.matches &&
     (meetingChangedInputKeys.length || Number(meetingResult.before.grossSalesMonth1) !== Number(meetingResult.after.grossSalesMonth1))
   );
   const ensureMeetingScenario = async (actionGeneration: number) => {
@@ -846,7 +968,7 @@ export default function Boardroom() {
       </Label>
       <select
         id="tgr-project"
-        className="h-8 min-w-40 rounded-md border-0 bg-transparent px-2 text-sm text-slate-200 outline-none"
+        className="h-8 min-w-40 rounded-md border-0 bg-transparent px-2 text-sm text-slate-200 outline-none focus-visible:ring-2 focus-visible:ring-amber-200"
         value={activeProjectId}
         onChange={event => {
           setActiveProjectId(event.target.value);
@@ -901,8 +1023,73 @@ export default function Boardroom() {
               </Link>
             </Button>
           </div>
+          <div className="mt-6 flex max-w-full flex-wrap items-center gap-2 rounded-xl border border-amber-200/20 bg-black/20 p-3">
+            <Badge
+              variant="outline"
+              className="max-w-full whitespace-normal break-words border-amber-200/30 px-3 py-1.5 text-amber-100"
+            >
+              MODELO FINANCEIRO — {financialModelDefinition
+                ? financialModelDefinition.id === "TGR_CANONICAL_V2"
+                  ? "TGR CANÔNICO V2"
+                  : "HARMONY COMPAT V1"
+                : "NÃO IDENTIFICADO"}
+            </Badge>
+            <span className="text-xs text-slate-300">
+              {financialModelDefinition?.label ?? "Snapshot sem identidade metodológica verificável"}
+            </span>
+            {calculation ? (
+              <span className="max-w-full break-all font-mono text-[11px] text-slate-400">
+                Formula Set {calculation.formulaSetVersion} · Engine {calculation.engineVersion}
+              </span>
+            ) : null}
+          </div>
         </div>
       </section>
+
+      {calculation?.financialModelMode === "HARMONY_COMPAT_V1" ? (
+        <Card className="border-amber-300/25 bg-amber-200/[0.045] shadow-none">
+          <CardContent className="p-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <CircleAlert className="h-5 w-5 text-amber-200" />
+              <p className="text-sm font-semibold text-amber-100">
+                SOURCE_CONFLICT · Compatibilidade documental em reconciliação
+              </p>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              O modo Harmony preserva as regras disponíveis, mas não declara paridade com a fonte ausente.
+              Fonte disponível: {calculation.compatibilityEvidence?.availableSource ?? "N/D"}.
+            </p>
+            {calculation.compatibilityEvidence?.sourceConflicts?.length ? (
+              <details className="mt-3 rounded-lg border border-amber-200/15 bg-black/10 p-3 text-xs text-amber-100/90">
+                <summary className="cursor-pointer font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200">
+                  {calculation.compatibilityEvidence.sourceConflicts.length} conflitos de fonte · ver evidências
+                </summary>
+                <ul className="mt-3 space-y-2">
+                  {calculation.compatibilityEvidence.sourceConflicts.map(conflict => (
+                    <li className="break-words" key={conflict.id}>
+                      <span className="font-mono">{conflict.id}</span> · {conflict.status} · {conflict.adoptedRule}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {calculation && !financialModelDefinition ? (
+        <Card role="alert" className="border-rose-300/30 bg-rose-300/[0.055] shadow-none">
+          <CardContent className="flex gap-3 p-5">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-200" />
+            <div>
+              <p className="font-semibold text-rose-100">Ações financeiras bloqueadas</p>
+              <p className="mt-1 text-xs leading-5 text-rose-100/80">
+                O conjunto de fórmulas ou o motor desta versão não foi identificado. O TGR não presume o modelo canônico: reconcilie a versão antes de recalcular, simular, aprovar ou exportar.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {hasError ? (
         <Card className="border-red-400/20 bg-red-400/[0.04]">
@@ -959,10 +1146,17 @@ export default function Boardroom() {
         </div>
       </section>
 
+      {snapshot && calculation && documentTotals ? (
+        <section id="study-product-inventory" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 02 · Product & Inventory</p><p className="mt-1 text-sm text-muted-foreground">O produto definido na ficha-mãe antes de qualquer promessa de venda.</p><ChapterFormulaTrace source="ficha_mae" memory={[]} /></div>
+          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[840px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Projeto</th><th className="px-5 py-3 font-medium">Praça</th><th className="px-5 py-3 font-medium">Início</th><th className="px-5 py-3 font-medium">Apartamentos</th><th className="px-5 py-3 font-medium">Cotas / apartamento</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-4 font-medium">{assemblyValue("nomeProjeto")}</td><td className="px-5 py-4">{assemblyValue("praca")}</td><td className="px-5 py-4">{assemblyValue("inicioOperacao")}</td><td className="px-5 py-4">{assemblyValue("totalApartamentos")}</td><td className="px-5 py-4">{assemblyValue("cotasPorApartamento")}</td></tr></tbody></table></CardContent></Card>
+        </section>
+      ) : null}
+
       {snapshot && versionInputs ? (
         <section id="study-commercial-condition" className="scroll-mt-24 space-y-4">
           <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 03 · Commercial Condition</p><p className="mt-1 text-sm text-muted-foreground">O que a ficha-mãe decidiu e o que ainda está pendente antes de a operação começar.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-commercial-condition")} /></div>
-          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[860px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Premissa</th><th className="px-5 py-3 font-medium">Valor</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 font-medium">Origem</th></tr></thead><tbody>{(["averageTicket", "entryValuePerContract", "collectionRate", "cancellationRate", "preOperationMonths", "fixedCostMonthly", "payrollMonthly", "capexInitial"] as const).map(key => { const input = versionInputs[key]; return <tr className="border-b border-white/[0.06] text-slate-200 last:border-0" key={key}><td className="px-5 py-3 font-medium">{inputLabels[key]}</td><td className="px-5 py-3">{input?.value ? formatKpi(key, input.value) : "PENDENTE"}</td><td className="px-5 py-3"><Badge variant="outline" className={input?.status === "provided" ? "border-emerald-300/25 text-emerald-200" : "border-amber-200/25 text-amber-200"}>{input?.status === "provided" ? "INFORMADO" : "PENDENTE"}</Badge></td><td className="px-5 py-3 text-xs text-muted-foreground">{input?.sourceRef ?? "Sem fonte"}</td></tr>; })}</tbody></table></CardContent></Card>
+          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="p-0"><ResponsiveTableFrame label="Condição comercial"><table className="w-full min-w-[860px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Premissa</th><th className="px-5 py-3 font-medium">Valor</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 font-medium">Origem</th></tr></thead><tbody>{(["averageTicket", "entryValuePerContract", "collectionRate", "cancellationRate", "preOperationMonths", "fixedCostMonthly", "payrollMonthly", "capexInitial"] as const).map(key => { const input = versionInputs[key]; return <tr className="border-b border-white/[0.06] text-slate-200 last:border-0" key={key}><td className="px-5 py-3 font-medium">{inputLabels[key]}</td><td className="px-5 py-3">{input?.value ? formatKpi(key, input.value) : "PENDENTE"}</td><td className="px-5 py-3"><Badge variant="outline" className={input?.status === "provided" ? "border-emerald-300/25 text-emerald-200" : "border-amber-200/25 text-amber-200"}>{input?.status === "provided" ? "INFORMADO" : "PENDENTE"}</Badge></td><td className="px-5 py-3 text-xs text-muted-foreground">{input?.sourceRef ?? "Sem fonte"}</td></tr>; })}</tbody></table></ResponsiveTableFrame></CardContent></Card>
         </section>
       ) : null}
 
@@ -971,13 +1165,6 @@ export default function Boardroom() {
         title="Página 04 · Market / ICP"
         description="Market / ICP sem componente autoritativo neste snapshot. O Boardroom mantém o capítulo visível sem inventar segmentação, praça ou ICP."
       />
-
-      {snapshot && calculation && documentTotals ? (
-        <section id="study-product-inventory" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 02 · Product & Inventory</p><p className="mt-1 text-sm text-muted-foreground">O produto definido na ficha-mãe antes de qualquer promessa de venda.</p><ChapterFormulaTrace source="ficha_mae" memory={[]} /></div>
-          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[840px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Projeto</th><th className="px-5 py-3 font-medium">Praça</th><th className="px-5 py-3 font-medium">Início</th><th className="px-5 py-3 font-medium">Apartamentos</th><th className="px-5 py-3 font-medium">Cotas / apartamento</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-4 font-medium">{assemblyValue("nomeProjeto")}</td><td className="px-5 py-4">{assemblyValue("praca")}</td><td className="px-5 py-4">{assemblyValue("inicioOperacao")}</td><td className="px-5 py-4">{assemblyValue("totalApartamentos")}</td><td className="px-5 py-4">{assemblyValue("cotasPorApartamento")}</td></tr></tbody></table></CardContent></Card>
-        </section>
-      ) : null}
 
       {snapshot && calculation && documentTotals ? (
         <section id="study-captation" className="scroll-mt-24 space-y-4">
@@ -1082,6 +1269,7 @@ export default function Boardroom() {
       ) : null}
 
       {snapshot && calculation?.commercialOperations ? (
+        <>
         <section
           id="study-sales-room"
           className="scroll-mt-24 space-y-4"
@@ -1099,7 +1287,6 @@ export default function Boardroom() {
             </p>
           </div>
 
-          <section id="study-workforce" className="scroll-mt-24 space-y-4">
           <Card className="border-white/10 bg-card/80 shadow-none">
             <CardHeader className="pb-3">
               <CardTitle className="text-xl">Capacidade da sala</CardTitle>
@@ -1141,6 +1328,14 @@ export default function Boardroom() {
               </div>
             </CardContent>
           </Card>
+        </section>
+
+        <section id="study-workforce" className="scroll-mt-24 space-y-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 08 · Workforce</p>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">Headcount, produtividade, treinamento e comissão reconciliados com o caixa mensal.</p>
+            <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-workforce")} />
+          </div>
 
           <Card className="border-white/10 bg-card/80 shadow-none">
             <CardHeader className="pb-3">
@@ -1181,8 +1376,8 @@ export default function Boardroom() {
               </CardContent>
             </Card>
           </div>
-          </section>
         </section>
+        </>
       ) : snapshot ? (
         <>
           <EmptyBoardroomChapter
@@ -1196,6 +1391,13 @@ export default function Boardroom() {
             description="Workforce ainda não informado neste snapshot. Headcount, treinamento e comissão não foram separados do caixa."
           />
         </>
+      ) : null}
+
+      {snapshot && calculation && documentTotals ? (
+        <section id="study-costs" className="scroll-mt-24 space-y-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 09 · Costs</p><p className="mt-1 text-sm text-muted-foreground">A estrutura recorrente que consome caixa enquanto a operação vende.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-costs")} /></div>
+          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="p-0"><ResponsiveTableFrame label="Custos operacionais"><table className="w-full min-w-[680px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Custo variável</th><th className="px-5 py-3 font-medium">Custo fixo</th><th className="px-5 py-3 font-medium">Folha</th><th className="px-5 py-3 font-medium">Custo operacional</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.variableCosts))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.fixedCosts))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.payroll))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.variableCosts + documentTotals.fixedCosts + documentTotals.payroll))}</td></tr></tbody></table></ResponsiveTableFrame></CardContent></Card>
+        </section>
       ) : null}
 
       {snapshot && calculation && documentTotals ? (
@@ -1213,11 +1415,12 @@ export default function Boardroom() {
         </section>
       ) : null}
 
-      {snapshot && calculation && documentTotals ? (
-        <section id="study-costs" className="scroll-mt-24 space-y-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">Página 09 · Costs</p><p className="mt-1 text-sm text-muted-foreground">A estrutura recorrente que consome caixa enquanto a operação vende.</p><ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-costs")} /></div>
-          <Card className="border-white/10 bg-card/80 shadow-none"><CardContent className="overflow-x-auto p-0"><table className="w-full min-w-[680px] text-left text-sm"><thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Custo variável</th><th className="px-5 py-3 font-medium">Custo fixo</th><th className="px-5 py-3 font-medium">Folha</th><th className="px-5 py-3 font-medium">Custo operacional</th></tr></thead><tbody><tr className="text-slate-100"><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.variableCosts))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.fixedCosts))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.payroll))}</td><td className="px-5 py-5">{formatKpi("totalOperatingCashFlow", String(documentTotals.variableCosts + documentTotals.fixedCosts + documentTotals.payroll))}</td></tr></tbody></table></CardContent></Card>
-        </section>
+      {snapshot && calculation ? (
+        <CashStudyChapter
+          calculation={calculation}
+          snapshotHash={snapshot.snapshotHash}
+          formulaMemory={chapterFormulaMemory("#study-cash")}
+        />
       ) : null}
 
       {snapshot && calculation && documentTotals ? (
@@ -1228,7 +1431,7 @@ export default function Boardroom() {
       ) : null}
 
       {snapshot ? (
-        <section id="study-impact" className="scroll-mt-24 grid gap-4 lg:grid-cols-[1.2fr_.8fr]">
+        <div data-study-support="impact-between-versions" className="grid gap-4 lg:grid-cols-[1.2fr_.8fr]">
           <Card className="border-white/10 bg-card/80 shadow-none">
             <CardHeader className="flex-row items-start justify-between space-y-0">
               <div>
@@ -1329,11 +1532,12 @@ export default function Boardroom() {
               )}
             </CardContent>
           </Card>
-        </section>
+        </div>
       ) : null}
 
       {snapshot?.isAuthoritative ? (
-        <Card id="study-scenarios" className="scroll-mt-24 border-sky-300/20 bg-sky-300/[0.025] shadow-none">
+        <section id="study-scenarios" className="scroll-mt-24">
+        <Card className="border-sky-300/20 bg-sky-300/[0.025] shadow-none">
           <CardHeader>
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-200/90">
               Simulação de reunião
@@ -1397,7 +1601,20 @@ export default function Boardroom() {
               </div>
               <div>
                 <Label htmlFor="delta-comissao">Comissão / incentivo mês (R$)</Label>
-                <Input id="delta-comissao" inputMode="decimal" value={variableCostMonthlyDelta} onChange={event => setVariableCostMonthlyDelta(event.target.value)} className="mt-1.5 bg-white/[0.03]" />
+                <Input
+                  id="delta-comissao"
+                  inputMode="decimal"
+                  value={isHarmonyFinancialModel ? "0" : variableCostMonthlyDelta}
+                  disabled={isHarmonyFinancialModel}
+                  aria-describedby={isHarmonyFinancialModel ? "delta-comissao-harmony-help" : undefined}
+                  onChange={event => setVariableCostMonthlyDelta(event.target.value)}
+                  className="mt-1.5 bg-white/[0.03]"
+                />
+                {isHarmonyFinancialModel ? (
+                  <p id="delta-comissao-harmony-help" className="mt-1 text-[11px] leading-4 text-amber-100/80">
+                    Rubrica fixada pela fonte de compatibilidade Harmony; a simulação envia zero e preserva a reconciliação documental.
+                  </p>
+                ) : null}
               </div>
               <div>
                 <Label htmlFor="delta-capex">CAPEX de implantação (R$)</Label>
@@ -1408,15 +1625,26 @@ export default function Boardroom() {
             <Button
               variant="outline"
               className="border-sky-300/30 bg-sky-300/[0.08] text-sky-100 hover:bg-sky-300/[0.15]"
-              disabled={meetingStatus === "calculating"}
+              disabled={meetingStatus === "calculating" || !canUseFinancialModel}
               onClick={() => void runMeetingSimulation(true)}
             >
               {meetingStatus === "calculating" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Recalcular agora
             </Button>
             {meetingError ? <p role="alert" className="text-sm text-rose-200">{meetingError}</p> : null}
-            {isMeetingCurrent && meetingResult ? (
+            {meetingModelMismatch ? (
+              <p role="alert" className="rounded-xl border border-rose-300/30 bg-rose-300/[0.06] p-4 text-sm text-rose-100">
+                {meetingModelValidation.message} Nenhum delta pode ser salvo, registrado ou enviado para aprovação.
+              </p>
+            ) : null}
+            {isMeetingCurrent && meetingResult && meetingModelValidation.matches ? (
               <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="max-w-full whitespace-normal break-words border-sky-300/30 text-sky-100">
+                    HIPÓTESE · MODELO FINANCEIRO — {meetingResult.financialModelMode === "TGR_CANONICAL_V2" ? "TGR CANÔNICO V2" : "HARMONY COMPAT V1"}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">Mesmo modelo da baseline; snapshot oficial preservado.</span>
+                </div>
                 <div className="overflow-x-auto rounded-xl border border-white/10">
                   <table className="w-full min-w-[760px] text-left text-sm">
                     <thead className="bg-black/20 text-xs uppercase tracking-[0.1em] text-muted-foreground"><tr><th className="px-3 py-3">Indicador</th><th className="px-3 py-3">Oficial</th><th className="px-3 py-3">Hipótese</th><th className="px-3 py-3">Delta absoluto</th><th className="px-3 py-3">Delta %</th></tr></thead>
@@ -1452,9 +1680,9 @@ export default function Boardroom() {
             <div className="rounded-xl border border-amber-200/20 bg-amber-100/[0.035] p-4">
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" disabled={meetingActionsBusy} onClick={discardMeetingSimulation}>DESCARTAR SIMULAÇÃO</Button>
-                <Button variant="outline" disabled={!meetingHasDelta || meetingActionsBusy} onClick={() => void runMeetingAction("save")}>SALVAR COMO CENÁRIO</Button>
-                <Button variant="outline" disabled={!meetingHasDelta || meetingActionsBusy || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("decision")}>REGISTRAR DECISÃO</Button>
-                <Button className="bg-amber-400 text-slate-950 hover:bg-amber-300" disabled={!meetingHasDelta || meetingActionsBusy || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("review")}>{meetingAction === "review" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}SOLICITAR APROVAÇÃO</Button>
+                <Button variant="outline" disabled={!canUseFinancialModel || !meetingHasDelta || meetingActionsBusy} onClick={() => void runMeetingAction("save")}>SALVAR COMO CENÁRIO</Button>
+                <Button variant="outline" disabled={!canUseFinancialModel || !meetingHasDelta || meetingActionsBusy || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("decision")}>REGISTRAR DECISÃO</Button>
+                <Button className="bg-amber-400 text-slate-950 hover:bg-amber-300" disabled={!canUseFinancialModel || !meetingHasDelta || meetingActionsBusy || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("review")}>{meetingAction === "review" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}SOLICITAR APROVAÇÃO</Button>
               </div>
               {meetingActionMessage ? <p role="status" className="mt-3 text-sm text-amber-100">{meetingActionMessage}</p> : null}
               {savedMeetingScenario ? <p className="mt-2 font-mono text-xs text-muted-foreground">Cenário {savedMeetingScenario.versionId} · {savedMeetingScenario.state.toUpperCase()}{savedMeetingScenario.decisionId ? ` · decisão ${savedMeetingScenario.decisionId}` : ""}{savedMeetingScenario.snapshotId ? ` · snapshot ${savedMeetingScenario.snapshotId}` : ""}</p> : null}
@@ -1498,7 +1726,7 @@ export default function Boardroom() {
                       }));
                       resetBoardroomGoalSeek();
                     }}
-                    className="mt-1.5 h-10 w-full rounded-md border border-white/10 bg-slate-950/80 px-3 text-sm text-slate-100 outline-none focus:border-amber-200"
+                    className="mt-1.5 h-10 w-full rounded-md border border-white/10 bg-slate-950/80 px-3 text-sm text-slate-100 outline-none focus:border-amber-200 focus-visible:ring-2 focus-visible:ring-amber-200"
                   >
                     {Object.entries(GOAL_SEEK_TARGETS).map(([key, target]) => (
                       <option key={key} value={key} disabled={!target.supported}>
@@ -1522,7 +1750,7 @@ export default function Boardroom() {
                       }));
                       resetBoardroomGoalSeek();
                     }}
-                    className="mt-1.5 h-10 w-full rounded-md border border-white/10 bg-slate-950/80 px-3 text-sm text-slate-100 outline-none focus:border-amber-200"
+                    className="mt-1.5 h-10 w-full rounded-md border border-white/10 bg-slate-950/80 px-3 text-sm text-slate-100 outline-none focus:border-amber-200 focus-visible:ring-2 focus-visible:ring-amber-200"
                   >
                     {allowedGoalLevers.map(key => (
                       <option key={key} value={key}>
@@ -1612,7 +1840,7 @@ export default function Boardroom() {
                 <Button
                   variant="outline"
                   className="border-amber-200/30 bg-amber-200/[0.08] text-amber-100 hover:bg-amber-200/[0.15]"
-                  disabled={goalSeek.isPending || !goalReady || !selectedGoalTarget.supported}
+                  disabled={!canUseFinancialModel || goalSeek.isPending || !goalReady || !selectedGoalTarget.supported}
                   onClick={runBoardroomGoalSeek}
                 >
                   {goalSeek.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Target className="mr-2 h-4 w-4" />}
@@ -1635,6 +1863,11 @@ export default function Boardroom() {
                     {applyGoalSeek.isPending || createGoalSeekBranch.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitBranch className="mr-2 h-4 w-4" />}
                     Aplicar em branch auditável
                   </Button>
+                ) : null}
+                {financialModelMode === "HARMONY_COMPAT_V1" && !goalLeverApplyable ? (
+                  <p role="status" className="basis-full rounded-lg border border-amber-200/20 bg-amber-200/[0.04] p-3 text-xs leading-5 text-amber-100">
+                    Somente prévia: esta alavanca pertence a um domínio autoritativo. No Harmony, aplique apenas CAPEX inicial, custo fixo mensal ou folha mensal; nenhuma branch será criada para esta seleção.
+                  </p>
                 ) : null}
               </div>
 
@@ -1671,6 +1904,7 @@ export default function Boardroom() {
             </div>
           </CardContent>
         </Card>
+        </section>
       ) : null}
 
       {snapshot && calculation ? (
@@ -1685,66 +1919,6 @@ export default function Boardroom() {
             </CardContent>
           </Card>
         ) : null
-      ) : null}
-
-      {snapshot && calculation ? (
-        <Card id="study-cash" className="scroll-mt-24 border-white/10 bg-card/80 shadow-none">
-          <CardHeader className="flex-row items-start justify-between space-y-0">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/80">
-                Demonstrativo vivo
-              </p>
-              <CardTitle className="mt-2 text-xl">
-                Implantação, entrada líquida e caixa — primeiros 12 meses
-              </CardTitle>
-              <ChapterFormulaTrace source="snapshot" memory={chapterFormulaMemory("#study-cash")} />
-            </div>
-            <Badge variant="outline" className="border-white/15 bg-white/[0.03] text-slate-200">
-              Snapshot {snapshot.snapshotHash.slice(0, 8).toUpperCase()}
-            </Badge>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <p className="mb-4 text-xs leading-5 text-muted-foreground">A venda gera entrada; cada forma de pagamento liquida no mês do seu prazo e já vem descontada do MDR. A implantação aparece antes da abertura operacional, sem ser maquiada como OPEX.</p>
-            <table className="w-full min-w-[1660px] text-left text-xs">
-              <thead className="border-b border-white/10 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-3 font-medium">Mês</th>
-                  <th className="px-3 py-3 font-medium">Qualificados</th>
-                  <th className="px-3 py-3 font-medium">Contratos</th>
-                  <th className="px-3 py-3 font-medium">Venda bruta</th>
-                  <th className="px-3 py-3 font-medium">Entrada gerada</th>
-                  <th className="px-3 py-3 font-medium">Recebíveis liquidados</th>
-                  <th className="px-3 py-3 font-medium">Parcelas líquidas</th>
-                  <th className="px-3 py-3 font-medium">Taxas / MDR</th>
-                  <th className="px-3 py-3 font-medium">Entrada líquida</th>
-                  <th className="px-3 py-3 font-medium">Pré-invest.</th>
-                  <th className="px-3 py-3 font-medium">Folha</th>
-                  <th className="px-3 py-3 font-medium">Caixa do mês</th>
-                  <th className="px-3 py-3 font-medium">Caixa acumulado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {calculation.projections.slice(0, 12).map(row => (
-                  <tr key={row.month} className="border-b border-white/[0.06] text-slate-200 last:border-0">
-                    <td className="px-3 py-3 font-medium">{row.month}</td>
-                    <td className="px-3 py-3 font-mono">{row.qualifiedCouples}</td>
-                    <td className="px-3 py-3 font-mono">{row.contracts}</td>
-                    <td className="px-3 py-3">{formatKpi("grossSales", row.grossSales)}</td>
-                    <td className="px-3 py-3">{formatKpi("grossEntryGenerated", row.grossEntryGenerated ?? "0")}</td>
-                    <td className="px-3 py-3">{formatKpi("grossReceivablesSettled", row.grossReceivablesSettled ?? row.grossEntrySettled ?? row.recognizedRevenue)}</td>
-                    <td className="px-3 py-3">{formatKpi("installmentCollections", row.installmentCollections ?? "0")}</td>
-                    <td className="px-3 py-3 text-rose-200">{formatKpi("paymentFees", row.paymentFees ?? "0")}</td>
-                    <td className="px-3 py-3 text-emerald-200">{formatKpi("netCollections", row.netCollections ?? row.recognizedRevenue)}</td>
-                    <td className="px-3 py-3 text-amber-200">{formatKpi("preOperationalInvestment", row.preOperationalInvestment ?? row.capex)}</td>
-                    <td className="px-3 py-3">{formatKpi("totalOperatingCashFlow", row.payroll)}</td>
-                    <td className="px-3 py-3">{formatKpi("totalOperatingCashFlow", row.operatingCashFlow)}</td>
-                    <td className="px-3 py-3 font-medium">{formatKpi("totalOperatingCashFlow", row.cumulativeCashFlow)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
       ) : null}
 
       {snapshot && calculation ? (
@@ -1860,7 +2034,7 @@ export default function Boardroom() {
                   <Button
                     className="w-full bg-amber-400 text-slate-950 hover:bg-amber-300"
                     disabled={
-                      approve.isPending || approvalRationale.trim().length < 3
+                      !canUseFinancialModel || approve.isPending || approvalRationale.trim().length < 3
                     }
                     onClick={() =>
                       approve.mutate({
@@ -1880,7 +2054,7 @@ export default function Boardroom() {
                 <Button
                   variant="outline"
                   className="w-full border-white/15 bg-white/5"
-                  disabled={freeze.isPending}
+                  disabled={!canUseFinancialModel || freeze.isPending}
                   onClick={() => freeze.mutate({ snapshotId: snapshot.id })}
                 >
                   <ShieldCheck className="mr-2 h-4 w-4" />
@@ -1891,7 +2065,7 @@ export default function Boardroom() {
                 variant="outline"
                 className="w-full border-white/15 bg-white/5"
                 disabled={
-                  !eligibilityQuery.data?.eligible || requestExport.isPending
+                  !canUseFinancialModel || !eligibilityQuery.data?.eligible || requestExport.isPending
                 }
                 onClick={() =>
                   requestExport.mutate({
@@ -1907,7 +2081,7 @@ export default function Boardroom() {
                 variant="outline"
                 className="w-full border-white/15 bg-white/5"
                 disabled={
-                  !eligibilityQuery.data?.eligible || requestExport.isPending
+                  !canUseFinancialModel || !eligibilityQuery.data?.eligible || requestExport.isPending
                 }
                 onClick={() =>
                   requestExport.mutate({
@@ -1923,7 +2097,7 @@ export default function Boardroom() {
                 variant="outline"
                 className="w-full border-white/15 bg-white/5"
                 disabled={
-                  !eligibilityQuery.data?.eligible || requestExport.isPending
+                  !canUseFinancialModel || !eligibilityQuery.data?.eligible || requestExport.isPending
                 }
                 onClick={() =>
                   requestExport.mutate({

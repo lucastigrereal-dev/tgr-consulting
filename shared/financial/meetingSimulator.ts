@@ -1,11 +1,14 @@
-import {
-  calculateFinancialProjection,
-  FinanceDecimal,
-  type FinancialProjectionOptions,
-} from "./engine";
-import type { FinancialCalculation, FinancialInputSnapshot } from "./types";
+import { FinanceDecimal, type FinancialProjectionOptions } from "./engine";
+import { DEFAULT_FINANCIAL_MODEL_MODE } from "./modelMode";
+import { calculateStudyProjection } from "./studyProjection";
+import type {
+  FinancialCalculation,
+  FinancialInputSnapshot,
+  FinancialModelMode,
+} from "./types";
 
 export type CaptadorSimulationInput = {
+  financialModelMode?: FinancialModelMode;
   inputs: FinancialInputSnapshot;
   horizonMonths: number;
   captadorDelta: string;
@@ -51,6 +54,7 @@ type SimulationState = {
 
 export type MeetingSimulationResult = {
   mode: "non_persistent";
+  financialModelMode: FinancialModelMode;
   assumptions: Record<string, string>;
   before: SimulationState;
   after: SimulationState;
@@ -84,11 +88,18 @@ function readProvided(inputs: FinancialInputSnapshot, key: "qualifiedCouplesMont
 }
 
 export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingSimulationResult {
+  const financialModelMode =
+    input.financialModelMode ?? DEFAULT_FINANCIAL_MODEL_MODE;
   const calculationOptions = {
     ...input.calculationOptions,
     maxContracts: input.maxContracts ?? input.calculationOptions?.maxContracts,
   };
-  const baseline = calculateFinancialProjection(input.inputs, input.horizonMonths, calculationOptions);
+  const baseline = calculateStudyProjection(
+    financialModelMode,
+    input.inputs,
+    input.horizonMonths,
+    calculationOptions
+  );
   if (baseline.status !== "valid") throw new Error("A simulação exige um estudo calculável, sem premissas financeiras pendentes.");
 
   const delta = new FinanceDecimal(input.captadorDelta);
@@ -115,6 +126,13 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
   const payrollDelta = new FinanceDecimal(input.payrollMonthlyDelta ?? "0");
   const variableCostMonthlyDelta = new FinanceDecimal(input.variableCostMonthlyDelta ?? "0");
   const capexDelta = new FinanceDecimal(input.capexInitialDelta ?? "0");
+  if (
+    financialModelMode === "HARMONY_COMPAT_V1" &&
+    !variableCostMonthlyDelta.eq(0)
+  )
+    throw new Error(
+      "Comissão/incentivo mensal não é uma alavanca suportada em HARMONY_COMPAT_V1; preserve zero ou use TGR_CANONICAL_V2."
+    );
   const nextCouples = targetGrossSalesMonth1 === null
     ? FinanceDecimal.max(new FinanceDecimal(0), baselineCouples.plus(delta.times(couplesPerCaptador)))
     : targetGrossSalesMonth1.div(conversionRate);
@@ -141,7 +159,8 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
     variableCostRate: { status: "provided", value: decimalText(nextVariableCostRate), sourceType: "derived_analysis", sourceRef: "meeting_simulator" },
     capexInitial: { status: "provided", value: decimalText(nextCapex), sourceType: "derived_analysis", sourceRef: "meeting_simulator" },
   };
-  const simulated = calculateFinancialProjection(
+  const simulated = calculateStudyProjection(
+    financialModelMode,
     simulatedInputs,
     input.horizonMonths,
     input.simulatedCalculationOptions ?? calculationOptions
@@ -183,6 +202,7 @@ export function simulateCaptadorChange(input: CaptadorSimulationInput): MeetingS
       ].filter(item => item.active).map(item => ({ key: item.key, label: item.label, marginal: simulateSingleLever(item.patch) }));
   return {
     mode: "non_persistent" as const,
+    financialModelMode,
     assumptions: {
       captadorDelta: decimalText(delta),
       qualifiedCouplesPerCaptadorMonth: decimalText(couplesPerCaptador),

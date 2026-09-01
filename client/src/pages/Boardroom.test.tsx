@@ -76,6 +76,7 @@ vi.mock("@/lib/trpc", () => ({
 import Boardroom, {
   canApplyBoardroomGoalSeekResult,
   createBoardroomGoalSeekApplyPayload,
+  validateMeetingFinancialModel,
   type BoardroomGoalSeekResult,
   type BoardroomGoalSeekSelection,
 } from "./Boardroom";
@@ -210,15 +211,120 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain("Executar Goal Seek");
     expect(html).toContain("Decision panel");
     expect(html).toContain("operating-cash-flow · v1.2.0");
+    expect(html).toContain("MODELO FINANCEIRO — TGR CANÔNICO V2");
+    expect(html).toContain("1.9.0");
+    expect(html).toContain("igr-engine-1.9.0");
+    const sectionTokens = html.match(/<\/?section\b[^>]*>/g) ?? [];
+    const chapterSections = sectionTokens.reduce(
+      (state, token) => {
+        if (token.startsWith("</")) {
+          state.depth -= 1;
+          return state;
+        }
+        const id = token.match(/\sid="(study-[^"]+)"/)?.[1];
+        if (id) state.chapters.push({ id, depth: state.depth });
+        state.depth += 1;
+        return state;
+      },
+      { depth: 0, chapters: [] as Array<{ id: string; depth: number }> }
+    ).chapters;
+    expect(chapterSections.map(chapter => chapter.id)).toEqual(
+      LIVE_DOCUMENT_CHAPTERS.map(chapter => chapter.href.slice(1))
+    );
+    expect(new Set(chapterSections.map(chapter => chapter.depth))).toEqual(new Set([0]));
+  });
+
+  it("mostra Harmony como compatibilidade com conflito de fonte, nunca como paridade aprovada", () => {
+    const calculation = calculateFinancialProjection(inputs, 24);
+    expect(calculation.status).toBe("valid");
+    if (calculation.status !== "valid") return;
+    state.calculation = {
+      ...calculation,
+      financialModelMode: "HARMONY_COMPAT_V1",
+      formulaSetVersion: "1.0.0",
+      engineVersion: "harmony-compat-engine-v1",
+      compatibilityEvidence: {
+        authorityStatus: "SOURCE_CONFLICT",
+        availableSource: "PR #1 review",
+        missingSource: "COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1",
+        adoptedGrossContracts: "4458",
+        sourceConflicts: [
+          {
+            id: "gross-contracts-4457-vs-4458",
+            status: "SOURCE_CONFLICT",
+            adoptedRule: "Adotado 4.458 pelo arredondamento explícito.",
+          },
+          ...Array.from({ length: 5 }, (_, index) => ({
+            id: `source-conflict-${index + 2}`,
+            status: "SOURCE_CONFLICT" as const,
+            adoptedRule: `Regra adotada ${index + 2}.`,
+          })),
+        ],
+      },
+    };
+    state.goalSeekResult = {
+      status: "converged",
+      targetKpi: "npv",
+      variableKey: "capexInitial",
+      target: "0.00000000",
+      lowerBound: "0.00000000",
+      upperBound: "100000.00000000",
+      result: "120.00000000",
+      objectiveValue: "0.00000000",
+      residual: "0.00000000",
+      iterations: 9,
+    };
+
+    const html = renderToStaticMarkup(<Boardroom />);
+    expect(html).toContain("MODELO FINANCEIRO — HARMONY COMPAT V1");
+    expect(html).toContain("Harmony Compatível V1");
+    expect(html).toContain("SOURCE_CONFLICT");
+    expect(html).toContain("gross-contracts-4457-vs-4458");
+    expect(html).toContain("6 conflitos de fonte");
+    expect(html).toContain("source-conflict-6");
+    expect(html).toContain("Rubrica fixada pela fonte de compatibilidade Harmony");
+    expect(html).toMatch(/<input[^>]*id="delta-comissao"[^>]*disabled=""[^>]*value="0"/);
+    expect(html).not.toContain("Aplicar em branch auditável");
+    expect(html).not.toContain("paridade aprovada");
+  });
+
+  it("bloqueia ações financeiras quando o snapshot usa formula e engine desconhecidos", () => {
+    const calculation = calculateFinancialProjection(inputs, 24);
+    expect(calculation.status).toBe("valid");
+    if (calculation.status !== "valid") return;
+    const { financialModelMode: _mode, ...unknownCalculation } = calculation;
+    state.calculation = {
+      ...unknownCalculation,
+      formulaSetVersion: "9.9.9",
+      engineVersion: "unknown-engine",
+    };
+
+    const html = renderToStaticMarkup(<Boardroom />);
+    expect(html).toContain("MODELO FINANCEIRO — NÃO IDENTIFICADO");
+    expect(html).toContain("Ações financeiras bloqueadas");
+    expect(html).toMatch(/<button(?=[^>]*disabled="")[^>]*>(?:(?!<\/button>)[\s\S])*Recalcular agora<\/button>/);
+    expect(html).toMatch(/<button(?=[^>]*disabled="")[^>]*>(?:(?!<\/button>)[\s\S])*Executar Goal Seek<\/button>/);
+  });
+
+  it("falha fechado quando simulação e baseline usam metodologias diferentes ou não identificadas", () => {
+    expect(
+      validateMeetingFinancialModel("HARMONY_COMPAT_V1", "HARMONY_COMPAT_V1")
+    ).toEqual({ matches: true, message: null });
+    expect(
+      validateMeetingFinancialModel("HARMONY_COMPAT_V1", "TGR_CANONICAL_V2")
+    ).toMatchObject({ matches: false });
+    expect(
+      validateMeetingFinancialModel("HARMONY_COMPAT_V1", undefined)
+    ).toMatchObject({ matches: false });
   });
 
   it("só libera aplicação auditável de Goal Seek quando o resultado convergiu e bate com a seleção", () => {
     const selection: BoardroomGoalSeekSelection = {
       targetKpi: "npv",
-      variableKey: "qualifiedCouplesMonth1",
+      variableKey: "capexInitial",
       target: "100000.00000000",
       lowerBound: "0.00000000",
-      upperBound: "100000.00000000",
+      upperBound: "1000000000.00000000",
     };
     const converged: BoardroomGoalSeekResult = {
       ...selection,
@@ -242,10 +348,10 @@ describe("Boardroom · trilha editorial", () => {
     state.goalSeekResult = {
       status: "converged",
       targetKpi: "npv",
-      variableKey: "qualifiedCouplesMonth1",
+      variableKey: "capexInitial",
       target: "0.00000000",
       lowerBound: "0.00000000",
-      upperBound: "100000.00000000",
+      upperBound: "1000000000.00000000",
       result: "120.00000000",
       objectiveValue: "1.00000000",
       residual: "0.00000000",
@@ -258,7 +364,7 @@ describe("Boardroom · trilha editorial", () => {
     expect(html).toContain("Goal Seek de reunião");
     expect(html).toContain("CONVERGIU");
     expect(html).toContain("Convergência encontrada.");
-    expect(html).toContain("Casais qualificados - mês 1");
+    expect(html).toContain("CAPEX inicial");
     expect(html).toContain("120.00000000");
     expect(html).toContain("Aplicar em branch auditável");
   });

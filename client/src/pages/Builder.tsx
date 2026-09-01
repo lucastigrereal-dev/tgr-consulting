@@ -24,9 +24,15 @@ import {
   FINANCIAL_INPUT_KEYS,
   type FinancialInputKey,
   type FinancialInputSnapshot,
+  type FinancialModelMode,
 } from "@shared/financial/types";
+import {
+  DEFAULT_FINANCIAL_MODEL_MODE,
+  FINANCIAL_MODEL_MODE_REGISTRY,
+  getFinancialModelModeDefinition,
+} from "@shared/financial/modelMode";
 import { CircleAlert, FileCog } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 type InputKind = "currency" | "percent" | "count";
@@ -384,11 +390,99 @@ export function hasUnsavedBuilderChanges(
   return financialInputsDirty || cotiaDraftDirty;
 }
 
+type CotiaProjectMutationInput = {
+  name: string;
+  assemblyName: string;
+  payload: Record<string, string>;
+  sourceRef?: string;
+  financialModelMode?: FinancialModelMode;
+};
+
+export function createCotiaProjectMutationInput({
+  financialModelMode = DEFAULT_FINANCIAL_MODEL_MODE,
+  ...input
+}: CotiaProjectMutationInput) {
+  return { ...input, financialModelMode };
+}
+
+export function FinancialModelModeSelector({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: FinancialModelMode | null;
+  onChange: (value: FinancialModelMode) => void;
+  disabled?: boolean;
+}) {
+  const definition = value ? getFinancialModelModeDefinition(value) : null;
+  const isHarmony = value === "HARMONY_COMPAT_V1";
+  return (
+    <Card className="overflow-hidden border-amber-200/20 bg-[linear-gradient(135deg,rgba(25,32,44,.96),rgba(10,16,27,.98))] shadow-none">
+      <CardContent className="grid gap-4 p-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,0.7fr)] md:items-center">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200/90">
+              Metodologia financeira
+            </p>
+            <Badge
+              variant="outline"
+              className={isHarmony
+                ? "max-w-full whitespace-normal break-words border-amber-300/30 text-amber-100"
+                : "max-w-full whitespace-normal break-words border-emerald-300/25 text-emerald-100"}
+            >
+              {definition?.id ?? "NÃO IDENTIFICADO"}
+            </Badge>
+          </div>
+          <p id="financial-model-mode-help" className="mt-2 text-sm leading-6 text-muted-foreground">
+            {definition
+              ? `${definition.description} A escolha fica selada na versão e acompanha cálculo, cenários e exports.`
+              : "Conjunto de fórmulas sem metodologia registrada. A metodologia não será presumida."}
+          </p>
+          {isHarmony ? (
+            <p role="status" className="mt-3 text-xs font-medium leading-5 text-amber-100">
+              SOURCE_CONFLICT · Compatibilidade documental para reconciliação; não representa paridade aprovada com o workbook ausente.
+            </p>
+          ) : null}
+          {!definition ? (
+            <p role="alert" className="mt-3 text-xs font-medium leading-5 text-rose-200">
+              NÃO IDENTIFICADO · Ações de cálculo e decisões dependentes da metodologia permanecem bloqueadas até a versão ser reconciliada.
+            </p>
+          ) : null}
+        </div>
+        <div>
+          <Label htmlFor="financial-model-mode">Modelo aplicado ao novo estudo</Label>
+          <select
+            id="financial-model-mode"
+            aria-describedby="financial-model-mode-help"
+            value={value ?? ""}
+            disabled={disabled}
+            onChange={event => onChange(event.target.value as FinancialModelMode)}
+            className="mt-2 h-11 w-full rounded-md border border-white/15 bg-slate-950/90 px-3 text-sm text-slate-100 outline-none focus:border-amber-200 focus-visible:ring-2 focus-visible:ring-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {!definition ? (
+              <option value="">NÃO IDENTIFICADO</option>
+            ) : Object.values(FINANCIAL_MODEL_MODE_REGISTRY).map(mode => (
+              <option key={mode.id} value={mode.id}>{mode.label}</option>
+            ))}
+          </select>
+          {disabled ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Projeto já aberto: a metodologia desta versão permanece imutável.
+            </p>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Builder() {
   const utils = trpc.useUtils();
   const projectsQuery = trpc.igr.projects.useQuery(undefined, { retry: false });
   const [activeProjectId, setActiveProjectId] = useState("");
   const [projectName, setProjectName] = useState("");
+  const [financialModelMode, setFinancialModelMode] =
+    useState<FinancialModelMode>(DEFAULT_FINANCIAL_MODEL_MODE);
   const [inputs, setInputs] =
     useState<FinancialInputSnapshot>(createPendingInputs);
   const [persistedSignature, setPersistedSignature] = useState(
@@ -415,6 +509,16 @@ export default function Builder() {
     { enabled: Boolean(activeProjectId), retry: false }
   );
   const activeVersionId = contextQuery.data?.workingVersion?.id ?? "";
+  const persistedFinancialModelMode = Object.values(
+    FINANCIAL_MODEL_MODE_REGISTRY
+  ).find(
+    mode =>
+      mode.formulaSetVersion.id ===
+      contextQuery.data?.workingVersion?.formulaSetVersionId
+  )?.id;
+  const visibleFinancialModelMode = activeVersionId
+    ? persistedFinancialModelMode ?? null
+    : financialModelMode;
   const savedInputsQuery = trpc.igr.versionInputs.useQuery(
     { versionId: activeVersionId },
     { enabled: Boolean(activeVersionId), retry: false }
@@ -588,12 +692,13 @@ export default function Builder() {
     const assemblyProjectName = draft.values.nomeProjeto?.trim() || projectName.trim();
     if (assemblyProjectName.length < 3)
       return toast.error("Dê um nome ao estudo antes de registrar a Montagem.");
-    createProjectFromCotiaAssembly.mutate({
+    createProjectFromCotiaAssembly.mutate(createCotiaProjectMutationInput({
       name: assemblyProjectName,
       assemblyName: assemblyRecord.name,
       payload: assemblyRecord.payload,
       sourceRef: assemblyRecord.sourceRef,
-    });
+      financialModelMode,
+    }));
   };
   const assemblyDraft = getDraft(assemblyDomain);
   const assemblyCompletion = evaluateCotiaAssemblyCompleteness(assemblyDraft.values);
@@ -632,6 +737,11 @@ export default function Builder() {
   }, [activeVersionId, componentsQuery.data]);
   return (
     <div className="mx-auto max-w-6xl space-y-6 pb-10">
+      <FinancialModelModeSelector
+        value={visibleFinancialModelMode}
+        onChange={setFinancialModelMode}
+        disabled={Boolean(activeVersionId)}
+      />
       <CotiaProjectMatrix
         values={assemblyDraft.values}
         sourceRef={assemblyDraft.sourceRef}

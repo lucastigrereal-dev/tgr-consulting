@@ -447,7 +447,7 @@ describe("igrRouter + banco", () => {
     ids.meetingScenarioBranchId = promotedMeeting.branchId;
     ids.meetingScenarioVersionId = promotedMeeting.versionId;
     expect(await owner.versionInputs({ versionId: promotedMeeting.versionId })).toMatchObject({
-      qualifiedCouplesMonth1: { value: "120.00000000", sourceType: "current_decision", sourceRef: "Ata Boardroom 42" },
+      qualifiedCouplesMonth1: baselineInputsBeforeMeeting.qualifiedCouplesMonth1,
     });
     expect(await owner.capturePoints({ versionId: promotedMeeting.versionId })).toMatchObject([{
       sourceType: "current_decision",
