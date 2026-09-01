@@ -2,88 +2,94 @@
 
 ## Identidade
 
-- Data local: 2026-08-31
+- Data local: 2026-09-01
 - Repositório: `lucastigrereal-dev/tgr-consulting`
 - Branch: `codex/tgr-master-brd-v1`
-- Source head certificado: `085b4516e4ab64747d0678cd9077a0d769078be9`
-- Base remota desta rodada: `25681761263586ab8e0e298c5fe1bc3b38650a4b`
-- Ambiente: Windows local, MySQL 8.4 efêmero e Microsoft Edge headless
-- Credenciais/serviços de produção: não usados
+- Source head certificado: `45944bad25a8d3ba554d1095574b10beb5824c5b`
+- Base desta rodada: `bd7848b3f6f8c7bbbf6142c68f4fb0cdf09f233e`
+- Ambiente: Windows local, MySQL efêmero e browser Chromium/Edge headless
+- Credenciais ou serviços de produção: não usados
 - Merge: não executado
 
-Este receipt é posterior ao source head certificado. O commit exclusivamente documental e o estado remoto final são registrados no PR.
+Este receipt é um commit documental posterior ao source head certificado. O HEAD remoto final e os checks do PR são registrados após o push.
 
-## Resumo da rodada
+## Resultado executivo
 
-O branch agora executa o Golden Natal em 120 meses sobre a engine canônica, materializa a Página 1 Cotia como matriz viva, simula `100 → 120` vendas/mês no controle visual do Boardroom sem alterar a baseline, promove a hipótese a cenário auditável e exporta PDF/PPTX/XLSX somente de snapshot aprovado e congelado. O pack de exportação mantém a mesma identidade determinística entre formatos e transporta snapshot, versão, autor, data e lifecycle.
+A rodada preservou o modelo canônico existente e acrescentou um modo financeiro explícito `HARMONY_COMPAT_V1`, separado de `TGR_CANONICAL_V2`. O Golden Natal agora é criado pela Página 1 Cotia real, calculado em 120 meses, simulado no Boardroom de `100 → 120` vendas/mês, promovido a cenário, aprovado, congelado e exportado em PDF/PPTX/XLSX sem alterar silenciosamente a baseline.
 
-Também foram fechados os P1 encontrados na revisão final: proteção contra perda do draft Cotia, semântica decimal consistente para percentuais na UI, capítulo ativo sincronizado durante scroll manual, reload autenticado robusto e separação reproduzível entre testes unitários e integração MySQL.
+Foram também fechadas as correções pré-merge: recomputação server-side do Goal Seek, promoção de cenário com normalização do Cost Catalog, identidade de snapshot escopada por versão/horizonte/data-base e criação idempotente que reutiliza o snapshot existente sem duplicar KPI memory, workflow ou audit. A constraint `UNIQUE(snapshotHash)` foi preservada.
 
-## Gates executados no source head
+## Gates executados
 
-| Comando/prova | Resultado |
+| Comando ou prova | Resultado |
 | --- | --- |
-| `pnpm install --frozen-lockfile` | PASS — lockfile atual, nenhuma alteração |
-| `pnpm run check` | PASS — TypeScript sem emissão |
-| `pnpm test` | PASS — 49 arquivos, 217 testes unitários/UI |
-| `pnpm run test:integration:db` | PASS — migrations + 3 arquivos, 17/17 testes MySQL |
-| `pnpm run build` | PASS — Vite 7.3.5, 1.878 módulos + bundle Node |
+| `pnpm install --frozen-lockfile` | PASS — lockfile atual |
+| `pnpm run check` | PASS |
+| `pnpm test -- --run --reporter=dot` | PASS — 57 arquivos, 274 testes unitários/UI |
+| `pnpm run test:integration:db` | PASS — 3 arquivos, 19 testes MySQL |
+| testes focados Harmony/snapshot/export | PASS — 5 arquivos, 47 testes |
+| revisão independente pós-fixes | PASS — 14 arquivos, 92 testes; nenhum P0/P1 restante |
+| `pnpm run build` | PASS — 1.881 módulos Vite + bundle Node |
 | `pnpm audit --prod --audit-level=high` | PASS — nenhuma vulnerabilidade conhecida |
-| `pnpm run test:e2e:master` | PASS — jornada híbrida autenticada, 30/30 casos adversariais, 4 viewports × 16 capítulos |
-| testes focados Golden/export/Payment Calendar | PASS — 17/17 |
-| testes focados Builder/Boardroom/Golden/export | PASS — 35/35 |
+| `pnpm run test:e2e:master` | PASS — Builder/Cotia real, baseline/cenário, aprovação, freeze, export, 4 viewports × 16 capítulos e 30/30 adversariais |
 | `git diff --check` | PASS |
-| revisões independentes P0/P1 | PASS após correções — nenhum P0/P1 conhecido no delta final |
 
-## Golden Natal
+## Provas dos review threads
 
-Fixture: `golden/natal-ponta-negra-2026`, Fórmula Set `1.9.0`, engine `igr-engine-1.9.0`, vetor esperado SHA-256 `ee202772ccc4234f0fb9e790b3834373fd747a9cd83e9d19ddd010eff435cfe1`.
+| Review | Prova |
+| --- | --- |
+| race de inputs e draft | testes focados de Cotia/Builder e suíte UI completos verdes; draft local não é sobrescrito por resposta assíncrona obsoleta |
+| Goal Seek autoritativo | teste MySQL chama a rota com valores manipulados no cliente e prova recomputação server-side |
+| snapshot idempotente | testes MySQL cobrem snapshot bloqueado repetido, snapshot válido repetido, mudança real de input, ausência de KPI memory duplicada e ausência de workflow/audit duplicados |
 
-| Indicador | Esperado | Obtido | Delta | Status |
-| --- | ---: | ---: | ---: | --- |
-| Vendas líquidas/contratos ativos | 3.120,00000000 | 3.120,00000000 | 0 | PASS |
-| Sell-out | mês 43 | mês 43 | 0 | PASS |
-| Receita reconhecida | R$ 76.258.836,34 | R$ 76.258.836,34 | 0 | PASS |
-| Caixa operacional | R$ 33.922.836,35 | R$ 33.922.836,35 | 0 | PASS |
-| Capital necessário | R$ 2.885.282,30 | R$ 2.885.282,30 | 0 | PASS |
-| VPL | R$ 17.556.378,03 | R$ 17.556.378,03 | 0 | PASS |
-| Payback | 33,26222707 meses | 33,26222707 meses | 0 | PASS |
-| TIR | não aplicável ao fluxo do fixture | `null` | — | PASS |
+## Golden Natal — Harmony Compat V1
 
-Premissas comerciais/contratuais ainda não aprovadas estão explicitamente marcadas `TEST DATA` ou `PENDING`; o sistema não inventa INCC/IGP-M nem política final de comissão.
+- Fixture: `golden/natal-harmony-master-v1.reference.json`
+- Modo: `HARMONY_COMPAT_V1`
+- Formula set: `1.0.0`
+- Engine: `harmony-compat-engine-v1`
+- Baseline: `100` vendas/mês
+- Cenário aprovado: `120` vendas/mês
+- snapshot baseline: `2fa8a906cae9d43250f9861c44a6234615d2358d5d0c2ae3b08dfa9dc01803cb`
+- snapshot aprovado: `cdff5550a144d036ad5df81fc6427dd3bc96f45636ac057f6f5da496d00a9fa7`
+- export pack: `51fb85c0a3e32f0142c12a1ab4b6940fed9a8d654ff6e99ec866554dd9c54da1`
+- regressão cross-mode: `2.633 MATCH`, `2.415 MODEL_DELTA`, `0 DELTA`, `0 SOURCE_CONFLICT`
 
-## Identidade E2E e exports
+No eixo de targets do estudo, sell-out em 45 meses é `MATCH`. Capital necessário, VPL, TIR e payback permanecem `SOURCE_CONFLICT`, pois o workbook completo `COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1` não foi encontrado no material autorizado. O produto e os exports exibem essa limitação; `workbookParityClaimed=false`. Não há alegação de paridade integral com fonte ausente.
 
-- snapshot oficial Golden: `b8c3cc711cd6d3589fe1a0ef7c4a9363c3ed4502aee52e848f62aa69e3a7cb2b`;
-- snapshot aprovado do cenário Golden: `bb677df7bb57997947b03779e53e8bc5c4d9ddeb494ddae255cfbb9e2c6c147b`;
-- baseline visual: `100.00000000` vendas/mês;
-- hipótese visual: `120.00000000` vendas/mês;
-- export pack Golden: identidade única validada como igual entre PDF/PPTX/XLSX na execução final;
-- export genérico: PDF 8.737 bytes, PPTX 18.296 bytes, XLSX 23.025 bytes;
-- Boardroom responsivo: desktop, apresentação, zoom 200% equivalente e mobile; 16 capítulos por viewport;
-- evidência visual local: `C:\Users\lucas\AppData\Local\Temp\tgr-e2e-master-I2qXSK\screenshots` (Builder desktop/mobile e Boardroom desktop/mobile).
+## E2E e QA visual
 
-O E2E é explicitamente híbrido: browser real cobre sessão, seleção de projeto, navegação, edição da meta `100 → 120`, delta visível, screenshots, logout/reentrada e reload; tRPC autenticado prepara domínios densos e executa promoção/aprovação/exportação. Não há alegação de jornada integral apenas por cliques.
+O E2E cria o projeto Natal pela interface real da Página 1, usa a mesma versão no cálculo e na reunião, valida estoque, entrada, parcelas, carteira, comissões, DRE, caixa e indicadores, altera a premissa para 120, prova que a versão oficial não muda antes da promoção e confere a identidade do export aprovado.
 
-## QA visual
+| Tela | Desktop | Mobile | Status |
+| --- | --- | --- | --- |
+| Página 1 Cotia / Builder | inspecionada | 375×812 inspecionada | PASS |
+| Boardroom — hipótese 120 | inspecionado | inspecionado | PASS |
+| Boardroom — baseline aprovado | inspecionado | inspecionado | PASS |
+| PDF/PPTX/XLSX | identidade e caveat verificados | consulta funcional | PASS |
 
-| Tela | Desktop | Mobile | Status | Observação |
-| --- | --- | --- | --- | --- |
-| Builder / Página 1 Cotia | Inspecionada | consulta funcional | PASS | matriz viva, campos editáveis/derivados e `PENDING`; draft não salvo sinalizado |
-| Boardroom Golden Natal | Inspecionada | 375×812 inspecionado | PASS | identidade TGR, sem overflow global, foco por teclado e navegação sincronizada ao scroll |
-| Cenários/exportação | Exercitada no E2E | consulta funcional | PASS | baseline não muda antes da ação explícita; export requer aprovação + freeze |
+As evidências versionadas estão em `docs/tgr/evidence/harmony-compat-v1/`, incluindo seis screenshots e os três formatos exportados.
 
-## Commits da rodada
+## Identidade dos artefatos
 
-Foram produzidos 18 commits de implementação/teste entre `4d902ac0459b5de16455b2d686792b42296786bd` e `085b4516e4ab64747d0678cd9077a0d769078be9`, cobrindo Golden Natal, Fórmula Set 1.9, Cotia transacional, Boardroom, scenario promotion, export provenance, QA e gates reproduzíveis. O histórico completo é a fonte canônica da lista de arquivos alterados.
+| Artefato | SHA-256 |
+| --- | --- |
+| Builder desktop | `41126c38601ef22ba9416b477358a11dead5b1b96aa174bcbc02b18a31d11d68` |
+| Builder mobile | `9260506562e1c4005973c7481bcb84eb352640a39c1cca875b134379ad0de4c0` |
+| Boardroom desktop | `bb52de4a79ef056a4f618d0338d175acfa89b0e6e45a8d9091413ac5b66a9ee0` |
+| Boardroom mobile | `3951a5f2ee33b74185d2e51f6a3588c5d5a4911a36f1a3aaae659bc5e127c257` |
+| Baseline aprovado desktop | `3b5d7592886514f6233e5c701e67760cd8a99d2fc958c693084de2c2f763a212` |
+| Baseline aprovado mobile | `5973f559479abf49ca08350b93aa9a79acadd87e819f146e15f8b1f4ed481680` |
+| PDF | `f4047d51fe90915875b8bf74e875ada7f2f0c36b86f9b70f2a7dc04ebc8b94b3` |
+| PPTX | `fe9447c4dafd4751c22e5d428c66e6e5ea83daef59ef66194fa04ffd193e1eab` |
+| XLSX | `d216fa017bdf490ec98604fc920bc162bbb6e81a4129b496cf6059d6a1b70278` |
 
-## Limite da certificação e GO/NO-GO
+## GO / NO-GO
 
-- Demo interna: **GO**.
-- Demonstração de produto a investidor: **GO CONDICIONAL**, deixando visível que comissões, curva contratual INCC/IGP-M, recuperação e custos agregados do Golden são `TEST DATA/PENDING`, não orçamento aprovado.
-- Uso do Golden como previsão econômica contratual do Natal: **NO-GO** até aprovação comercial/financeira das políticas pendentes.
-- Produção: **NO-GO** até OAuth/storage/deploy/observabilidade/secrets/rate limiting/backup gerenciado e políticas financeiras definitivas serem certificados no ambiente alvo.
+- Demo interna do fluxo vivo: **GO**.
+- Apresentação a investidor como demonstração funcional, com caveat de fonte visível: **GO CONDICIONAL**.
+- Alegação de paridade integral com o workbook Harmony: **NO-GO** até a fonte completa ser fornecida e reconciliada.
+- Produção: **NO-GO** até infraestrutura, autenticação, storage, observabilidade, backups e políticas financeiras definitivas serem certificados no ambiente alvo.
+- Merge: **NÃO EXECUTADO E NÃO AUTORIZADO NESTA RODADA**.
 
-Gaps restantes são externos ou deliberadamente P2: detalhamento adicional de Cost Catalog/CAPEX por driver e rubrica, validação inline mais granular nos formulários densos, affordance de scroll horizontal mobile e texto explicativo para TIR não aplicável. Nenhum deles invalida a demo interna nem a reação E2E do estudo.
-
-**Status da missão:** `RELEASE_CANDIDATE_LOCAL` — core Golden Natal e jornada de investidor comprovados; merge não executado.
+**Status:** `RELEASE_CANDIDATE_LOCAL_WITH_SOURCE_CONFLICT`.
