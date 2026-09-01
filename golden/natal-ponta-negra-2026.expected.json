@@ -1,6 +1,7 @@
 {
   "scenarioId": "golden-natal-ponta-negra-2026",
   "sourceBaselineRef": "canonical-payment-calendar-v1",
+  "expectedVectorHash": "ee202772ccc4234f0fb9e790b3834373fd747a9cd83e9d19ddd010eff435cfe1",
   "tolerance": "0.000001",
   "performanceBudgetMs": 2000,
   "formulaSet": {

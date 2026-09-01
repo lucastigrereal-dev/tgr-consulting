@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import expected from "../../golden/natal-ponta-negra-2026.expected.json";
@@ -275,6 +276,15 @@ describe("GOLDEN_NATAL_PONTA_NEGRA_2026", () => {
     };
 
     expect(expected.sourceBaselineRef).toBe("canonical-payment-calendar-v1");
+    expect(
+      createHash("sha256")
+        .update(JSON.stringify({
+          formulaSet: expected.formulaSet,
+          kpis: expected.kpis,
+          months: expected.months,
+        }))
+        .digest("hex")
+    ).toBe(expected.expectedVectorHash);
     expect(result.formulaSetVersion).toBe(expected.formulaSet.semanticVersion);
     expect(result.engineVersion).toBe(expected.formulaSet.engineVersion);
     for (const [kpi, baseline] of Object.entries(expected.kpis)) {
