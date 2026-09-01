@@ -1,7 +1,9 @@
 # Matriz HARMONY × TGR — Natal Golden V1
 
-Fonte: `COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json`  
-Modo reconciliado: `HARMONY_COMPAT_V1`  
+Fonte: `COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json`
+
+Modo reconciliado: `HARMONY_COMPAT_V1`
+
 Modo preservado: `TGR_CANONICAL_V2`
 
 ## Reconciliação Harmony — 144 meses
