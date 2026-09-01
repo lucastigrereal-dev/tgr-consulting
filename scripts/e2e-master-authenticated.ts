@@ -562,7 +562,7 @@ async function main() {
       praca: "Natal/RN",
       dataBase: "09/2026",
       inicioOperacao: "01/2027",
-      horizonteMeses: "120",
+      horizonteMeses: String(harmonyNatalReference.assertions.horizonMonths),
       valorCota: "28000",
       valorEntrada: "3200",
       parcelasEntrada: "8",
@@ -587,7 +587,7 @@ async function main() {
       await page.locator(`#cotia-${key}`).fill(value);
     }
     await page.locator("#cotia-sourceRef").fill(natalSourceRef);
-    await page.getByText(/SOURCE_CONFLICT · Compatibilidade documental/i).waitFor();
+    await page.getByText(/GOLDEN HARMONY CANÔNICO/i).waitFor();
     assert(
       await page.locator("#financial-model-mode").inputValue() === "HARMONY_COMPAT_V1",
       "Builder não manteve HARMONY_COMPAT_V1 no seletor de metodologia."
@@ -714,7 +714,7 @@ async function main() {
       status: "provided",
       payload: {
         praca: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.location,
-        horizonte: String(GOLDEN_NATAL_PONTA_NEGRA_2026.horizonMonths),
+        horizonte: String(harmonyNatalReference.assertions.horizonMonths),
         unidades: String(GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.units),
         cotasPorUh: String(GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.sharesPerUnit),
         origem: natalSourceRef,
@@ -804,7 +804,7 @@ async function main() {
     await caller.igr.createCostCatalogItem({
       versionId: natalVersionId,
       category: "operations",
-      name: "Custos agregados Golden Natal Harmony (SOURCE_CONFLICT)",
+      name: "Custos agregados Golden Natal Harmony canônico",
       frequency: "monthly",
       cashflowTreatment: "included_in_project_totals",
       amountText: "280000",
@@ -834,7 +834,7 @@ async function main() {
           days90Plus: "0.05",
         },
         writeOffAfterDays: 180,
-        policyVersion: "harmony-source-review-v1",
+        policyVersion: "harmony-golden-v1",
         sourceRef: natalSourceRef,
       },
     });
@@ -842,20 +842,20 @@ async function main() {
       versionId: natalVersionId,
       title: "Validar Golden Natal",
       decisionValue: "100 vendas brutas por mes",
-      rationale: "Regressão de compatibilidade documental com SOURCE_CONFLICT explícito; não declara paridade com o workbook ausente.",
+      rationale: "Regressão canônica do Golden Harmony de 144 meses com SC-001 explícito.",
       responsible: ownerName,
       sourceRef: natalSourceRef,
     });
     const natalSnapshot = await caller.igr.calculate({
       versionId: natalVersionId,
-      horizonMonths: GOLDEN_NATAL_PONTA_NEGRA_2026.horizonMonths,
+      horizonMonths: harmonyNatalReference.assertions.horizonMonths,
       asOfMonth: 0,
     });
     assert(natalSnapshot.status === "valid", `Golden Natal Harmony snapshot was not valid: ${natalSnapshot.status}`);
     assert(natalSnapshot.financialModelMode === "HARMONY_COMPAT_V1", "Snapshot Natal não preservou o modo Harmony.");
     assert(natalSnapshot.formulaSetVersion === "1.0.0", `Formula Set Harmony inesperado: ${natalSnapshot.formulaSetVersion}`);
     assert(natalSnapshot.engineVersion === "harmony-compat-engine-v1", `Engine Harmony inesperada: ${natalSnapshot.engineVersion}`);
-    assert(natalSnapshot.horizonMonths === 120 && natalSnapshot.projections.length === 120, "Snapshot Natal Harmony não calculou os 120 meses.");
+    assert(natalSnapshot.horizonMonths === 144 && natalSnapshot.projections.length === 144, "Snapshot Natal Harmony não calculou os 144 meses.");
     assert(natalSnapshot.projections[0]?.grossContracts === "100.00000000", "Baseline Natal Harmony não iniciou com 100 vendas brutas.");
     assert(
       !JSON.stringify({
@@ -864,9 +864,9 @@ async function main() {
       }).includes("TEST_DATA"),
       "Snapshot Natal Harmony carregou proveniência TEST_DATA do Golden canônico."
     );
-    assert(natalSnapshot.compatibilityEvidence?.authorityStatus === "SOURCE_CONFLICT", "Snapshot Harmony ocultou o SOURCE_CONFLICT de autoridade.");
+    assert(natalSnapshot.compatibilityEvidence?.authorityStatus === "CANONICAL_FROM_HARMONY_MASTER_V1", "Snapshot Harmony perdeu a autoridade canônica.");
     assert(natalSnapshot.compatibilityEvidence.availableSource === harmonyNatalReference.authority.availableSource, "Snapshot Harmony perdeu a referência de fonte disponível.");
-    assert(natalSnapshot.compatibilityEvidence.missingSource === harmonyNatalReference.authority.missingSource, "Snapshot Harmony perdeu a identificação do workbook ausente.");
+    assert(natalSnapshot.compatibilityEvidence.missingSource === undefined, "Snapshot Harmony ainda marcou a fonte canônica como ausente.");
     assert(
       natalSnapshot.compatibilityEvidence.sourceConflicts.length === harmonyNatalReference.sourceConflicts.length,
       "Snapshot Harmony não expôs integralmente os conflitos da referência disponível."
@@ -879,11 +879,11 @@ async function main() {
     await verifyUi(page, app.baseUrl, "/study", /Boardroom|Baseline|Snapshot/i);
     await page.locator("#tgr-project").selectOption(natalProjectId);
     await page.getByText("MODELO FINANCEIRO — HARMONY COMPAT V1", { exact: true }).waitFor({ timeout: 30_000 });
-    await page.getByText(/SOURCE_CONFLICT · Compatibilidade documental em reconciliação/i).waitFor();
-    await page.getByText(`${harmonyNatalReference.sourceConflicts.length} conflitos de fonte · ver evidências`, { exact: true }).waitFor();
+    await page.getByText(/GOLDEN HARMONY CANÔNICO · Reconciliação certificada/i).waitFor();
+    await page.getByText(`${harmonyNatalReference.sourceConflicts.length} conflito de fonte · ver evidências`, { exact: true }).waitFor();
     assert(
-      (await page.locator("main").innerText()).includes("não declara paridade com a fonte ausente"),
-      "Boardroom Harmony não apresentou a ressalva explícita contra paridade não comprovada."
+      (await page.locator("main").innerText()).includes("Golden certificado de 144 meses"),
+      "Boardroom Harmony não apresentou a certificação canônica de 144 meses."
     );
     await page.screenshot({ path: path.join(tempRoot, "screenshots", "03-harmony-natal-boardroom-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 375, height: 812 });
@@ -907,7 +907,7 @@ async function main() {
     );
     const natalSimulation = await caller.igr.simulateCaptadores({
       versionId: natalVersionId,
-      horizonMonths: 120,
+      horizonMonths: harmonyNatalReference.assertions.horizonMonths,
       asOfMonth: 0,
       captadorDelta: "0",
       qualifiedCouplesPerCaptadorMonth: "25",
@@ -920,7 +920,7 @@ async function main() {
     const promotedNatal = await caller.igr.promoteMeetingSimulationToScenario({
       versionId: natalVersionId,
       baseSnapshotId: natalSnapshot.id,
-      horizonMonths: 120,
+      horizonMonths: harmonyNatalReference.assertions.horizonMonths,
       asOfMonth: 0,
       captadorDelta: "0",
       qualifiedCouplesPerCaptadorMonth: "25",
@@ -930,10 +930,10 @@ async function main() {
       reason: "Boardroom Golden Test: comparar 100 versus 120 vendas por mes.",
       sourceRef: "boardroom:golden-natal-100-to-120",
     });
-    const unchangedNatalBaseline = await caller.igr.calculate({ versionId: natalVersionId, horizonMonths: 120, asOfMonth: 0 });
+    const unchangedNatalBaseline = await caller.igr.calculate({ versionId: natalVersionId, horizonMonths: harmonyNatalReference.assertions.horizonMonths, asOfMonth: 0 });
     assert(unchangedNatalBaseline.id === natalSnapshot.id && unchangedNatalBaseline.snapshotHash === natalSnapshot.snapshotHash, "Saving the Natal scenario mutated the official baseline snapshot.");
     assert(promotedNatal.versionId !== natalVersionId, "A promoção Harmony não criou uma versão de cenário separada.");
-    const natalScenarioSnapshot = await caller.igr.calculate({ versionId: promotedNatal.versionId, horizonMonths: 120, asOfMonth: 0 });
+    const natalScenarioSnapshot = await caller.igr.calculate({ versionId: promotedNatal.versionId, horizonMonths: harmonyNatalReference.assertions.horizonMonths, asOfMonth: 0 });
     assert(natalScenarioSnapshot.status === "valid", "Golden Natal 120-sales scenario was not valid.");
     assert(natalScenarioSnapshot.financialModelMode === "HARMONY_COMPAT_V1", "Cenário promovido trocou silenciosamente o modo Harmony.");
     assert(natalScenarioSnapshot.snapshotHash !== natalSnapshot.snapshotHash, "Cenário Harmony 120 vendas reutilizou indevidamente o hash da baseline 100 vendas.");
@@ -978,16 +978,16 @@ async function main() {
     const natalPdfCoverText = pdfVisibleText(natalPdfDocument);
     assertVisibleHarmonyIdentity("PDF", natalPdfCoverText, natalScenarioSnapshot);
     assert(natalPdfDocument.getSubject()?.includes("Harmony Compatível V1"), "PDF Harmony perdeu o label canônico na metadata de proveniência.");
-    assert(natalPdfDocument.getSubject()?.includes("SOURCE_CONFLICT"), "PDF Harmony ocultou a ressalva de autoridade.");
-    assert(natalPdfDocument.getSubject()?.includes(harmonyNatalReference.authority.missingSource), "PDF Harmony ocultou o workbook ausente.");
+    assert(natalPdfDocument.getSubject()?.includes("CANONICAL_FROM_HARMONY_MASTER_V1"), "PDF Harmony perdeu a autoridade canônica.");
+    assert(natalPdfDocument.getSubject()?.includes("SC-001"), "PDF Harmony ocultou SC-001.");
     const natalPptxArchive = await JSZip.loadAsync(natalExportBuffers[1]!);
     const natalPptxXml = await zipEntriesText(natalPptxArchive, /^ppt\/slides\/slide\d+\.xml$/);
     assertVisibleHarmonyIdentity("PPTX", natalPptxXml, natalScenarioSnapshot);
-    assert(natalPptxXml.includes("SOURCE_CONFLICT") && natalPptxXml.includes(harmonyNatalReference.authority.missingSource), "PPTX Harmony ocultou a ressalva de autoridade.");
+    assert(natalPptxXml.includes("CANONICAL_FROM_HARMONY_MASTER_V1") && natalPptxXml.includes("SC-001"), "PPTX Harmony perdeu a autoridade canônica ou SC-001.");
     const natalXlsxArchive = await JSZip.loadAsync(natalExportBuffers[2]!);
     const natalXlsxXml = await zipEntriesText(natalXlsxArchive, /^xl\/worksheets\/sheet\d+\.xml$/);
     assertVisibleHarmonyIdentity("XLSX", natalXlsxXml, natalScenarioSnapshot);
-    assert(natalXlsxXml.includes("SOURCE_CONFLICT") && natalXlsxXml.includes(harmonyNatalReference.authority.missingSource), "XLSX Harmony ocultou a ressalva de autoridade.");
+    assert(natalXlsxXml.includes("CANONICAL_FROM_HARMONY_MASTER_V1") && natalXlsxXml.includes("SC-001"), "XLSX Harmony perdeu a autoridade canônica ou SC-001.");
     assert(natalXlsxXml.includes(natalScenarioSnapshot.kpis.npv ?? "__missing_npv__"), "Golden Natal XLSX did not contain the approved snapshot NPV.");
     await verifyUi(page, app.baseUrl, "/study", /Boardroom|Baseline|Snapshot/i);
     await page.screenshot({ path: path.join(tempRoot, "screenshots", "05-harmony-natal-approved-baseline-desktop.png"), fullPage: true });
@@ -1059,9 +1059,9 @@ async function main() {
         formulaSetVersion: natalScenarioSnapshot.formulaSetVersion,
         engineVersion: natalScenarioSnapshot.engineVersion,
         authorityStatus: natalSnapshot.compatibilityEvidence?.authorityStatus,
-        missingSource: natalSnapshot.compatibilityEvidence?.missingSource,
+        canonicalSource: natalSnapshot.compatibilityEvidence?.availableSource,
         sourceConflictCount: natalSnapshot.compatibilityEvidence?.sourceConflicts.length,
-        workbookParityClaimed: false,
+        canonicalGoldenCertified: natalSnapshot.compatibilityEvidence?.authorityStatus === "CANONICAL_FROM_HARMONY_MASTER_V1",
         projectId: natalProjectId,
         baseVersionId: natalVersionId,
         approvedVersionId: promotedNatal.versionId,

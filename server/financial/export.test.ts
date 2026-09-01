@@ -240,11 +240,14 @@ describe("geradores de artefato Boardroom", () => {
       formulaSetVersion: HARMONY_COMPAT_FORMULA_SET_V1.semanticVersion,
       engineVersion: HARMONY_COMPAT_FORMULA_SET_V1.engineVersion,
       compatibilityEvidence: {
-        authorityStatus: "SOURCE_CONFLICT",
-        availableSource: "PR #1 review Harmony reference",
-        missingSource: "COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1",
-        adoptedGrossContracts: "3120.00000000",
-        sourceConflicts: [],
+        authorityStatus: "CANONICAL_FROM_HARMONY_MASTER_V1",
+        availableSource: "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+        adoptedGrossContracts: "4457.00000000",
+        sourceConflicts: [{
+          id: "SC-001",
+          status: "SOURCE_CONFLICT",
+          adoptedRule: "4.457 no cronograma; 4.458 na linha indicadora.",
+        }],
       },
     };
     const exportable = createExportableSnapshot(
@@ -267,34 +270,36 @@ describe("geradores de artefato Boardroom", () => {
     const pdf = await PDFDocument.load(await buildBoardroomPdf(exportable));
     expect(pdf.getSubject()).toContain("HARMONY_COMPAT_V1");
     expect(pdf.getSubject()).toContain("Harmony Compatível V1");
-    expect(pdf.getSubject()).toContain("SOURCE_CONFLICT");
-    expect(pdf.getSubject()).toContain("COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1");
-    expect(pdf.getSubject()).toContain("parity not certified");
+    expect(pdf.getSubject()).toContain("CANONICAL_FROM_HARMONY_MASTER_V1");
+    expect(pdf.getSubject()).toContain("COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json");
+    expect(pdf.getSubject()).toContain("SC-001");
     const pdfCover = pdfVisibleText(pdf);
     expect(pdfCover).toContain("MODELO FINANCEIRO HARMONY_COMPAT_V1");
     expect(pdfCover).toContain("FORMULA SET 1.0.0");
     expect(pdfCover).toContain("ENGINE harmony-compat-engine-v1");
     expect(pdfCover).toContain("SNAPSHOT HASH");
-    expect(pdfCover).toContain("SOURCE_CONFLICT");
-    expect(pdfCover).toContain("PARIDADE NÃO CERTIFICADA");
+    expect(pdfCover).toContain("CANONICAL_FROM_HARMONY_MASTER_V1");
+    expect(pdfCover).toContain("GOLDEN HARMONY CERTIFICADO");
+    expect(pdfCover).toContain("SC-001");
 
     const pptx = await JSZip.loadAsync(await buildBoardroomPptx(exportable));
     const cover = await pptx.file("ppt/slides/slide1.xml")?.async("string");
     expect(cover).toContain("MODELO FINANCEIRO HARMONY_COMPAT_V1");
     expect(cover).toContain("Harmony Compatível V1");
     expect(cover).toContain("harmony-compat-engine-v1");
-    expect(cover).toContain("SOURCE_CONFLICT");
-    expect(cover).toContain("COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1");
-    expect(cover).toContain("PARIDADE NÃO CERTIFICADA");
+    expect(cover).toContain("CANONICAL_FROM_HARMONY_MASTER_V1");
+    expect(cover).toContain("GOLDEN HARMONY CERTIFICADO");
+    expect(cover).toContain("SC-001");
 
     const xlsx = await JSZip.loadAsync(await buildBoardroomXlsx(exportable));
     const visibleProvenance = await workbookSheet(xlsx, 2);
     expect(visibleProvenance).toContain("HARMONY_COMPAT_V1");
     expect(visibleProvenance).toContain("Harmony Compatível V1");
     expect(visibleProvenance).toContain("harmony-compat-engine-v1");
-    expect(visibleProvenance).toContain("SOURCE_CONFLICT");
-    expect(visibleProvenance).toContain("COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1");
-    expect(visibleProvenance).toContain("não certificada");
+    expect(visibleProvenance).toContain("CANONICAL_FROM_HARMONY_MASTER_V1");
+    expect(visibleProvenance).toContain("COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json");
+    expect(visibleProvenance).toContain("SC-001");
+    expect(visibleProvenance).toContain("Golden Harmony canônico certificado");
   });
 
   it("recusa exportar Harmony aprovado quando qualquer input ainda deriva de TEST_DATA", () => {

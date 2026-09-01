@@ -50,7 +50,7 @@ const inputShape = Object.fromEntries(
 export const FinancialInputSnapshotSchema = z.object(inputShape) as unknown as z.ZodType<FinancialInputSnapshot>;
 
 export const FinancialCalculationRequestSchema = z.object({
-  horizonMonths: z.number().int().min(1).max(120),
+  horizonMonths: z.number().int().min(1).max(144),
   inputs: FinancialInputSnapshotSchema,
 });
 

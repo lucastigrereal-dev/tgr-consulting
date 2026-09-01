@@ -5,15 +5,13 @@ import type {
   SourceType,
 } from "./types";
 
-export const HARMONY_NATAL_HORIZON_MONTHS = 120;
+export const HARMONY_NATAL_HORIZON_MONTHS = 144;
 export const HARMONY_NATAL_MAX_CONTRACTS = "3120";
 
-const REVIEW_SOURCE_REF =
-  "SOURCE_REVIEW_ASSERTION:PR#1@bd7848b3f6f8c7bbbf6142c68f4fb0cdf09f233e";
+const CANONICAL_SOURCE_REF =
+  "CANONICAL_FROM_HARMONY_MASTER_V1:docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json";
 const DERIVED_SOURCE_REF =
-  "DERIVED_FROM_REVIEW_RULES:HARMONY_COMPAT_V1 compatibility placeholder";
-const MISSING_WORKBOOK_SOURCE_REF =
-  "SOURCE_CONFLICT:missing COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1";
+  "DERIVED_FROM_CANONICAL_HARMONY_RULES:COTAS_NATAL_HARMONY_GOLDEN_V1";
 
 function provided(
   value: string,
@@ -23,59 +21,62 @@ function provided(
   return { status: "provided", value, sourceType, sourceRef };
 }
 
-function reviewAssertion(value: string): FinancialInput {
-  return provided(value, "current_document", REVIEW_SOURCE_REF);
+function canonicalValue(value: string): FinancialInput {
+  return provided(value, "historical_primary", CANONICAL_SOURCE_REF);
 }
 
 function derivedCompatibility(value: string): FinancialInput {
   return provided(value, "derived_analysis", DERIVED_SOURCE_REF);
 }
 
-function pendingWorkbookValue(): FinancialInput {
+function notApplicableCanonicalValue(): FinancialInput {
   return {
     status: "pending",
-    sourceType: "current_document",
-    sourceRef: MISSING_WORKBOOK_SOURCE_REF,
+    sourceType: "historical_primary",
+    sourceRef: `${CANONICAL_SOURCE_REF}:not_applicable_to_harmony_compat_v1`,
   };
 }
 /**
  * Fixture executável do Natal no modo Harmony.
  *
- * Ele é deliberadamente independente do Golden canônico: nenhuma premissa de
- * teste daquele modelo pode atravessar silenciosamente a fronteira de método.
- * Zeros de meios de pagamento e de repasse são placeholders de compatibilidade
- * declarados porque o motor Harmony V1 usa as rubricas fixas do review; os seis
- * campos opcionais de abertura do CAPEX permanecem PENDING até o workbook existir.
+ * A fonte é o Golden certificado reconstruído do Harmony Master V1. Os seis
+ * campos opcionais de abertura do CAPEX permanecem PENDING porque o modelo
+ * Harmony consome o pré-operacional agregado de R$ 985.500 em t0/M1.
  */
 export function createHarmonyNatalInputs(
-  grossSalesPerMonth = "100"
+  grossSalesPerMonth = "100",
+  pricePerContract = "28000",
 ): FinancialInputSnapshot {
   const grossSales = new Decimal(grossSalesPerMonth);
   if (!grossSales.isFinite() || grossSales.isNegative()) {
     throw new Error("grossSalesPerMonth Harmony deve ser finito e não negativo.");
   }
+  const price = new Decimal(pricePerContract);
+  if (!price.isFinite() || price.lte(0)) {
+    throw new Error("pricePerContract Harmony deve ser finito e maior que zero.");
+  }
   const qualifiedCouples = grossSales.div("0.2").toString();
 
   return {
-    qualifiedCouplesMonth1: reviewAssertion(qualifiedCouples),
+    qualifiedCouplesMonth1: canonicalValue(qualifiedCouples),
     qualifiedCouplesGrowthRate: derivedCompatibility("0"),
-    conversionRate: reviewAssertion("0.2"),
-    averageTicket: reviewAssertion("28000"),
+    conversionRate: canonicalValue("0.2"),
+    averageTicket: canonicalValue(price.toString()),
     collectionRate: derivedCompatibility("1"),
-    cancellationRate: reviewAssertion("0.30"),
+    cancellationRate: canonicalValue("0.30"),
     variableCostRate: derivedCompatibility("0"),
     partnerShareRate: derivedCompatibility("0"),
-    fixedCostMonthly: reviewAssertion("117203"),
-    payrollMonthly: provided("0", "current_document", MISSING_WORKBOOK_SOURCE_REF),
-    capexInitial: reviewAssertion("985500"),
-    capexAcquisitionShareRate: pendingWorkbookValue(),
-    capexAcquisitionMonth: pendingWorkbookValue(),
-    capexSalesRoomShareRate: pendingWorkbookValue(),
-    capexSalesRoomMonth: pendingWorkbookValue(),
-    capexSalesKitShareRate: pendingWorkbookValue(),
-    capexSalesKitMonth: pendingWorkbookValue(),
+    fixedCostMonthly: canonicalValue("195339"),
+    payrollMonthly: canonicalValue("0"),
+    capexInitial: canonicalValue("985500"),
+    capexAcquisitionShareRate: notApplicableCanonicalValue(),
+    capexAcquisitionMonth: notApplicableCanonicalValue(),
+    capexSalesRoomShareRate: notApplicableCanonicalValue(),
+    capexSalesRoomMonth: notApplicableCanonicalValue(),
+    capexSalesKitShareRate: notApplicableCanonicalValue(),
+    capexSalesKitMonth: notApplicableCanonicalValue(),
     preOperationMonths: derivedCompatibility("0"),
-    entryValuePerContract: reviewAssertion("3200"),
+    entryValuePerContract: canonicalValue("3200"),
     paymentCardViewMixRate: derivedCompatibility("0"),
     paymentCardViewMdrRate: derivedCompatibility("0"),
     paymentCardViewSettlementDays: derivedCompatibility("0"),
@@ -91,6 +92,6 @@ export function createHarmonyNatalInputs(
     paymentBoletoMixRate: derivedCompatibility("1"),
     paymentBoletoMdrRate: derivedCompatibility("0"),
     paymentBoletoSettlementDays: derivedCompatibility("0"),
-    discountRateAnnual: reviewAssertion("0.18"),
+    discountRateAnnual: canonicalValue("0.18"),
   };
 }

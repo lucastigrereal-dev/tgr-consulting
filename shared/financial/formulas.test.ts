@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { HARMONY_COMPAT_FORMULA_SET_V1 } from "./formulas";
 
 describe("conjunto de fórmulas Harmony compatível", () => {
-  it("documenta as regras legadas sem apresentá-las como motor canônico", () => {
+  it("documenta as regras Harmony canônicas sem apresentá-las como motor TGR", () => {
     expect(HARMONY_COMPAT_FORMULA_SET_V1).toMatchObject({
       id: "harmony-compat-formulas-v1",
       semanticVersion: "1.0.0",
@@ -33,7 +33,9 @@ describe("conjunto de fórmulas Harmony compatível", () => {
       ])
     );
     for (const definition of Object.values(definitions)) {
-      expect(definition.sourceRef).toMatch(/^harmony_compat_v1\./);
+      expect(definition.sourceRef).toMatch(
+        /^(?:harmony_compat_v1\.|COTAS_NATAL_HARMONY_GOLDEN_V1_RULES\.)/,
+      );
       expect(definition.description.length).toBeGreaterThan(20);
     }
   });
@@ -64,8 +66,12 @@ describe("conjunto de fórmulas Harmony compatível", () => {
       "harmony-entry-settled-eight-installments",
       "harmony-balance-settled-m5",
     ]);
-    expect(definitions["harmony-line-costs"].sourceRef).toContain("PENDING");
-    expect(definitions["harmony-pre-operational-investment"].sourceRef).toContain("PENDING");
+    expect(definitions["harmony-line-costs"].sourceRef).toContain(
+      "COTAS_NATAL_HARMONY_GOLDEN_V1_RULES",
+    );
+    expect(definitions["harmony-pre-operational-investment"].sourceRef).toContain(
+      "COTAS_NATAL_HARMONY_GOLDEN_V1_RULES",
+    );
 
     const netContracts = 100 * (1 - 0.3);
     const entryCollectionPerMonth = netContracts * (3200 / 8);

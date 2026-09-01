@@ -21,7 +21,7 @@ describe("reconciliação Harmony x TGR", () => {
         {
           id: "variable-costs-m1",
           classification: "MODEL_DELTA",
-          sourceRef: harmonyReference.authority.reviewUrl,
+          sourceRef: harmonyReference.authority.availableSource,
           reason: "Harmony usa rubricas unitárias provisórias que não pertencem ao modo canônico.",
           adoptedRule: "Preservar o custo por contrato apenas no modo Harmony.",
           metric: "variableCosts",
@@ -30,18 +30,18 @@ describe("reconciliação Harmony x TGR", () => {
         {
           id: "fixed-m49",
           classification: "SOURCE_CONFLICT",
-          sourceRef: harmonyReference.authority.reviewUrl,
-          reason: "A curva posterior a M48 não está na fonte disponível.",
-          adoptedRule: "Zero após M48 até a planilha completa ser localizada.",
+          sourceRef: harmonyReference.authority.availableSource,
+          reason: "Conflito sintético para provar a classificação de uma célula.",
+          adoptedRule: "Manter a célula explicitamente classificada neste teste unitário.",
           metric: "fixedCosts",
           month: 49,
         },
         {
           id: "capital-kpi",
           classification: "SOURCE_CONFLICT",
-          sourceRef: harmonyReference.authority.reviewUrl,
-          reason: "Timing de custos e curva posterior a M48 estão ausentes.",
-          adoptedRule: "Usar somente timings explicitamente documentados.",
+          sourceRef: harmonyReference.authority.availableSource,
+          reason: "Conflito sintético de KPI para testar o contrato de classificação.",
+          adoptedRule: "Manter a diferença explicitamente classificada neste teste unitário.",
           metric: "capitalRequired",
           month: null,
         },
@@ -56,7 +56,7 @@ describe("reconciliação Harmony x TGR", () => {
     expect(report.rows.find(row => row.metric === "variableCosts" && row.month === 1)).toMatchObject({
       status: "MODEL_DELTA",
       conflictId: "variable-costs-m1",
-      justification: { sourceRef: harmonyReference.authority.reviewUrl },
+      justification: { sourceRef: harmonyReference.authority.availableSource },
     });
     expect(report.rows.find(row => row.metric === "capitalRequired")).toMatchObject({
       status: "SOURCE_CONFLICT",
@@ -85,8 +85,8 @@ describe("reconciliação Harmony x TGR", () => {
     expect(report.kpis).toHaveLength(8);
     expect(report.rows).toHaveLength(5_048);
     expect(report.rows.filter(row => row.status === "DELTA")).toHaveLength(0);
-    expect(report.rows.filter(row => row.status === "MATCH")).toHaveLength(2_633);
-    expect(report.rows.filter(row => row.status === "MODEL_DELTA")).toHaveLength(2_415);
+    expect(report.rows.filter(row => row.status === "MATCH")).toHaveLength(2_583);
+    expect(report.rows.filter(row => row.status === "MODEL_DELTA")).toHaveLength(2_465);
     expect(report.rows.filter(row => row.status === "MODEL_DELTA")
       .every(row => Boolean(row.justification?.causalId))).toBe(true);
     expect(report.rows.filter(row => row.status === "SOURCE_CONFLICT")).toHaveLength(0);
@@ -106,7 +106,7 @@ describe("reconciliação Harmony x TGR", () => {
     const base = {
       id: "invalid",
       classification: "SOURCE_CONFLICT" as const,
-      sourceRef: harmonyReference.authority.reviewUrl,
+      sourceRef: harmonyReference.authority.availableSource,
       reason: "Motivo auditável.",
       adoptedRule: "Regra auditável.",
       metric: "fixedCosts",
@@ -126,7 +126,7 @@ describe("reconciliação Harmony x TGR", () => {
     })).toThrow("inexistente");
     expect(() => buildHarmonyTgrRegression(calculation, canonical, {
       tolerance: "0.01",
-      conflicts: [{ ...base, month: 1 }],
+      conflicts: [{ ...base, metric: "partnerShare", month: 1 }],
     })).toThrow("MATCH");
     expect(() => buildHarmonyTgrRegression(calculation, canonical, {
       tolerance: "0.01",
@@ -146,8 +146,8 @@ describe("reconciliação Harmony x TGR", () => {
     })).toThrow("primeiro cálculo");
   });
 
-  it("consome todos os KPI targets do fixture e justifica todo delta fora da tolerância", () => {
-    const harmony = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
+  it("consome todos os KPI targets canônicos com delta reconciliável zero", () => {
+    const harmony = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 144, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
     const result = buildHarmonyKpiTargetRegression(
       harmony,
       harmonyReference.reviewKpiTargets,
@@ -163,30 +163,15 @@ describe("reconciliação Harmony x TGR", () => {
       ].observedAtImplementation;
       expect(row).toMatchObject(recorded);
     }
-    const causalIds = new Set(harmonyReference.sourceConflicts.map(conflict => conflict.id));
-    for (const conflict of harmonyReference.kpiConflicts)
-      expect(conflict.causalConflictIds.every(id => causalIds.has(id))).toBe(true);
+    expect(result.every(row => row.status === "MATCH")).toBe(true);
+    expect(result.every(row => row.absoluteDelta === "0.00000000")).toBe(true);
     expect(result.find(row => row.metric === "sellOutMonth")).toMatchObject({
-      target: "45",
+      target: "45.00000000",
       obtained: "45.00000000",
       absoluteDelta: "0.00000000",
       relativeDelta: "0.00000000",
       status: "MATCH",
     });
-    for (const metric of ["capitalRequired", "npv", "irrAnnual", "paybackMonths"] as const) {
-      expect(result.find(row => row.metric === metric)).toMatchObject({
-        status: "SOURCE_CONFLICT",
-        sourceRef: harmonyReference.authority.reviewUrl,
-      });
-      expect(result.find(row => row.metric === metric)?.causalConflictIds.length).toBeGreaterThan(0);
-    }
-
-    expect(() => buildHarmonyKpiTargetRegression(
-      harmony,
-      harmonyReference.reviewKpiTargets,
-      []
-    )).toThrow("DELTA fora da tolerância sem justificativa");
-
     const withoutCapital = structuredClone(harmony);
     withoutCapital.kpis.capitalRequired = null;
     expect(() => buildHarmonyKpiTargetRegression(

@@ -51,7 +51,7 @@ describe("feedback da reconciliação Cotia", () => {
     ).toMatchObject({ financialModelMode: "TGR_CANONICAL_V2" });
   });
 
-  it("transporta a escolha Harmony no payload sem apresentá-la como paridade aprovada", () => {
+  it("transporta a escolha Harmony e apresenta o Golden canônico com SC-001", () => {
     expect(
       createCotiaProjectMutationInput({
         name: "Natal Harmony",
@@ -74,8 +74,9 @@ describe("feedback da reconciliação Cotia", () => {
     );
     expect(html).toContain("Metodologia financeira");
     expect(html).toContain("Harmony Compatível V1");
-    expect(html).toContain("SOURCE_CONFLICT");
-    expect(html).toContain("não representa paridade aprovada");
+    expect(html).toContain("GOLDEN HARMONY CANÔNICO");
+    expect(html).toContain("144 meses");
+    expect(html).toContain("SC-001");
     expect(html).toContain('aria-describedby="financial-model-mode-help"');
     expect(html).toContain("focus-visible:ring-2");
   });

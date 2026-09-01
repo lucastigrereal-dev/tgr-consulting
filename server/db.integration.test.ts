@@ -690,10 +690,13 @@ describe("IGR database integration", () => {
       .from(formulaDefinitionProvenance)
       .where(eq(formulaDefinitionProvenance.formulaSetVersionId, HARMONY_COMPAT_FORMULA_SET_V1.id));
     expect(harmonyProvenance).toHaveLength(HARMONY_COMPAT_FORMULA_SET_V1.definitions.length);
-    expect(harmonyProvenance.every(item => item.sourceRef.startsWith("harmony_compat_v1."))).toBe(true);
+    expect(harmonyProvenance.every(item =>
+      item.sourceRef.startsWith("harmony_compat_v1.") ||
+      item.sourceRef.startsWith("COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.")
+    )).toBe(true);
 
     const blocked = await createCalculationSnapshot({
-      tenantId, actorId, versionId: created.versionId, horizonMonths: 120,
+      tenantId, actorId, versionId: created.versionId, horizonMonths: 144,
     });
     ids.harmonyBlockedSnapshotId = blocked.id;
     expect(blocked).toMatchObject({
@@ -701,7 +704,7 @@ describe("IGR database integration", () => {
       financialModelMode: "HARMONY_COMPAT_V1",
     });
     const repeatedBlocked = await createCalculationSnapshot({
-      tenantId, actorId, versionId: created.versionId, horizonMonths: 120,
+      tenantId, actorId, versionId: created.versionId, horizonMonths: 144,
     });
     expect(repeatedBlocked.id).toBe(blocked.id);
 
@@ -718,7 +721,7 @@ describe("IGR database integration", () => {
     });
 
     const snapshot = await createCalculationSnapshot({
-      tenantId, actorId, versionId: created.versionId, horizonMonths: 120,
+      tenantId, actorId, versionId: created.versionId, horizonMonths: 144,
     });
     ids.harmonySnapshotId = snapshot.id;
     expect(snapshot).toMatchObject({
@@ -753,11 +756,11 @@ describe("IGR database integration", () => {
         ))
     ).toHaveLength(0);
     expect(await calculateCapitalEnvelopeForTenant({
-      tenantId, versionId: created.versionId, horizonMonths: 120,
+      tenantId, versionId: created.versionId, horizonMonths: 144,
       availableCapital: "2000000",
     })).toMatchObject({ requiredCapital: snapshot.kpis.capitalRequired });
     expect(await runProjectGoalSeekForTenant({
-      tenantId, versionId: created.versionId, horizonMonths: 120,
+      tenantId, versionId: created.versionId, horizonMonths: 144,
       targetKpi: "npv", variableKey: "qualifiedCouplesMonth1",
       target: snapshot.kpis.npv!, lowerBound: "500", upperBound: "500",
     })).toMatchObject({
@@ -766,7 +769,7 @@ describe("IGR database integration", () => {
       objectiveValue: snapshot.kpis.npv,
     });
     await expect(simulateCaptadorChangeForTenant({
-      tenantId, versionId: created.versionId, horizonMonths: 120,
+      tenantId, versionId: created.versionId, horizonMonths: 144,
       captadorDelta: "0", qualifiedCouplesPerCaptadorMonth: "25",
       loadedCostPerCaptadorMonth: "0", variableCostMonthlyDelta: "1",
     })).rejects.toThrow(
@@ -776,14 +779,14 @@ describe("IGR database integration", () => {
     const db = await getDb();
     if (!db) throw new Error("Banco de integração indisponível.");
     const beforeMemory = await db.select({ id: kpiMemoryRecords.id }).from(kpiMemoryRecords).where(eq(kpiMemoryRecords.snapshotId, snapshot.id));
-    const repeated = await createCalculationSnapshot({ tenantId, actorId, versionId: created.versionId, horizonMonths: 120 });
+    const repeated = await createCalculationSnapshot({ tenantId, actorId, versionId: created.versionId, horizonMonths: 144 });
     expect(repeated.id).toBe(snapshot.id);
     expect(await db.select({ id: kpiMemoryRecords.id }).from(kpiMemoryRecords).where(eq(kpiMemoryRecords.snapshotId, snapshot.id))).toHaveLength(beforeMemory.length);
     expect(await db.select({ id: workflowEvents.id }).from(workflowEvents).where(and(eq(workflowEvents.versionId, created.versionId), eq(workflowEvents.action, "snapshot.submitted_for_review")))).toHaveLength(1);
     expect(await db.select({ id: auditEvents.id }).from(auditEvents).where(and(eq(auditEvents.entityId, snapshot.id), eq(auditEvents.action, "snapshot.created")))).toHaveLength(1);
 
     const simulation = await simulateCaptadorChangeForTenant({
-      tenantId, versionId: created.versionId, horizonMonths: 120, captadorDelta: "0",
+      tenantId, versionId: created.versionId, horizonMonths: 144, captadorDelta: "0",
       qualifiedCouplesPerCaptadorMonth: "25", loadedCostPerCaptadorMonth: "0",
       targetGrossSalesMonth1: "120",
     });
@@ -794,7 +797,7 @@ describe("IGR database integration", () => {
 
     const scenario = await promoteMeetingSimulationToScenarioForTenant({
       tenantId, actorId, versionId: created.versionId,
-      baseSnapshotId: snapshot.id, horizonMonths: 120,
+      baseSnapshotId: snapshot.id, horizonMonths: 144,
       captadorDelta: "0", qualifiedCouplesPerCaptadorMonth: "25",
       loadedCostPerCaptadorMonth: "0", targetGrossSalesMonth1: "120",
       name: "Harmony 120 vendas", reason: "Provar herança estrita do modo.",
@@ -805,7 +808,7 @@ describe("IGR database integration", () => {
     expect((await db.select().from(projectVersions).where(eq(projectVersions.id, scenario.versionId)).limit(1))[0]?.formulaSetVersionId)
       .toBe(HARMONY_COMPAT_FORMULA_SET_V1.id);
     const scenarioSnapshot = await createCalculationSnapshot({
-      tenantId, actorId, versionId: scenario.versionId, horizonMonths: 120,
+      tenantId, actorId, versionId: scenario.versionId, horizonMonths: 144,
     });
     ids.harmonyScenarioSnapshotId = scenarioSnapshot.id;
     expect(scenarioSnapshot.financialModelMode).toBe("HARMONY_COMPAT_V1");

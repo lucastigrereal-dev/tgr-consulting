@@ -172,7 +172,7 @@ export function buildCotiaAuthoritativePayload(
     const discount = parseBrazilianDecimal(values.descontoComercial);
     const explicitCharges = parseBrazilianDecimal(values.encargosExplicitos);
     const horizonMonths = integer(values.horizonteMeses, "Horizonte", 1);
-    if (horizonMonths > 120) throw new Error("Horizonte deve estar entre 1 e 120 meses.");
+    if (horizonMonths > 144) throw new Error("Horizonte deve estar entre 1 e 144 meses.");
     normalizeCotiaPercentInput(values.eficiencia, "Eficiencia comercial");
     normalizeCotiaPercentInput(values.taxaCancelamento, "Taxa de cancelamento");
     normalizeCotiaPercentInput(values.percentualAdimplente, "Percentual adimplente");

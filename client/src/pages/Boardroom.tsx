@@ -1047,22 +1047,36 @@ export default function Boardroom() {
       </section>
 
       {calculation?.financialModelMode === "HARMONY_COMPAT_V1" ? (
-        <Card className="border-amber-300/25 bg-amber-200/[0.045] shadow-none">
-          <CardContent className="p-5">
+        <Card className="min-w-0 border-amber-300/25 bg-amber-200/[0.045] shadow-none">
+          <CardContent className="min-w-0 p-5">
             <div className="flex flex-wrap items-center gap-2">
               <CircleAlert className="h-5 w-5 text-amber-200" />
               <p className="text-sm font-semibold text-amber-100">
-                SOURCE_CONFLICT · Compatibilidade documental em reconciliação
+                {calculation.compatibilityEvidence?.authorityStatus ===
+                "CANONICAL_FROM_HARMONY_MASTER_V1"
+                  ? "GOLDEN HARMONY CANÔNICO · Reconciliação certificada"
+                  : "SOURCE_CONFLICT · Compatibilidade documental em reconciliação"}
               </p>
             </div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              O modo Harmony preserva as regras disponíveis, mas não declara paridade com a fonte ausente.
-              Fonte disponível: {calculation.compatibilityEvidence?.availableSource ?? "N/D"}.
+            <p className="mt-2 min-w-0 break-words text-xs leading-5 text-muted-foreground">
+              {calculation.compatibilityEvidence?.authorityStatus ===
+              "CANONICAL_FROM_HARMONY_MASTER_V1"
+                ? "O modo Harmony reproduz o Golden certificado de 144 meses. Conflitos internos publicados permanecem visíveis."
+                : "O modo Harmony preserva as regras disponíveis, mas não declara paridade com a fonte ausente."}{" "}
+              Fonte disponível:{" "}
+              <span className="break-all">
+                {calculation.compatibilityEvidence?.availableSource ?? "N/D"}
+              </span>
+              .
             </p>
             {calculation.compatibilityEvidence?.sourceConflicts?.length ? (
               <details className="mt-3 rounded-lg border border-amber-200/15 bg-black/10 p-3 text-xs text-amber-100/90">
                 <summary className="cursor-pointer font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200">
-                  {calculation.compatibilityEvidence.sourceConflicts.length} conflitos de fonte · ver evidências
+                  {calculation.compatibilityEvidence.sourceConflicts.length}{" "}
+                  {calculation.compatibilityEvidence.sourceConflicts.length === 1
+                    ? "conflito de fonte"
+                    : "conflitos de fonte"}{" "}
+                  · ver evidências
                 </summary>
                 <ul className="mt-3 space-y-2">
                   {calculation.compatibilityEvidence.sourceConflicts.map(conflict => (

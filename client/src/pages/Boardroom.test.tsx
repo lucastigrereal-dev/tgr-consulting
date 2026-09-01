@@ -234,7 +234,7 @@ describe("Boardroom · trilha editorial", () => {
     expect(new Set(chapterSections.map(chapter => chapter.depth))).toEqual(new Set([0]));
   });
 
-  it("mostra Harmony como compatibilidade com conflito de fonte, nunca como paridade aprovada", () => {
+  it("mostra o Golden Harmony canônico e mantém SC-001 visível", () => {
     const calculation = calculateFinancialProjection(inputs, 24);
     expect(calculation.status).toBe("valid");
     if (calculation.status !== "valid") return;
@@ -244,21 +244,15 @@ describe("Boardroom · trilha editorial", () => {
       formulaSetVersion: "1.0.0",
       engineVersion: "harmony-compat-engine-v1",
       compatibilityEvidence: {
-        authorityStatus: "SOURCE_CONFLICT",
-        availableSource: "PR #1 review",
-        missingSource: "COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1",
-        adoptedGrossContracts: "4458",
+        authorityStatus: "CANONICAL_FROM_HARMONY_MASTER_V1",
+        availableSource: "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+        adoptedGrossContracts: "4457",
         sourceConflicts: [
           {
-            id: "gross-contracts-4457-vs-4458",
+            id: "SC-001",
             status: "SOURCE_CONFLICT",
-            adoptedRule: "Adotado 4.458 pelo arredondamento explícito.",
+            adoptedRule: "4.457 no cronograma; 4.458 na linha indicadora.",
           },
-          ...Array.from({ length: 5 }, (_, index) => ({
-            id: `source-conflict-${index + 2}`,
-            status: "SOURCE_CONFLICT" as const,
-            adoptedRule: `Regra adotada ${index + 2}.`,
-          })),
         ],
       },
     };
@@ -278,14 +272,14 @@ describe("Boardroom · trilha editorial", () => {
     const html = renderToStaticMarkup(<Boardroom />);
     expect(html).toContain("MODELO FINANCEIRO — HARMONY COMPAT V1");
     expect(html).toContain("Harmony Compatível V1");
-    expect(html).toContain("SOURCE_CONFLICT");
-    expect(html).toContain("gross-contracts-4457-vs-4458");
-    expect(html).toContain("6 conflitos de fonte");
-    expect(html).toContain("source-conflict-6");
+    expect(html).toContain("GOLDEN HARMONY CANÔNICO");
+    expect(html).toContain("SC-001");
+    expect(html).toContain("1 conflito de fonte");
+    expect(html).toContain("Golden certificado de 144 meses");
     expect(html).toContain("Rubrica fixada pela fonte de compatibilidade Harmony");
     expect(html).toMatch(/<input[^>]*id="delta-comissao"[^>]*disabled=""[^>]*value="0"/);
     expect(html).not.toContain("Aplicar em branch auditável");
-    expect(html).not.toContain("paridade aprovada");
+    expect(html).not.toContain("fonte ausente");
   });
 
   it("bloqueia ações financeiras quando o snapshot usa formula e engine desconhecidos", () => {

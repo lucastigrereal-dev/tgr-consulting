@@ -440,7 +440,7 @@ export function FinancialModelModeSelector({
           </p>
           {isHarmony ? (
             <p role="status" className="mt-3 text-xs font-medium leading-5 text-amber-100">
-              SOURCE_CONFLICT · Compatibilidade documental para reconciliação; não representa paridade aprovada com o workbook ausente.
+              GOLDEN HARMONY CANÔNICO · 144 meses e três cenários certificados; SC-001 preserva 4.457 no cronograma e 4.458 na linha indicadora publicada.
             </p>
           ) : null}
           {!definition ? (

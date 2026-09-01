@@ -159,9 +159,11 @@ export type CalculationStatus = "valid" | "blocked_by_pending_inputs" | "invalid
 export type CompatibilitySourceStatus = "SOURCE_REVIEW_ASSERTION" | "DERIVED_FROM_REVIEW_RULES" | "SOURCE_CONFLICT" | "PENDING";
 
 export type FinancialCompatibilityEvidence = {
-  authorityStatus: "SOURCE_CONFLICT";
+  authorityStatus:
+    | "CANONICAL_FROM_HARMONY_MASTER_V1"
+    | "SOURCE_CONFLICT";
   availableSource: string;
-  missingSource: string;
+  missingSource?: string;
   adoptedGrossContracts: DecimalText;
   sourceConflicts: Array<{
     id: string;

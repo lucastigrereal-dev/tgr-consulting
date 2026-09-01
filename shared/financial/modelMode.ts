@@ -16,7 +16,7 @@ export const FINANCIAL_MODEL_MODE_REGISTRY = {
     id: "HARMONY_COMPAT_V1",
     label: "Harmony Compatível V1",
     description:
-      "Reproduz de forma auditável as convenções do estudo Harmony legado para comparação e reconciliação.",
+      "Reproduz o Golden canônico de 144 meses reconstruído do Harmony Master V1, preservando SC-001 como conflito explícito.",
     formulaSetVersion: HARMONY_COMPAT_FORMULA_SET_V1,
   },
   TGR_CANONICAL_V2: {

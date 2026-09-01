@@ -309,15 +309,24 @@ function compatibilityAuthorityLines(snapshot: ExportableSnapshot): string[] {
   return [
     `authority ${evidence.authorityStatus}`,
     `available source ${evidence.availableSource}`,
-    `missing source ${evidence.missingSource}`,
-    "workbook parity not certified while the declared source is missing",
+    ...(evidence.missingSource
+      ? [
+          `missing source ${evidence.missingSource}`,
+          "workbook parity not certified while the declared source is missing",
+        ]
+      : [
+          "canonical Harmony golden certified",
+          `source conflicts ${evidence.sourceConflicts.map(conflict => conflict.id).join(", ") || "none"}`,
+        ]),
   ];
 }
 
 function compatibilityAuthorityVisibleLine(snapshot: ExportableSnapshot): string | null {
   const evidence = snapshot.compatibilityEvidence;
   if (!evidence) return null;
-  return `${evidence.authorityStatus} · FONTE AUSENTE ${evidence.missingSource} · PARIDADE NÃO CERTIFICADA`;
+  return evidence.missingSource
+    ? `${evidence.authorityStatus} · FONTE AUSENTE ${evidence.missingSource} · PARIDADE NÃO CERTIFICADA`
+    : `${evidence.authorityStatus} · GOLDEN HARMONY CERTIFICADO · ${evidence.sourceConflicts.map(conflict => conflict.id).join(", ") || "SEM CONFLITOS"}`;
 }
 
 export function visibleExportModelProvenance(snapshot: ExportableSnapshot) {
@@ -423,13 +432,36 @@ function domainRecords(snapshot: ExportableSnapshot) {
     ["snapshot", "engine", snapshot.status, "engine", snapshot.engineVersion],
   ];
   if (snapshot.compatibilityEvidence) {
+    const compatibilityRows: Array<[
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]> = snapshot.compatibilityEvidence.missingSource
+      ? [[
+          "compatibility_authority",
+          "missingSource",
+          snapshot.compatibilityEvidence.authorityStatus,
+          "missing_source",
+          snapshot.compatibilityEvidence.missingSource,
+        ]]
+      : snapshot.compatibilityEvidence.sourceConflicts.map(conflict => [
+          "compatibility_authority",
+          conflict.id,
+          conflict.status,
+          "source_conflict",
+          conflict.adoptedRule,
+        ]);
     rows.push(
       [
         "compatibility_authority",
         "authorityStatus",
         snapshot.compatibilityEvidence.authorityStatus,
         "compatibility_evidence",
-        "Paridade com o workbook ausente não certificada",
+        snapshot.compatibilityEvidence.missingSource
+          ? "Paridade com o workbook ausente não certificada"
+          : "Golden Harmony canônico certificado",
       ],
       [
         "compatibility_authority",
@@ -438,13 +470,7 @@ function domainRecords(snapshot: ExportableSnapshot) {
         "current_document",
         snapshot.compatibilityEvidence.availableSource,
       ],
-      [
-        "compatibility_authority",
-        "missingSource",
-        snapshot.compatibilityEvidence.authorityStatus,
-        "missing_source",
-        snapshot.compatibilityEvidence.missingSource,
-      ]
+      ...compatibilityRows,
     );
   }
   const pushRecord = (domain: string, label: string, record: Record<string, unknown>) => {

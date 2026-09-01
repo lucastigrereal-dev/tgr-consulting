@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import Decimal from "decimal.js";
 import { calculateHarmonyCompatProjection } from "./harmonyCompat";
-import { createHarmonyNatalInputs, HARMONY_NATAL_MAX_CONTRACTS } from "./harmonyNatal";
+import {
+  createHarmonyNatalInputs,
+  HARMONY_NATAL_HORIZON_MONTHS,
+  HARMONY_NATAL_MAX_CONTRACTS,
+} from "./harmonyNatal";
 
 describe("HARMONY_COMPAT_V1", () => {
   it("aplica cancelamento imediato e coortes de entrada/saldo sem somar inadimplência", () => {
-    const result = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
+    const result = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
 
     expect(result.status).toBe("valid");
     expect(result.financialModelMode).toBe("HARMONY_COMPAT_V1");
@@ -29,15 +33,15 @@ describe("HARMONY_COMPAT_V1", () => {
     expect(result.kpis.sellOutMonth).toBe("45.00000000");
     expect(result.projections[44]!.activeContracts).toBe("3120.00000000");
     expect(result.projections[44]!.availableInventory).toBe("0.00000000");
-    expect(result.kpis.totalGrossContracts).toBe("4458.00000000");
+    expect(result.kpis.totalGrossContracts).toBe("4457.00000000");
     expect(result.kpis.totalNetContracts).toBe("3120.00000000");
     expect(result.compatibilityEvidence).toMatchObject({
-      authorityStatus: "SOURCE_CONFLICT",
-      adoptedGrossContracts: "4458.00000000",
+      authorityStatus: "CANONICAL_FROM_HARMONY_MASTER_V1",
+      adoptedGrossContracts: "4457.00000000",
     });
     expect(result.memory.every(item => item.formulaVersion === "1.0.0")).toBe(true);
     expect(result.projections[12]!.fixedCosts).toBe("195339.00000000");
-    expect(result.projections[48]!.fixedCosts).toBe("0.00000000");
+    expect(result.projections[48]!.fixedCosts).toBe("156271.20000000");
     expect(result.kpis.delinquentBalance).toBe(
       result.projections.at(-1)!.delinquentBalance
     );
@@ -60,8 +64,8 @@ describe("HARMONY_COMPAT_V1", () => {
     const baselineInputs = createHarmonyNatalInputs();
     const before = structuredClone(baselineInputs);
     const scenarioInputs = createHarmonyNatalInputs("120");
-    const baseline = calculateHarmonyCompatProjection(baselineInputs, 120, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
-    const scenario = calculateHarmonyCompatProjection(scenarioInputs, 120, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
+    const baseline = calculateHarmonyCompatProjection(baselineInputs, HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
+    const scenario = calculateHarmonyCompatProjection(scenarioInputs, HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
 
     expect(baselineInputs).toEqual(before);
     expect(scenario.kpis.sellOutMonth).not.toBe(baseline.kpis.sellOutMonth);
@@ -74,23 +78,23 @@ describe("HARMONY_COMPAT_V1", () => {
   it("bloqueia quando falta input obrigatório e valida horizonte/estoque", () => {
     const pending = createHarmonyNatalInputs();
     pending.averageTicket = { status: "pending", sourceType: "current_decision" };
-    expect(calculateHarmonyCompatProjection(pending, 120, { maxContracts: "3120" }).status)
+    expect(calculateHarmonyCompatProjection(pending, HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: "3120" }).status)
       .toBe("blocked_by_pending_inputs");
-    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 121, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS })).toThrow("1 e 120");
-    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, undefined as never)).toThrow("maxContracts");
-    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, { maxContracts: "3.5" })).toThrow("inteiro");
-    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, { maxContracts: "Infinity" })).toThrow("finito");
-    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, { maxContracts: "-1" }))
+    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 145, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS })).toThrow("1 e 144");
+    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, undefined as never)).toThrow("maxContracts");
+    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: "3.5" })).toThrow("inteiro");
+    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: "Infinity" })).toThrow("finito");
+    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: "-1" }))
       .toThrow("estoque");
   });
 
   it("consome fixed/payroll e rejeita premissas sem semântica Harmony", () => {
-    const baseline = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
+    const baseline = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
     const changed = createHarmonyNatalInputs();
     changed.fixedCostMonthly.value = "120000";
     changed.payrollMonthly.value = "25000";
-    const result = calculateHarmonyCompatProjection(changed, 120, { maxContracts: "3120" });
-    expect(result.projections[0]!.fixedCosts).toBe("120000.00000000");
+    const result = calculateHarmonyCompatProjection(changed, HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: "3120" });
+    expect(result.projections[0]!.fixedCosts).toBe("72000.00000000");
     expect(result.projections[0]!.payroll).toBe("25000.00000000");
     expect(result.kpis.capitalRequired).not.toBe(baseline.kpis.capitalRequired);
     expect(result.kpis.npv).not.toBe(baseline.kpis.npv);
@@ -98,9 +102,9 @@ describe("HARMONY_COMPAT_V1", () => {
     const unsupportedMix = createHarmonyNatalInputs();
     unsupportedMix.paymentBoletoMixRate.value = "0.5";
     unsupportedMix.paymentCardViewMixRate.value = "0.5";
-    expect(() => calculateHarmonyCompatProjection(unsupportedMix, 120, { maxContracts: "3120" }))
+    expect(() => calculateHarmonyCompatProjection(unsupportedMix, HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: "3120" }))
       .toThrow("payment mix Harmony");
-    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, {
+    expect(() => calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, {
       maxContracts: "3120",
       paymentSchedulePerContract: [],
     })).toThrow("paymentSchedulePerContract não é suportada");
@@ -115,11 +119,11 @@ describe("HARMONY_COMPAT_V1", () => {
     ] as const) {
       const invalid = createHarmonyNatalInputs();
       invalid[key].value = value;
-      expect(() => calculateHarmonyCompatProjection(invalid, 120, { maxContracts: "3120" }))
+      expect(() => calculateHarmonyCompatProjection(invalid, HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: "3120" }))
         .toThrow(message);
     }
 
-    const result = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), 120, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
+    const result = calculateHarmonyCompatProjection(createHarmonyNatalInputs(), HARMONY_NATAL_HORIZON_MONTHS, { maxContracts: HARMONY_NATAL_MAX_CONTRACTS });
     let cumulative = new Decimal(0);
     let previousClosing = new Decimal(0);
     for (const row of result.projections) {

@@ -4256,8 +4256,8 @@ export async function applyGoalSeekToScenarioForTenant(params: {
   if (!Number.isInteger(params.iterations) || params.iterations < 1)
     throw new Error("Goal Seek aplicado exige número positivo de iterações.");
   const horizonMonths = params.horizonMonths ?? 120;
-  if (!Number.isInteger(horizonMonths) || horizonMonths < 1 || horizonMonths > 120)
-    throw new Error("Goal Seek aplicado exige horizonte entre 1 e 120 meses.");
+  if (!Number.isInteger(horizonMonths) || horizonMonths < 1 || horizonMonths > 144)
+    throw new Error("Goal Seek aplicado exige horizonte entre 1 e 144 meses.");
   const asOfMonth = params.asOfMonth ?? 0;
   if (!Number.isInteger(asOfMonth) || asOfMonth < 0 || asOfMonth > 1200)
     throw new Error("Goal Seek aplicado exige mês de referência válido.");

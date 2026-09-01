@@ -72,7 +72,7 @@ const positiveDecimalSchema = nonNegativeDecimalSchema.refine(
 const signedDecimalSchema = z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/);
 const meetingSimulationSchema = z.object({
   versionId: z.string().min(1),
-  horizonMonths: z.number().int().min(1).max(120),
+  horizonMonths: z.number().int().min(1).max(144),
   asOfMonth: z.number().int().min(0).max(1200).default(0),
   captadorDelta: signedDecimalSchema,
   qualifiedCouplesPerCaptadorMonth: nonNegativeDecimalSchema,
@@ -592,7 +592,7 @@ export const igrRouter = router({
     .input(z.object({ versionId: z.string().min(1), inputs: FinancialInputSnapshotSchema }))
     .mutation(({ ctx, input }) => updateInputsForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   calculate: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(144), asOfMonth: z.number().int().min(0).max(1200).default(0) }))
     .mutation(({ ctx, input }) => createCalculationSnapshot({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   simulateCaptadores: protectedProcedure
     .input(meetingSimulationSchema)
@@ -619,7 +619,7 @@ export const igrRouter = router({
     return freezeBaselineForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input });
   }),
   capitalEnvelope: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), availableCapital: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(144), asOfMonth: z.number().int().min(0).max(1200).default(0), availableCapital: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
     .query(({ ctx, input }) => calculateCapitalEnvelopeForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
   exportEligibility: protectedProcedure.input(z.object({ snapshotId: z.string().min(1) })).query(({ ctx, input }) =>
     getExportEligibilityForTenant(input.snapshotId, tenantIdFromUser(ctx.user.id)),
@@ -628,13 +628,13 @@ export const igrRouter = router({
     .input(z.object({ snapshotId: z.string().min(1), format: z.enum(["pdf", "pptx", "xlsx"]) }))
     .mutation(({ ctx, input }) => generateAuthorizedExportForTenant({ tenantId: tenantIdFromUser(ctx.user.id), actorId: ctx.user.id, ...input })),
   goalSeek: protectedProcedure
-    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(120), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: goalSeekTargetSchema, variableKey: goalSeekVariableSchema, target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
+    .input(z.object({ versionId: z.string().min(1), horizonMonths: z.number().int().min(1).max(144), asOfMonth: z.number().int().min(0).max(1200).default(0), targetKpi: goalSeekTargetSchema, variableKey: goalSeekVariableSchema, target: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), lowerBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/), upperBound: z.string().regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/) }))
     .mutation(({ ctx, input }) => runProjectGoalSeekForTenant({ tenantId: tenantIdFromUser(ctx.user.id), ...input })),
   applyGoalSeek: protectedProcedure
     .input(z.object({
       targetVersionId: z.string().min(1),
       sourceVersionId: z.string().min(1),
-      horizonMonths: z.number().int().min(1).max(120).default(120),
+      horizonMonths: z.number().int().min(1).max(144).default(120),
       asOfMonth: z.number().int().min(0).max(1200).default(0),
       variableKey: goalSeekVariableSchema,
       value: nonNegativeDecimalSchema,
