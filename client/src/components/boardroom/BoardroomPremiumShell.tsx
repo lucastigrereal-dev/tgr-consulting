@@ -43,6 +43,34 @@ export function resolveBoardroomStep(
   return Math.max(0, currentIndex - 1);
 }
 
+type BoardroomChapterVisibility = {
+  index: number;
+  isIntersecting: boolean;
+  top: number;
+  rootTop: number;
+  rootHeight: number;
+};
+
+export function resolveVisibleBoardroomChapterIndex(
+  entries: readonly BoardroomChapterVisibility[],
+  currentIndex: number
+) {
+  const visibleEntries = entries.filter(entry => entry.isIntersecting);
+  if (visibleEntries.length === 0) return currentIndex;
+
+  const { rootTop, rootHeight } = visibleEntries[0];
+  const readingLine = rootTop + rootHeight / 3;
+  const entriesAtReadingLine = visibleEntries.filter(entry => entry.top <= readingLine);
+  const candidates = entriesAtReadingLine.length > 0 ? entriesAtReadingLine : visibleEntries;
+
+  return candidates.reduce((closest, entry) => {
+    if (entriesAtReadingLine.length > 0) {
+      return entry.top > closest.top ? entry : closest;
+    }
+    return entry.top < closest.top ? entry : closest;
+  }).index;
+}
+
 function getFullscreenElement() {
   if (typeof document === "undefined") return null;
   return document.fullscreenElement;
@@ -63,6 +91,15 @@ export function BoardroomPremiumShell({
   const [presenterMode, setPresenterMode] = useState(initialPresenterMode);
   const [fullscreenFallback, setFullscreenFallback] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const programmaticNavigationRef = useRef<number | null>(null);
+
+  const syncHash = (index: number) => {
+    if (typeof window === "undefined") return;
+    const href = LIVE_DOCUMENT_CHAPTERS[index]?.href;
+    if (!href || window.location.hash === href) return;
+    window.history.replaceState(window.history.state, "", href);
+  };
 
   const focusChapter = (index: number) => {
     const chapter = LIVE_DOCUMENT_CHAPTERS[index];
@@ -75,7 +112,9 @@ export function BoardroomPremiumShell({
   };
 
   const moveToChapter = (index: number) => {
+    programmaticNavigationRef.current = index;
     setActiveIndex(index);
+    syncHash(index);
     focusChapter(index);
   };
 
@@ -127,6 +166,84 @@ export function BoardroomPremiumShell({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeIndex, presenterMode, fullscreenFallback]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || typeof IntersectionObserver === "undefined") return;
+
+    const chapterElements = LIVE_DOCUMENT_CHAPTERS.map(chapter =>
+      document.querySelector<HTMLElement>(chapter.href)
+    );
+    let animationFrame: number | null = null;
+
+    const updateVisibleChapter = () => {
+      animationFrame = null;
+      const rootBounds = stage.getBoundingClientRect();
+      const requestedIndex = programmaticNavigationRef.current;
+      if (requestedIndex !== null) {
+        const requestedBounds = chapterElements[requestedIndex]?.getBoundingClientRect();
+        const requestedIsVisible =
+          requestedBounds &&
+          requestedBounds.bottom > rootBounds.top &&
+          requestedBounds.top < rootBounds.bottom;
+        if (!requestedIsVisible) return;
+        programmaticNavigationRef.current = null;
+        setActiveIndex(requestedIndex);
+        syncHash(requestedIndex);
+        return;
+      }
+
+      const visibility = chapterElements.flatMap((element, index) => {
+        if (!element) return [];
+        const bounds = element.getBoundingClientRect();
+        return [
+          {
+            index,
+            isIntersecting: bounds.bottom > rootBounds.top && bounds.top < rootBounds.bottom,
+            top: bounds.top,
+            rootTop: rootBounds.top,
+            rootHeight: rootBounds.height,
+          },
+        ];
+      });
+
+      setActiveIndex(currentIndex => {
+        const nextIndex = resolveVisibleBoardroomChapterIndex(visibility, currentIndex);
+        if (nextIndex === currentIndex) return currentIndex;
+        syncHash(nextIndex);
+        return nextIndex;
+      });
+    };
+
+    const scheduleVisibilityUpdate = () => {
+      if (animationFrame !== null) return;
+      animationFrame = window.requestAnimationFrame(updateVisibleChapter);
+    };
+
+    const observer = new IntersectionObserver(scheduleVisibilityUpdate, {
+      root: stage,
+      threshold: 0,
+    });
+
+    for (const element of chapterElements) {
+      if (element && stage.contains(element)) observer.observe(element);
+    }
+    stage.addEventListener("scroll", scheduleVisibilityUpdate, { passive: true });
+    window.addEventListener("resize", scheduleVisibilityUpdate);
+
+    const hashIndex = LIVE_DOCUMENT_CHAPTERS.findIndex(
+      chapter => chapter.href === window.location.hash
+    );
+    if (hashIndex >= 0) setActiveIndex(hashIndex);
+    scheduleVisibilityUpdate();
+
+    return () => {
+      observer.disconnect();
+      stage.removeEventListener("scroll", scheduleVisibilityUpdate);
+      window.removeEventListener("resize", scheduleVisibilityUpdate);
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
 
   const activeChapter = LIVE_DOCUMENT_CHAPTERS[activeIndex];
   const isPresenter = presenterMode || fullscreenFallback;
@@ -212,7 +329,10 @@ export function BoardroomPremiumShell({
                     ? "bg-amber-300 text-slate-950"
                     : "text-slate-300 hover:bg-white/[0.07] hover:text-white"
                 }`}
-                onClick={() => setActiveIndex(index)}
+                onClick={() => {
+                  programmaticNavigationRef.current = index;
+                  setActiveIndex(index);
+                }}
               >
                 <span className="font-mono text-[10px]">{chapter.number}</span>
                 <span className="font-medium">{chapter.title}</span>
@@ -229,6 +349,7 @@ export function BoardroomPremiumShell({
           }
         >
           <div
+            ref={stageRef}
             data-boardroom-stage={isPresenter ? "presenter" : "standard"}
             className={
               isPresenter

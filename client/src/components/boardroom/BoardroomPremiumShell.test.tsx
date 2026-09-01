@@ -5,6 +5,7 @@ import {
   BoardroomPremiumShell,
   resolveBoardroomKeyboardAction,
   resolveBoardroomStep,
+  resolveVisibleBoardroomChapterIndex,
   shouldHandleBoardroomHotkey,
 } from "./BoardroomPremiumShell";
 import { LIVE_DOCUMENT_CHAPTERS } from "@/lib/liveDocumentStructure";
@@ -43,6 +44,39 @@ describe("BoardroomPremiumShell", () => {
     expect(resolveBoardroomStep(0, "next", 16)).toBe(1);
     expect(resolveBoardroomStep(15, "next", 16)).toBe(15);
     expect(resolveBoardroomStep(8, "previous", 16)).toBe(7);
+  });
+
+  it("selects the chapter occupying the reading line after a manual stage scroll", () => {
+    expect(
+      resolveVisibleBoardroomChapterIndex(
+        [
+          {
+            index: 0,
+            isIntersecting: true,
+            top: -420,
+            rootTop: 100,
+            rootHeight: 600,
+          },
+          {
+            index: 1,
+            isIntersecting: true,
+            top: 170,
+            rootTop: 100,
+            rootHeight: 600,
+          },
+          {
+            index: 2,
+            isIntersecting: true,
+            top: 610,
+            rootTop: 100,
+            rootHeight: 600,
+          },
+        ],
+        0
+      )
+    ).toBe(1);
+
+    expect(resolveVisibleBoardroomChapterIndex([], 7)).toBe(7);
   });
 
   it("ignores global hotkeys while the user is typing or editing text", () => {
