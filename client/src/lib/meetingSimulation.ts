@@ -45,52 +45,6 @@ export function buildMeetingScenarioInputs(
   return { inputs, changedKeys };
 }
 
-export type MeetingCapturePoint = {
-  status: "provided" | "pending";
-  sourceType: "assumption" | "current_decision" | "current_document" | "historical_primary" | "external_benchmark" | "derived_analysis";
-  sourceRef?: string;
-  definition: {
-    pointId: string;
-    name: string;
-    channel: string;
-    activationCost: string;
-    monthlyFixedCost: string;
-    costPerSale: string;
-    approaches: string;
-    researchRate: string;
-    qualificationRate: string;
-    invitationRate: string;
-    appointmentRate: string;
-    showRate: string;
-    tourRate: string;
-    saleRate: string;
-    cannibalizationRate: string;
-    cashflowTreatment: "incremental" | "included_in_project_totals";
-  };
-};
-
-export function buildMeetingScenarioCapturePoints(
-  basePoints: MeetingCapturePoint[],
-  baselineGrossSalesMonth1: string,
-  targetGrossSalesMonth1: string
-): MeetingCapturePoint[] {
-  const baseline = Number(baselineGrossSalesMonth1);
-  const target = Number(targetGrossSalesMonth1);
-  if (!Number.isFinite(baseline) || baseline <= 0 || !Number.isFinite(target) || target < 0) {
-    throw new Error("A demanda dos pontos não pode ser escalada sem produção-base positiva e meta válida.");
-  }
-  const factor = target / baseline;
-  return basePoints.map(point => ({
-    status: "provided",
-    sourceType: "current_decision",
-    sourceRef: "boardroom",
-    definition: {
-      ...point.definition,
-      approaches: (Number(point.definition.approaches) * factor).toFixed(8),
-    },
-  }));
-}
-
 export function calculateMeetingDelta(
   current: string | null | undefined,
   previous: string | null | undefined
@@ -138,4 +92,11 @@ export function isCurrentMeetingHypothesis(
   currentSignature: string
 ) {
   return status === "current" && Boolean(resultSignature) && resultSignature === currentSignature;
+}
+
+export function isCurrentMeetingActionGeneration(
+  actionGeneration: number,
+  currentGeneration: number
+) {
+  return actionGeneration === currentGeneration;
 }

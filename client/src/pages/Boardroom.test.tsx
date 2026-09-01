@@ -23,6 +23,7 @@ const state = vi.hoisted(() => ({
     iterations: number;
     reason?: string | null;
   } | null,
+  meetingActionPending: false,
 }));
 
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "lucas" } }) }));
@@ -62,7 +63,7 @@ vi.mock("@/lib/trpc", () => ({
       freezeBaseline: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
       requestExport: { useMutation: () => ({ isPending: false, mutate: () => undefined }) },
       simulateCaptadores: { useMutation: () => ({ isPending: false, mutateAsync: async () => undefined }) },
-      promoteMeetingSimulationToScenario: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ branchId: "meeting-branch-record-1", versionId: "meeting-branch-1" }) }) },
+      promoteMeetingSimulationToScenario: { useMutation: () => ({ isPending: state.meetingActionPending, mutateAsync: async () => ({ branchId: "meeting-branch-record-1", versionId: "meeting-branch-1" }) }) },
       createDecision: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ id: "decision-1" }) }) },
       calculate: { useMutation: () => ({ isPending: false, mutateAsync: async () => ({ id: "meeting-snapshot-1", status: "valid" }) }) },
       goalSeek: { useMutation: () => ({ isPending: false, mutate: () => undefined, data: state.goalSeekResult }) },
@@ -157,6 +158,19 @@ describe("Boardroom · trilha editorial", () => {
     state.calculation = null;
     state.workingVersion = { id: "version-1" };
     state.goalSeekResult = null;
+    state.meetingActionPending = false;
+  });
+
+  it("bloqueia DESCARTAR enquanto uma ação de reunião está em andamento", () => {
+    const calculation = calculateFinancialProjection(inputs, 24);
+    expect(calculation.status).toBe("valid");
+    if (calculation.status !== "valid") return;
+    state.calculation = calculation;
+    state.meetingActionPending = true;
+
+    const html = renderToStaticMarkup(<Boardroom />);
+
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>DESCARTAR SIMULAÇÃO<\/button>/);
   });
 
   it("renderiza um snapshot calculado com origem ficha-mãe e fórmulas versionadas nos capítulos do estudo", () => {

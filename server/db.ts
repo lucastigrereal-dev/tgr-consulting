@@ -3510,7 +3510,9 @@ export async function promoteMeetingSimulationToScenarioForTenant(params: Meetin
         !lockedSnapshot ||
         lockedSnapshot.projectVersionId !== baseVersion.id ||
         !lockedSnapshot.isAuthoritative ||
-        lockedSnapshot.validationStatus !== "valid"
+        lockedSnapshot.validationStatus !== "valid" ||
+        lockedSnapshot.horizonMonths !== params.horizonMonths ||
+        lockedSnapshot.asOfMonth !== (params.asOfMonth ?? 0)
       ) throw new Error("O snapshot-base não é autoritativo, válido ou compatível com a baseline.");
 
       const nextInputs = structuredClone(inputSnapshot);
@@ -3577,6 +3579,9 @@ export async function promoteMeetingSimulationToScenarioForTenant(params: Meetin
         metadata: {
           baseVersionId: baseVersion.id,
           baseSnapshotId: params.baseSnapshotId,
+          baseSnapshotHash: lockedSnapshot.snapshotHash,
+          horizonMonths: params.horizonMonths,
+          asOfMonth: params.asOfMonth ?? 0,
           changedInputKeys,
           sourceRef,
           targetGrossSalesMonth1: params.targetGrossSalesMonth1 ?? null,

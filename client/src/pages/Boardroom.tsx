@@ -28,6 +28,7 @@ import {
 } from "@shared/financial/types";
 import {
   calculateMeetingDelta,
+  isCurrentMeetingActionGeneration,
   isCurrentMeetingHypothesis,
   isLatestMeetingResponse,
   meetingSimulationSignature,
@@ -285,6 +286,7 @@ export default function Boardroom() {
   const initializedMeetingSnapshotRef = useRef("");
   const meetingPromotionRef = useRef<{ signature: string; promise: Promise<{ branchId: string; versionId: string }> } | null>(null);
   const meetingActionInFlightRef = useRef(false);
+  const meetingActionGenerationRef = useRef(0);
   const [savedMeetingScenario, setSavedMeetingScenario] = useState<{
     versionId: string;
     signature: string;
@@ -525,13 +527,25 @@ export default function Boardroom() {
     const snapshotKey = `${snapshot.id}:${snapshot.snapshotHash}`;
     if (initializedMeetingSnapshotRef.current === snapshotKey) return;
     initializedMeetingSnapshotRef.current = snapshotKey;
+    meetingActionGenerationRef.current += 1;
+    meetingActionInFlightRef.current = false;
+    meetingPromotionRef.current = null;
     setTargetGrossSalesMonth1(baselineGrossSalesMonth1);
     setMeetingResult(null);
     setMeetingResultSignature("");
     setMeetingError("");
     setMeetingStatus("idle");
     setSavedMeetingScenario(null);
+    setMeetingAction(null);
+    setMeetingActionMessage("");
   }, [baselineGrossSalesMonth1, snapshot?.id, snapshot?.snapshotHash]);
+
+  useEffect(() => () => {
+    meetingActionGenerationRef.current += 1;
+    meetingActionInFlightRef.current = false;
+    meetingPromotionRef.current = null;
+    meetingRequestRef.current += 1;
+  }, []);
 
   const createMeetingPayload = () => {
     if (
@@ -651,7 +665,7 @@ export default function Boardroom() {
     meetingResult &&
     (meetingChangedInputKeys.length || Number(meetingResult.before.grossSalesMonth1) !== Number(meetingResult.after.grossSalesMonth1))
   );
-  const ensureMeetingScenario = async () => {
+  const ensureMeetingScenario = async (actionGeneration: number) => {
     if (!meetingHasDelta || !meetingResult || !currentMeetingPayload || !snapshot?.id) {
       throw new Error("Calcule uma hipótese diferente da baseline antes de salvar.");
     }
@@ -661,6 +675,7 @@ export default function Boardroom() {
     }
     if (meetingPromotionRef.current?.signature === currentMeetingSignature) {
       const branch = await meetingPromotionRef.current.promise;
+      if (!isCurrentMeetingActionGeneration(actionGeneration, meetingActionGenerationRef.current)) return null;
       return { versionId: branch.versionId, signature: currentMeetingSignature, applied: true, state: "draft" as const };
     }
     const promise = promoteMeetingScenario.mutateAsync({
@@ -673,6 +688,7 @@ export default function Boardroom() {
     meetingPromotionRef.current = { signature: currentMeetingSignature, promise };
     try {
       const branch = await promise;
+      if (!isCurrentMeetingActionGeneration(actionGeneration, meetingActionGenerationRef.current)) return null;
       const saved = { versionId: branch.versionId, signature: currentMeetingSignature, applied: true, state: "draft" as const };
       setSavedMeetingScenario(saved);
       return saved;
@@ -680,7 +696,10 @@ export default function Boardroom() {
       if (meetingPromotionRef.current?.promise === promise) meetingPromotionRef.current = null;
     }
   };
-  const registerMeetingDecision = async (scenario: NonNullable<typeof savedMeetingScenario>) => {
+  const registerMeetingDecision = async (
+    scenario: NonNullable<typeof savedMeetingScenario>,
+    actionGeneration: number
+  ) => {
     if (scenario.decisionId) return scenario;
     if (decisionRationale.trim().length < 3 || decisionResponsible.trim().length < 2 || decisionSourceRef.trim().length < 2) {
       throw new Error("Informe racional, responsável e fonte para registrar a decisão.");
@@ -693,34 +712,44 @@ export default function Boardroom() {
       responsible: decisionResponsible.trim(),
       sourceRef: decisionSourceRef.trim(),
     });
+    if (!isCurrentMeetingActionGeneration(actionGeneration, meetingActionGenerationRef.current)) return null;
     const decided = { ...scenario, decisionId: decision.id };
     setSavedMeetingScenario(decided);
     return decided;
   };
   const runMeetingAction = async (action: "save" | "decision" | "review") => {
     if (meetingActionInFlightRef.current) return;
+    const actionGeneration = meetingActionGenerationRef.current;
+    const actionIsCurrent = () => isCurrentMeetingActionGeneration(
+      actionGeneration,
+      meetingActionGenerationRef.current
+    );
     meetingActionInFlightRef.current = true;
     setMeetingAction(action);
     setMeetingActionMessage("");
     try {
-      const scenario = await ensureMeetingScenario();
+      const scenario = await ensureMeetingScenario(actionGeneration);
+      if (!scenario || !actionIsCurrent()) return;
       if (action === "save") {
         setMeetingActionMessage(`Cenário ${scenario.versionId} salvo; baseline preservada.`);
         return;
       }
       if (action === "decision") {
         if (scenario.state !== "draft") throw new Error("A decisão precisa ser registrada antes de solicitar aprovação.");
-        const decided = await registerMeetingDecision(scenario);
+        const decided = await registerMeetingDecision(scenario, actionGeneration);
+        if (!decided || !actionIsCurrent()) return;
         setMeetingActionMessage(`Decisão ${decided.decisionId} registrada na branch ${scenario.versionId}; baseline preservada.`);
         return;
       }
       if (!snapshot) throw new Error("Snapshot oficial indisponível para solicitar revisão.");
-      const decided = await registerMeetingDecision(scenario);
+      const decided = await registerMeetingDecision(scenario, actionGeneration);
+      if (!decided || !actionIsCurrent()) return;
       const calculated = await calculateMeetingScenario.mutateAsync({
         versionId: decided.versionId,
         horizonMonths: snapshot.horizonMonths,
         asOfMonth: calculation?.authoritativeDomains?.asOfMonth ?? 0,
       });
+      if (!actionIsCurrent()) return;
       if (calculated.status !== "valid") {
         throw new Error("O cenário foi calculado, mas permanece inválido e não entrou em revisão.");
       }
@@ -728,13 +757,19 @@ export default function Boardroom() {
       setSavedMeetingScenario(reviewed);
       setMeetingActionMessage(`Revisão solicitada. Snapshot ${calculated.id}; cenário em IN_REVIEW, ainda não aprovado.`);
     } catch (error) {
+      if (!actionIsCurrent()) return;
       setMeetingActionMessage(error instanceof Error ? error.message : "A ação não pôde ser concluída.");
     } finally {
-      meetingActionInFlightRef.current = false;
-      setMeetingAction(null);
+      if (actionIsCurrent()) {
+        meetingActionInFlightRef.current = false;
+        setMeetingAction(null);
+      }
     }
   };
   const discardMeetingSimulation = () => {
+    meetingActionGenerationRef.current += 1;
+    meetingActionInFlightRef.current = false;
+    meetingPromotionRef.current = null;
     meetingRequestRef.current += 1;
     setTargetGrossSalesMonth1(baselineGrossSalesMonth1);
     setCaptadorDelta("0");
@@ -749,6 +784,8 @@ export default function Boardroom() {
     setMeetingResultSignature("");
     setMeetingStatus("idle");
     setMeetingError("");
+    setSavedMeetingScenario(null);
+    setMeetingAction(null);
     setMeetingActionMessage("Hipótese local descartada; baseline não foi alterada.");
   };
   const studyConclusion = !snapshot
@@ -1414,7 +1451,7 @@ export default function Boardroom() {
             </div>
             <div className="rounded-xl border border-amber-200/20 bg-amber-100/[0.035] p-4">
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={discardMeetingSimulation}>DESCARTAR SIMULAÇÃO</Button>
+                <Button variant="outline" disabled={meetingActionsBusy} onClick={discardMeetingSimulation}>DESCARTAR SIMULAÇÃO</Button>
                 <Button variant="outline" disabled={!meetingHasDelta || meetingActionsBusy} onClick={() => void runMeetingAction("save")}>SALVAR COMO CENÁRIO</Button>
                 <Button variant="outline" disabled={!meetingHasDelta || meetingActionsBusy || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("decision")}>REGISTRAR DECISÃO</Button>
                 <Button className="bg-amber-400 text-slate-950 hover:bg-amber-300" disabled={!meetingHasDelta || meetingActionsBusy || savedMeetingScenario?.state === "in_review"} onClick={() => void runMeetingAction("review")}>{meetingAction === "review" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}SOLICITAR APROVAÇÃO</Button>

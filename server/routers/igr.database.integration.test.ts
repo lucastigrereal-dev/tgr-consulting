@@ -462,8 +462,41 @@ describe("igrRouter + banco", () => {
     expect((await db!.select().from(auditEvents).where(and(
       eq(auditEvents.entityId, promotedMeeting.versionId),
       eq(auditEvents.action, "meeting_simulation.promoted"),
-    )).limit(1))[0]?.metadata).toMatchObject({ sourceRef: "Ata Boardroom 42", baseSnapshotId: snapshot.id });
+    )).limit(1))[0]?.metadata).toMatchObject({
+      sourceRef: "Ata Boardroom 42",
+      baseSnapshotId: snapshot.id,
+      baseSnapshotHash: snapshot.snapshotHash,
+      horizonMonths: 24,
+      asOfMonth: 0,
+    });
     const scenarioCountBeforeRollback = (await db!.select({ id: projectVersions.id }).from(projectVersions)).length;
+    await expect(owner.promoteMeetingSimulationToScenario({
+      versionId: created.versionId,
+      baseSnapshotId: snapshot.id,
+      horizonMonths: 25,
+      asOfMonth: 0,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "13",
+      name: "Boardroom horizonte divergente",
+      reason: "Snapshot não pertence ao horizonte solicitado.",
+      sourceRef: "Ata mismatch horizonte",
+    })).rejects.toThrow(/snapshot-base.*compatível/i);
+    await expect(owner.promoteMeetingSimulationToScenario({
+      versionId: created.versionId,
+      baseSnapshotId: snapshot.id,
+      horizonMonths: 24,
+      asOfMonth: 1,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "13",
+      name: "Boardroom data-base divergente",
+      reason: "Snapshot não pertence à data-base solicitada.",
+      sourceRef: "Ata mismatch data-base",
+    })).rejects.toThrow(/snapshot-base.*compatível/i);
+    expect((await db!.select({ id: projectVersions.id }).from(projectVersions)).length).toBe(scenarioCountBeforeRollback);
     await db!.execute(sql.raw("CREATE TRIGGER meeting_promotion_rollback BEFORE INSERT ON audit_events FOR EACH ROW SET NEW.entityId = IF(NEW.action = 'meeting_simulation.promoted', NULL, NEW.entityId)"));
     try {
       await expect(owner.promoteMeetingSimulationToScenario({

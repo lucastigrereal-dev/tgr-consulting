@@ -3,8 +3,8 @@ import { simulateCaptadorChange } from "@shared/financial/meetingSimulator";
 import type { FinancialInputSnapshot } from "@shared/financial/types";
 import {
   buildMeetingScenarioInputs,
-  buildMeetingScenarioCapturePoints,
   calculateMeetingDelta,
+  isCurrentMeetingActionGeneration,
   isLatestMeetingResponse,
   isCurrentMeetingHypothesis,
   meetingSimulationSignature,
@@ -53,25 +53,6 @@ describe("meetingSimulation helpers", () => {
     expect(calculateMeetingDelta(null, "100")).toEqual({ absolute: null, percent: null });
   });
 
-  it("persiste a meta de vendas escalando apenas a demanda dos pontos na branch", () => {
-    const points = [{
-      status: "provided" as const,
-      sourceType: "assumption" as const,
-      sourceRef: "baseline-point",
-      definition: {
-        pointId: "p1", name: "Ponto 1", channel: "Shopping", activationCost: "10", monthlyFixedCost: "20", costPerSale: "3",
-        approaches: "1000", researchRate: "0.5", qualificationRate: "0.4", invitationRate: "0.8", appointmentRate: "0.75",
-        showRate: "0.8", tourRate: "0.5", saleRate: "0.2", cannibalizationRate: "0.1", cashflowTreatment: "incremental" as const,
-      },
-    }];
-
-    const scaled = buildMeetingScenarioCapturePoints(points, "10", "12");
-
-    expect(scaled[0].definition).toEqual({ ...points[0].definition, approaches: "1200.00000000" });
-    expect(scaled[0]).toMatchObject({ status: "provided", sourceType: "current_decision", sourceRef: "boardroom" });
-    expect(points[0].definition.approaches).toBe("1000");
-  });
-
   it("aceita resposta apenas quando request e assinatura ainda são os mais novos", () => {
     expect(isLatestMeetingResponse(3, 3, "target:120", "target:120")).toBe(true);
     expect(isLatestMeetingResponse(2, 3, "target:100", "target:120")).toBe(false);
@@ -80,5 +61,10 @@ describe("meetingSimulation helpers", () => {
     expect(isCurrentMeetingHypothesis("current", "target:120", "target:120")).toBe(true);
     expect(isCurrentMeetingHypothesis("current", "target:120", "")).toBe(false);
     expect(isCurrentMeetingHypothesis("calculating", "target:100", "target:120")).toBe(false);
+  });
+
+  it("ignora o resultado de uma ação invalidada por reset, troca de snapshot ou unmount", () => {
+    expect(isCurrentMeetingActionGeneration(7, 7)).toBe(true);
+    expect(isCurrentMeetingActionGeneration(7, 8)).toBe(false);
   });
 });
