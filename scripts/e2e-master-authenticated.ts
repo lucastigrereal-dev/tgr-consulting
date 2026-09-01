@@ -11,6 +11,8 @@ import { once } from "node:events";
 import { LIVE_DOCUMENT_CHAPTERS } from "../client/src/lib/liveDocumentStructure";
 import { COOKIE_NAME } from "../shared/const";
 import type { FinancialInputSnapshot } from "../shared/financial/types";
+import { GOLDEN_NATAL_PONTA_NEGRA_2026 } from "../shared/financial/natalGolden";
+import goldenNatalExpected from "../golden/natal-ponta-negra-2026.expected.json";
 
 type Evidence = {
   id: number;
@@ -577,6 +579,197 @@ async function main() {
     );
     const responsiveBoardroom = await verifyResponsiveBoardroom(page, app.baseUrl);
 
+    const natalCreated = await caller.igr.createProject({
+      name: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.project,
+      inputs: structuredClone(GOLDEN_NATAL_PONTA_NEGRA_2026.inputs) as FinancialInputSnapshot,
+    });
+    const natalVersionId = natalCreated.versionId;
+    const natalProjectId = natalCreated.projectId;
+    const natalSourceRef = "golden/natal-ponta-negra-2026:PRD-approved";
+    await caller.igr.upsertBuilderComponent({
+      versionId: natalVersionId,
+      componentType: "project_assembly",
+      name: "Golden Natal Ponta Negra 2026",
+      status: "provided",
+      payload: {
+        praca: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.location,
+        horizonte: String(GOLDEN_NATAL_PONTA_NEGRA_2026.horizonMonths),
+        unidades: String(GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.units),
+        cotasPorUh: String(GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.sharesPerUnit),
+        origem: natalSourceRef,
+      },
+      sourceType: "current_decision",
+      sourceRef: natalSourceRef,
+    });
+    await caller.igr.saveCommercialModel({
+      versionId: natalVersionId,
+      asOfMonth: 0,
+      skus: [{
+        id: "natal-ponta-negra",
+        name: "Projeto Unico Ponta Negra",
+        unitType: "UH",
+        unitQuantity: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.units,
+        sharesPerUnit: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.sharesPerUnit,
+        grossSoldShares: 0,
+        returnedShares: 0,
+        blockedShares: 0,
+        status: "provided",
+        sourceType: "current_decision",
+        sourceRef: natalSourceRef,
+        pricePhases: [{ id: "natal-launch", startsAtMonth: 0, price: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.pricePerContract }],
+      }],
+      conditions: [{
+        productSkuCode: "natal-ponta-negra",
+        status: "provided",
+        sourceType: "current_decision",
+        sourceRef: natalSourceRef,
+        condition: {
+          id: "natal-standard",
+          name: "Condicao Natal 2026",
+          listPrice: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.pricePerContract,
+          discount: "0",
+          entry: { total: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.entryTotal, installments: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.entryInstallments, firstDueMonth: 0 },
+          balance: { principal: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.balanceTotal, installments: GOLDEN_NATAL_PONTA_NEGRA_2026.metadata.balanceInstallments, graceMonths: 3, firstDueMonth: 3 },
+          explicitCharges: "0",
+          explicitChargesDueMonth: 0,
+          materialityTolerance: "0.01",
+        },
+      }],
+    });
+    await caller.igr.replaceCapturePoints({
+      versionId: natalVersionId,
+      points: [{
+        status: "provided",
+        sourceType: "current_decision",
+        sourceRef: natalSourceRef,
+        definition: {
+          pointId: "natal-primary",
+          name: "Ponta Negra",
+          channel: "Natal/RN",
+          activationCost: "0",
+          monthlyFixedCost: "0",
+          costPerSale: "0",
+          approaches: "1000",
+          researchRate: "1",
+          qualificationRate: "0.5",
+          invitationRate: "1",
+          appointmentRate: "1",
+          showRate: "1",
+          tourRate: "1",
+          saleRate: "0.2",
+          cannibalizationRate: "0",
+          cashflowTreatment: "included_in_project_totals",
+        },
+      }],
+    });
+    await caller.igr.upsertCommercialOperations({
+      versionId: natalVersionId,
+      status: "provided",
+      sourceType: "current_decision",
+      sourceRef: natalSourceRef,
+      definition: {
+        room: { rooms: [{ roomId: "natal-room", tables: "20", overflowTables: "4" }], operatingDaysPerMonth: "25", operatingHoursPerDay: "8", shifts: "2", averageTourDurationMinutes: "60", toursPerTable: "1", receptionists: "4", receptionCapacityPerPerson: "250", consultants: "15", consultantCapacityPerPerson: "50", closers: "6", closerSalesCapacityPerPerson: "25", peakFlowFactor: "1", maxWaitMinutes: "15" },
+        workforce: {
+          cashflowTreatment: "included_in_project_totals",
+          cohorts: [
+            { cohortId: "natal-consultants", role: "consultant", capacityUnit: "tours", headcount: "15", hireMonth: 0, trainingMonths: 0, certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }], matureProductivity: "50", absenteeismRate: "0", monthlyTurnoverRate: "0", fixedCompensation: "0", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0" },
+            { cohortId: "natal-closers", role: "closer", capacityUnit: "sales", headcount: "6", hireMonth: 0, trainingMonths: 0, certificationRate: "1", rampCurve: [{ productiveAgeMonth: 0, productivityRate: "1" }], matureProductivity: "25", absenteeismRate: "0", monthlyTurnoverRate: "0", fixedCompensation: "0", burden: "0", guarantee: "0", allowance: "0", replacementCost: "0" },
+          ],
+        },
+        training: { cashflowTreatment: "included_in_project_totals", plans: [] },
+        commissions: { cashflowTreatment: "included_in_project_totals", policies: [] },
+      },
+    });
+    await caller.igr.createCostCatalogItem({
+      versionId: natalVersionId,
+      category: "operations",
+      name: "Custos agregados Golden Natal (TEST DATA)",
+      frequency: "monthly",
+      cashflowTreatment: "included_in_project_totals",
+      amountText: "280000",
+      status: "provided",
+      sourceType: "assumption",
+      sourceRef: "TEST_DATA:Natal-Ponta-Negra-2026-v1",
+    });
+    await caller.igr.upsertReceivablesPolicy({
+      versionId: natalVersionId,
+      status: "provided",
+      sourceType: "assumption",
+      sourceRef: "TEST_DATA:Natal-Ponta-Negra-2026-v1",
+      policy: structuredClone(GOLDEN_NATAL_PONTA_NEGRA_2026.options.receivablesPolicy),
+    });
+    await caller.igr.createDecision({
+      versionId: natalVersionId,
+      title: "Validar Golden Natal",
+      decisionValue: "100 vendas brutas por mes",
+      rationale: "Fixture oficial de regressao antes da simulacao ao vivo.",
+      responsible: ownerName,
+      sourceRef: natalSourceRef,
+    });
+    const natalSnapshot = await caller.igr.calculate({
+      versionId: natalVersionId,
+      horizonMonths: GOLDEN_NATAL_PONTA_NEGRA_2026.horizonMonths,
+      asOfMonth: 0,
+    });
+    assert(natalSnapshot.status === "valid", `Golden Natal snapshot was not valid: ${natalSnapshot.status}`);
+    for (const [key, expected] of Object.entries(goldenNatalExpected.kpis)) {
+      const obtained = natalSnapshot.kpis[key as keyof typeof natalSnapshot.kpis];
+      assert(obtained === expected, `Golden Natal KPI ${key} diverged: expected ${expected}, obtained ${obtained}`);
+    }
+    const natalSimulation = await caller.igr.simulateCaptadores({
+      versionId: natalVersionId,
+      horizonMonths: 120,
+      asOfMonth: 0,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "120",
+    });
+    assert(natalSimulation.before.grossSalesMonth1 === "100.00000000", "Golden Natal Boardroom baseline was not 100 sales/month.");
+    assert(natalSimulation.after.grossSalesMonth1 === "120.00000000", "Golden Natal Boardroom simulation did not reach 120 sales/month.");
+    const promotedNatal = await caller.igr.promoteMeetingSimulationToScenario({
+      versionId: natalVersionId,
+      baseSnapshotId: natalSnapshot.id,
+      horizonMonths: 120,
+      asOfMonth: 0,
+      captadorDelta: "0",
+      qualifiedCouplesPerCaptadorMonth: "25",
+      loadedCostPerCaptadorMonth: "0",
+      targetGrossSalesMonth1: "120",
+      name: "Natal 120 vendas",
+      reason: "Boardroom Golden Test: comparar 100 versus 120 vendas por mes.",
+      sourceRef: "boardroom:golden-natal-100-to-120",
+    });
+    const unchangedNatalBaseline = await caller.igr.calculate({ versionId: natalVersionId, horizonMonths: 120, asOfMonth: 0 });
+    assert(unchangedNatalBaseline.id === natalSnapshot.id && unchangedNatalBaseline.snapshotHash === natalSnapshot.snapshotHash, "Saving the Natal scenario mutated the official baseline snapshot.");
+    const natalScenarioSnapshot = await caller.igr.calculate({ versionId: promotedNatal.versionId, horizonMonths: 120, asOfMonth: 0 });
+    assert(natalScenarioSnapshot.status === "valid", "Golden Natal 120-sales scenario was not valid.");
+    for (const kpi of ["grossSales", "totalOperatingCashFlow", "npv", "paybackMonths"] as const) {
+      assert(natalScenarioSnapshot.kpis[kpi] !== natalSnapshot.kpis[kpi], `Golden Natal scenario did not change ${kpi}.`);
+    }
+    const natalApproval = await caller.igr.approveSnapshot({ snapshotId: natalScenarioSnapshot.id, rationale: "Golden Natal scenario approved after baseline comparison." });
+    assert(natalApproval.approved, "Golden Natal scenario approval failed.");
+    const natalBaseline = await caller.igr.freezeBaseline({ snapshotId: natalScenarioSnapshot.id });
+    assert(natalBaseline.baseline, "Golden Natal approved scenario did not freeze as baseline.");
+    const natalPdf = await caller.igr.requestExport({ snapshotId: natalScenarioSnapshot.id, format: "pdf" });
+    const natalPptx = await caller.igr.requestExport({ snapshotId: natalScenarioSnapshot.id, format: "pptx" });
+    const natalXlsx = await caller.igr.requestExport({ snapshotId: natalScenarioSnapshot.id, format: "xlsx" });
+    assert(natalPdf.exportPackHash === natalPptx.exportPackHash && natalPptx.exportPackHash === natalXlsx.exportPackHash, "Golden Natal exports did not share one export pack hash.");
+    const natalExportBuffers = [natalPdf, natalPptx, natalXlsx].map(item => storage.get(item.url.replace(/^\/manus-storage\//, "")));
+    assert(natalExportBuffers.every(item => item && item.byteLength > 500), "Golden Natal export artifact was missing or too small.");
+    const natalPptxArchive = await JSZip.loadAsync(natalExportBuffers[1]!);
+    const natalPptxXml = (await Promise.all(Object.values(natalPptxArchive.files).filter(file => /^ppt\/slides\/slide\d+\.xml$/.test(file.name)).map(file => file.async("string")))).join("\n");
+    assert(natalPptxXml.includes(natalScenarioSnapshot.snapshotHash.slice(0, 12).toUpperCase()), "Golden Natal PPTX did not identify the approved snapshot hash.");
+    const natalXlsxArchive = await JSZip.loadAsync(natalExportBuffers[2]!);
+    const natalXlsxXml = (await Promise.all(Object.values(natalXlsxArchive.files).filter(file => /^xl\/worksheets\/sheet\d+\.xml$/.test(file.name)).map(file => file.async("string")))).join("\n");
+    assert(natalXlsxXml.includes(natalScenarioSnapshot.snapshotHash), "Golden Natal XLSX did not contain the approved snapshot hash.");
+    assert(natalXlsxXml.includes(natalScenarioSnapshot.kpis.npv ?? "__missing_npv__"), "Golden Natal XLSX did not contain the approved snapshot NPV.");
+    await verifyUi(page, app.baseUrl, "/study", /Boardroom|Baseline|Snapshot/i);
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "03-golden-natal-baseline.png"), fullPage: true });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "04-golden-natal-mobile.png"), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+
     await page.reload({ waitUntil: "domcontentloaded" });
     await verifyCurrentUiAfterReload(page, "/study", /Boardroom|Baseline|Snapshot/i, projectId, ownerOpenId);
     markCase(30, "browser reload preserved URL, main content, authenticated session and project context");
@@ -636,6 +829,16 @@ async function main() {
       exportPackHash: xlsx.exportPackHash,
       exports: { pdfBytes: exportBytes[0], pptxBytes: exportBytes[1], xlsxBytes: exportBytes[2] },
       responsiveBoardroom,
+      goldenNatal: {
+        projectId: natalProjectId,
+        baseVersionId: natalVersionId,
+        approvedVersionId: promotedNatal.versionId,
+        baselineSnapshotHash: natalSnapshot.snapshotHash,
+        approvedSnapshotHash: natalScenarioSnapshot.snapshotHash,
+        baselineGrossSalesMonth1: natalSimulation.before.grossSalesMonth1,
+        scenarioGrossSalesMonth1: natalSimulation.after.grossSalesMonth1,
+        exportPackHash: natalXlsx.exportPackHash,
+      },
       artifacts: tempRoot,
       adversarialCases,
     }, null, 2));
