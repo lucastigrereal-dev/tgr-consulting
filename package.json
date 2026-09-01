@@ -10,6 +10,7 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run --exclude \"**/*.integration.test.ts\"",
+    "test:integration:ci": "vitest run server/db.integration.test.ts server/routers/igr.database.integration.test.ts server/routers/igr.goalseek.database.integration.test.ts",
     "test:integration:db": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-integration-db.ps1",
     "test:migration:legacy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-legacy-component-migration.ps1",
     "test:backup-restore": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-backup-restore.ps1",
