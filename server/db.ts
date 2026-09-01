@@ -85,6 +85,7 @@ import {
   buildBoardroomXlsx,
   createExportableSnapshot,
   createScenarioComparisonPayload,
+  type ExportMetadata,
   type ExportPackScenarioComparisonEntry,
 } from "./financial/export";
 import { storagePut } from "./storage";
@@ -3741,11 +3742,15 @@ export async function freezeBaselineForTenant(params: {
         )
         .limit(1)
     )[0];
-    assertExportEligibility({
-      isAuthoritative: snapshot.isAuthoritative,
-      validationStatus: snapshot.validationStatus,
-      approved: Boolean(approval),
-    });
+    if (
+      !snapshot.isAuthoritative ||
+      snapshot.validationStatus !== "valid" ||
+      !approval
+    ) {
+      throw new Error(
+        "O congelamento exige snapshot autoritativo, validado e aprovado."
+      );
+    }
     if (currentVersion.state === "baseline") {
       const existingBenchmark = (
         await transaction
@@ -4268,7 +4273,10 @@ export async function getExportEligibilityForTenant(
     .where(eq(calculationSnapshots.id, snapshotId))
     .limit(1);
   if (!snapshot[0]) throw new Error("Snapshot não encontrado.");
-  await getVersionForTenant(snapshot[0].projectVersionId, tenantId);
+  const version = await getVersionForTenant(
+    snapshot[0].projectVersionId,
+    tenantId
+  );
   const approval = await db
     .select()
     .from(approvalDecisions)
@@ -4280,15 +4288,20 @@ export async function getExportEligibilityForTenant(
     )
     .orderBy(desc(approvalDecisions.decidedAt))
     .limit(1);
+  const baselineFrozen =
+    version.state === "baseline" &&
+    version.kind === "baseline" &&
+    version.isImmutable;
   const eligible =
     snapshot[0].isAuthoritative &&
     snapshot[0].validationStatus === "valid" &&
-    Boolean(approval[0]);
+    Boolean(approval[0]) &&
+    baselineFrozen;
   return {
     eligible,
     reason: eligible
       ? null
-      : "A exportação exige snapshot autoritativo, validado e aprovado.",
+      : "A exportação exige snapshot autoritativo, validado, aprovado e baseline congelada.",
     snapshotHash: snapshot[0].snapshotHash,
   };
 }
@@ -4436,7 +4449,34 @@ export async function generateAuthorizedExportForTenant(params: {
     isAuthoritative: snapshotRows[0].isAuthoritative,
     validationStatus: snapshotRows[0].validationStatus,
     approved: Boolean(approvals[0]),
+    baselineFrozen:
+      exportVersion.state === "baseline" &&
+      exportVersion.kind === "baseline" &&
+      exportVersion.isImmutable,
   });
+  const actor = (
+    await db
+      .select({ id: users.id, name: users.name, email: users.email })
+      .from(users)
+      .where(eq(users.id, params.actorId))
+      .limit(1)
+  )[0];
+  const generatedAt = new Date().toISOString();
+  const exportMetadata: ExportMetadata = {
+    snapshotId: snapshotRows[0].id,
+    versionId: exportVersion.id,
+    generatedAt,
+    generatedBy: {
+      id: actor?.id ?? params.actorId,
+      name:
+        actor?.name ??
+        actor?.email ??
+        `Usuário ${params.actorId}`,
+      email: actor?.email ?? null,
+    },
+    lifecycleStatus: "baseline",
+    approvalStatus: "approved",
+  };
   const artifactId = nanoid();
   await db.insert(exportArtifacts).values({
     id: artifactId,
@@ -4457,6 +4497,7 @@ export async function generateAuthorizedExportForTenant(params: {
         baseSnapshot: snapshotRows[0],
       }),
     }),
+    exportMetadata,
   );
   let stored: Awaited<ReturnType<typeof storagePut>>;
   try {
@@ -4513,6 +4554,7 @@ export async function generateAuthorizedExportForTenant(params: {
         exportPackHash: snapshot.exportPackHash,
         scenarioSelectionHash: snapshot.scenarioComparison?.selectionHash,
         scenarioEntryCount: snapshot.scenarioComparison?.entries.length ?? 0,
+        exportMetadata,
         storageKey: stored.key,
       },
     });
@@ -4521,6 +4563,7 @@ export async function generateAuthorizedExportForTenant(params: {
     artifactId,
     snapshotHash: snapshot.snapshotHash,
     exportPackHash: snapshot.exportPackHash,
+    exportMetadata,
     url: stored.url,
   };
 }

@@ -1040,6 +1040,11 @@ describe("IGR database integration", () => {
       snapshotId: snapshot.id,
       rationale: "Aprovação anterior ao teste de atomicidade do export.",
     });
+    await freezeBaselineForTenant({
+      tenantId,
+      actorId,
+      snapshotId: snapshot.id,
+    });
     const db = await getDb();
     if (!db) throw new Error("Banco de integração indisponível.");
 
@@ -1400,6 +1405,25 @@ describe("IGR database integration", () => {
           )
         )
     ).toHaveLength(1);
+
+    expect(await getExportEligibilityForTenant(snapshot.id, tenantId)).toMatchObject({
+      eligible: false,
+      reason: expect.stringContaining("baseline congelada"),
+    });
+    await expect(
+      generateAuthorizedExportForTenant({
+        tenantId,
+        actorId,
+        snapshotId: snapshot.id,
+        format: "pdf",
+      })
+    ).rejects.toThrow("baseline congelada");
+    expect(
+      await db
+        .select({ id: exportArtifacts.id })
+        .from(exportArtifacts)
+        .where(eq(exportArtifacts.snapshotId, snapshot.id))
+    ).toHaveLength(0);
 
     const baselineResults = await Promise.all([
       freezeBaselineForTenant({

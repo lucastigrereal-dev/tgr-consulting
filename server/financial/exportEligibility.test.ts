@@ -8,6 +8,7 @@ describe("bloqueio de exportação", () => {
         isAuthoritative: false,
         validationStatus: "valid",
         approved: true,
+        baselineFrozen: true,
       })
     ).toThrow("exige snapshot");
     expect(() =>
@@ -15,6 +16,7 @@ describe("bloqueio de exportação", () => {
         isAuthoritative: true,
         validationStatus: "failed",
         approved: true,
+        baselineFrozen: true,
       })
     ).toThrow("exige snapshot");
     expect(() =>
@@ -22,17 +24,33 @@ describe("bloqueio de exportação", () => {
         isAuthoritative: true,
         validationStatus: "valid",
         approved: false,
+        baselineFrozen: true,
       })
     ).toThrow("exige snapshot");
   });
 
   it("libera snapshot autoritativo, validado e aprovado", () => {
+    const eligibleBaseline = {
+      isAuthoritative: true,
+      validationStatus: "valid",
+      approved: true,
+      baselineFrozen: true,
+    };
     expect(() =>
-      assertExportEligibility({
-        isAuthoritative: true,
-        validationStatus: "valid",
-        approved: true,
-      })
+      assertExportEligibility(eligibleBaseline)
     ).not.toThrow();
+  });
+
+  it("recusa snapshot aprovado cuja baseline ainda não foi congelada", () => {
+    const approvedButMutable = {
+      isAuthoritative: true,
+      validationStatus: "valid",
+      approved: true,
+      baselineFrozen: false,
+    };
+
+    expect(() => assertExportEligibility(approvedButMutable)).toThrow(
+      "baseline congelada"
+    );
   });
 });

@@ -10,6 +10,7 @@ import {
   buildBoardroomPdf,
   buildBoardroomPptx,
   buildBoardroomXlsx,
+  createExportPackHash,
   createExportableSnapshot,
   createScenarioComparisonPayload,
 } from "./export";
@@ -153,6 +154,29 @@ const scenarioComparison = createScenarioComparisonPayload({
 const workbookSheet = async (archive: JSZip, sheetNumber: number) =>
   archive.file(`xl/worksheets/sheet${sheetNumber}.xml`)?.async("string");
 
+const exportMetadata = {
+  snapshotId: "snapshot-natal-approved",
+  versionId: "version-natal-baseline",
+  generatedAt: "2026-08-31T12:34:56.000Z",
+  generatedBy: {
+    id: 42,
+    name: "Lucas Tigre",
+    email: "lucas@example.com",
+  },
+  lifecycleStatus: "baseline" as const,
+  approvalStatus: "approved" as const,
+};
+
+const provenanceSnapshot = {
+  ...snapshot,
+  snapshotHash: snapshot.snapshotHash,
+  exportPackHash: createExportPackHash({
+    snapshotHash: snapshot.snapshotHash,
+    exportMetadata,
+  }),
+  exportMetadata,
+};
+
 function withoutSnapshotData(overrides: Partial<FinancialCalculation> = {}) {
   return {
     status: "blocked_by_pending_inputs" as const,
@@ -187,6 +211,59 @@ function withoutSnapshotData(overrides: Partial<FinancialCalculation> = {}) {
 }
 
 describe("geradores de artefato Boardroom", () => {
+  it("inclui toda a proveniência no hash determinístico do pack", () => {
+    const first = createExportPackHash({
+      snapshotHash: snapshot.snapshotHash,
+      exportMetadata,
+    });
+    const repeated = createExportPackHash({
+      snapshotHash: snapshot.snapshotHash,
+      exportMetadata: { ...exportMetadata, generatedBy: { ...exportMetadata.generatedBy } },
+    });
+    const anotherGeneration = createExportPackHash({
+      snapshotHash: snapshot.snapshotHash,
+      exportMetadata: {
+        ...exportMetadata,
+        generatedAt: "2026-08-31T12:35:00.000Z",
+      },
+    });
+
+    expect(first).toBe(repeated);
+    expect(first).not.toBe(anotherGeneration);
+  });
+
+  it("transporta hash completo, versão, geração, autor e lifecycle no PDF/PPTX/XLSX", async () => {
+    const pdf = await PDFDocument.load(await buildBoardroomPdf(provenanceSnapshot));
+    expect(pdf.getSubject()).toContain(snapshot.snapshotHash);
+    expect(pdf.getSubject()).toContain(exportMetadata.snapshotId);
+    expect(pdf.getSubject()).toContain(exportMetadata.versionId);
+    expect(pdf.getSubject()).toContain(exportMetadata.lifecycleStatus);
+    expect(pdf.getAuthor()).toBe("Lucas Tigre <lucas@example.com>");
+    expect(pdf.getCreationDate()?.toISOString()).toBe(exportMetadata.generatedAt);
+
+    const pptx = await JSZip.loadAsync(await buildBoardroomPptx(provenanceSnapshot));
+    const cover = await pptx.file("ppt/slides/slide1.xml")?.async("string");
+    const pptxCore = await pptx.file("docProps/core.xml")?.async("string");
+    expect(cover).toContain(snapshot.snapshotHash);
+    expect(cover).toContain(exportMetadata.snapshotId);
+    expect(cover).toContain(exportMetadata.versionId);
+    expect(cover).toContain(exportMetadata.generatedAt);
+    expect(cover).toContain("Lucas Tigre");
+    expect(cover).toContain("baseline");
+    expect(pptxCore).toContain("Lucas Tigre &lt;lucas@example.com&gt;");
+
+    const xlsx = await JSZip.loadAsync(await buildBoardroomXlsx(provenanceSnapshot));
+    const outputs = await workbookSheet(xlsx, 6);
+    const xlsxCore = await xlsx.file("docProps/core.xml")?.async("string");
+    expect(outputs).toContain(snapshot.snapshotHash);
+    expect(outputs).toContain(exportMetadata.snapshotId);
+    expect(outputs).toContain(exportMetadata.versionId);
+    expect(outputs).toContain(exportMetadata.generatedAt);
+    expect(outputs).toContain("Lucas Tigre");
+    expect(outputs).toContain("baseline");
+    expect(xlsxCore).toContain("Lucas Tigre &lt;lucas@example.com&gt;");
+  });
+
   it("enriquece o payload persistido com o hash autoritativo da linha", () => {
     const { snapshotHash: _ignored, ...persistedPayload } = snapshot;
 

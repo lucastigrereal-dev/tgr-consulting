@@ -38,6 +38,19 @@ export type ExportPackScenarioComparison = {
   entries: ExportPackScenarioComparisonEntry[];
 };
 
+export type ExportMetadata = {
+  snapshotId: string;
+  versionId: string;
+  generatedAt: string;
+  generatedBy: {
+    id: number;
+    name: string;
+    email: string | null;
+  };
+  lifecycleStatus: "baseline";
+  approvalStatus: "approved";
+};
+
 export type ExportableSnapshot = FinancialCalculation & {
   snapshotHash: string;
   exportPackHash: string;
@@ -46,6 +59,7 @@ export type ExportableSnapshot = FinancialCalculation & {
   domainBlockers?: string[];
   domainInvalidities?: string[];
   scenarioComparison?: ExportPackScenarioComparison;
+  exportMetadata?: ExportMetadata;
 };
 
 function stableSerialize(value: unknown): string {
@@ -115,18 +129,21 @@ export function createScenarioComparisonPayload(params: {
 export function createExportPackHash(params: {
   snapshotHash: string;
   scenarioComparison?: ExportPackScenarioComparison;
+  exportMetadata?: ExportMetadata;
 }): string {
   return sha256({
     source: "investor_export_pack.v1",
     snapshotHash: params.snapshotHash,
     scenarioSelectionHash: params.scenarioComparison?.selectionHash ?? null,
+    exportMetadata: params.exportMetadata ?? null,
   });
 }
 
 export function createExportableSnapshot(
   calculation: FinancialCalculation,
   snapshotHash: string,
-  scenarioComparison?: ExportPackScenarioComparison
+  scenarioComparison?: ExportPackScenarioComparison,
+  exportMetadata?: ExportMetadata
 ): ExportableSnapshot {
   if (!snapshotHash)
     throw new Error("Snapshot autoritativo sem hash não pode ser exportado.");
@@ -134,8 +151,35 @@ export function createExportableSnapshot(
     ...calculation,
     snapshotHash,
     scenarioComparison,
-    exportPackHash: createExportPackHash({ snapshotHash, scenarioComparison }),
+    exportMetadata,
+    exportPackHash: createExportPackHash({
+      snapshotHash,
+      scenarioComparison,
+      exportMetadata,
+    }),
   };
+}
+
+function exportAuthor(metadata: ExportMetadata | undefined): string {
+  if (!metadata) return "TGR Consulting";
+  return metadata.generatedBy.email
+    ? `${metadata.generatedBy.name} <${metadata.generatedBy.email}>`
+    : metadata.generatedBy.name;
+}
+
+function exportProvenance(snapshot: ExportableSnapshot): string {
+  const metadata = snapshot.exportMetadata;
+  if (!metadata) return `Snapshot ${snapshot.snapshotHash}`;
+  return [
+    `Snapshot hash ${snapshot.snapshotHash}`,
+    `snapshot ${metadata.snapshotId}`,
+    `version ${metadata.versionId}`,
+    `generated ${metadata.generatedAt}`,
+    `author ${exportAuthor(metadata)}`,
+    `lifecycle ${metadata.lifecycleStatus}`,
+    `approval ${metadata.approvalStatus}`,
+    `pack ${snapshot.exportPackHash}`,
+  ].join(" | ");
 }
 
 function shortHash(hash: string) {
@@ -295,9 +339,19 @@ export async function buildBoardroomPdf(
   snapshot: ExportableSnapshot
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
+  const provenance = exportProvenance(snapshot);
+  pdf.setTitle("TGR Consulting Boardroom Snapshot");
+  pdf.setAuthor(exportAuthor(snapshot.exportMetadata));
+  pdf.setCreator("TGR Consulting");
+  pdf.setProducer("TGR Consulting");
+  if (snapshot.exportMetadata) {
+    pdf.setCreationDate(new Date(snapshot.exportMetadata.generatedAt));
+    pdf.setModificationDate(new Date(snapshot.exportMetadata.generatedAt));
+  }
+  pdf.setSubject(provenance);
   if (snapshot.pointEconomics) {
     pdf.setSubject(
-      `Point Economics · ${snapshot.pointEconomics.totals.pointCount} ponto(s) · contribuição incremental líquida ${snapshot.pointEconomics.totals.value.incrementalNetContribution}`
+      `${provenance} | Point Economics · ${snapshot.pointEconomics.totals.pointCount} ponto(s) · contribuição incremental líquida ${snapshot.pointEconomics.totals.value.incrementalNetContribution}`
     );
   }
   if (snapshot.commercialOperations) {
@@ -345,9 +399,15 @@ export async function buildBoardroomPdf(
     { x: 64, y: 456, size: 11, font: regular, color: rgb(0.58, 0.63, 0.71) }
   );
   page.drawText(
-    `HASH ${shortHash(snapshot.snapshotHash)} · FORMULA SET ${snapshot.formulaSetVersion}`,
+    `HASH ${snapshot.snapshotHash} · FORMULA SET ${snapshot.formulaSetVersion}`,
     { x: 64, y: 435, size: 9, font: bold, color: rgb(0.91, 0.74, 0.35) }
   );
+  if (snapshot.exportMetadata) {
+    page.drawText(
+      `SNAPSHOT ${snapshot.exportMetadata.snapshotId} · VERSION ${snapshot.exportMetadata.versionId}`,
+      { x: 64, y: 421, size: 7, font: regular, color: rgb(0.58, 0.63, 0.71), maxWidth: 710 }
+    );
+  }
   const metrics = [
     ["VPL", display(snapshot.kpis.npv)],
     ["TIR ANUAL", display(snapshot.kpis.irrAnnual)],
@@ -686,7 +746,7 @@ export async function buildBoardroomPptx(
       7.2,
       0.18,
       PANEL,
-      `HASH ${shortHash(snapshot.snapshotHash)} · FORMULA SET ${snapshot.formulaSetVersion}`,
+      `HASH ${snapshot.snapshotHash} · FORMULA SET ${snapshot.formulaSetVersion}`,
       { color: GOLD, size: 700, bold: true, margin: 0 }
     ),
     ...metrics.flatMap(([label, value], index) => {
@@ -747,6 +807,19 @@ export async function buildBoardroomPptx(
           }
         )
       ),
+    ...(snapshot.exportMetadata
+      ? [shape(
+          30,
+          "Export provenance",
+          0.45,
+          7.02,
+          12.42,
+          0.28,
+          NAVY,
+          `SNAPSHOT ${snapshot.exportMetadata.snapshotId} | VERSION ${snapshot.exportMetadata.versionId} | GERADO ${snapshot.exportMetadata.generatedAt} | AUTOR ${exportAuthor(snapshot.exportMetadata)} | ${snapshot.exportMetadata.lifecycleStatus}/${snapshot.exportMetadata.approvalStatus}`,
+          { color: MUTED, size: 600, margin: 0 }
+        )]
+      : []),
   ].join("");
   const slide = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>${groups}${slideShapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
   const chapterSlide = (title: string, subtitle: string, rows: string[]) => {
@@ -944,7 +1017,7 @@ export async function buildBoardroomPptx(
   );
   zip.file(
     "docProps/core.xml",
-    `<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>TGR Consulting</dc:creator><dc:title>Boardroom Snapshot</dc:title></cp:coreProperties>`
+    `<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>${xml(exportAuthor(snapshot.exportMetadata))}</dc:creator><dc:title>Boardroom Snapshot</dc:title><dc:subject>${xml(exportProvenance(snapshot))}</dc:subject>${snapshot.exportMetadata ? `<dcterms:created xsi:type="dcterms:W3CDTF">${xml(snapshot.exportMetadata.generatedAt)}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${xml(snapshot.exportMetadata.generatedAt)}</dcterms:modified>` : ""}</cp:coreProperties>`
   );
   zip.file(
     "docProps/app.xml",
@@ -1164,6 +1237,29 @@ export async function buildBoardroomXlsx(
         xlsxTextCell(`E${row}`, invalidity),
       ]);
     }),
+    ...(snapshot.exportMetadata
+      ? [
+          ["Snapshot ID", snapshot.exportMetadata.snapshotId],
+          ["Version ID", snapshot.exportMetadata.versionId],
+          ["Generated at", snapshot.exportMetadata.generatedAt],
+          ["Generated by", exportAuthor(snapshot.exportMetadata)],
+          ["Lifecycle", snapshot.exportMetadata.lifecycleStatus],
+          ["Approval", snapshot.exportMetadata.approvalStatus],
+          ["Export pack hash", snapshot.exportPackHash],
+        ].map(([label, value], offset) => {
+          const row = KPI_ROWS.length +
+            (snapshot.domainBlockers?.length ?? 0) +
+            (snapshot.domainInvalidities?.length ?? 0) +
+            offset +
+            2;
+          return xlsxRow(row, [
+            xlsxTextCell(`A${row}`, label),
+            xlsxTextCell(`B${row}`, value),
+            xlsxTextCell(`C${row}`, snapshot.status),
+            xlsxTextCell(`D${row}`, snapshot.snapshotHash),
+          ]);
+        })
+      : []),
   ].join("");
   const pointHeaders = [
     "Escopo",
@@ -1400,12 +1496,12 @@ export async function buildBoardroomXlsx(
     { name: "Monthly Projection", rows: projectionRows, maxColumn: "Z", maxRow: snapshot.projections.length + 1 },
     { name: "Scenarios", rows: scenarioRows, maxColumn: "H", maxRow: comparison && comparison.entries.length ? comparison.entries.length + 2 : 2 },
     { name: "Formulas", rows: formulaRows, maxColumn: "F", maxRow: Math.max(2, snapshot.memory.length + 1) },
-    { name: "Outputs", rows: outputRows, maxColumn: "E", maxRow: KPI_ROWS.length + (snapshot.domainBlockers?.length ?? 0) + (snapshot.domainInvalidities?.length ?? 0) + 1 },
+    { name: "Outputs", rows: outputRows, maxColumn: "E", maxRow: KPI_ROWS.length + (snapshot.domainBlockers?.length ?? 0) + (snapshot.domainInvalidities?.length ?? 0) + (snapshot.exportMetadata ? 7 : 0) + 1 },
     { name: "Point Economics", rows: pointRows, maxColumn: "S", maxRow: (snapshot.pointEconomics?.points.length ?? 0) + 2 },
     { name: "Commercial Operations", rows: operationsRowsXml, maxColumn: "P", maxRow: operationsRowIndex - 1 },
   ];
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
-  const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
+  const rootRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`;
   const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sheet, index) => `<sheet name="${sheet.name}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets></workbook>`;
   const workbookRels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Aptos"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>`;
@@ -1414,6 +1510,10 @@ export async function buildBoardroomXlsx(
   zip.file("xl/workbook.xml", workbook);
   zip.file("xl/_rels/workbook.xml.rels", workbookRels);
   zip.file("xl/styles.xml", styles);
+  zip.file(
+    "docProps/core.xml",
+    `<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>${xml(exportAuthor(snapshot.exportMetadata))}</dc:creator><dc:title>Boardroom Snapshot</dc:title><dc:subject>${xml(exportProvenance(snapshot))}</dc:subject>${snapshot.exportMetadata ? `<dcterms:created xsi:type="dcterms:W3CDTF">${xml(snapshot.exportMetadata.generatedAt)}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${xml(snapshot.exportMetadata.generatedAt)}</dcterms:modified>` : ""}</cp:coreProperties>`
+  );
   sheets.forEach((sheet, index) => {
     zip.file(
       `xl/worksheets/sheet${index + 1}.xml`,
