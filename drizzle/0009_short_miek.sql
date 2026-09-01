@@ -1,0 +1,1 @@
+ALTER TABLE `commercial_conditions` ADD `explicitChargesDueMonth` int;

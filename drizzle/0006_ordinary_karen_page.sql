@@ -1,0 +1,1 @@
+ALTER TABLE `project_component_records` MODIFY COLUMN `componentType` enum('project_assembly','product_stock','pricing_payments','acquisition_capacity','costs_workforce','commissions_partners','receivables_losses','capex_opex') NOT NULL;

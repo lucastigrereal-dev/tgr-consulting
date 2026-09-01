@@ -1,0 +1,122 @@
+{
+  "id": "COTAS_NATAL_HARMONY_GOLDEN_V1",
+  "modelMode": "HARMONY_COMPAT_V1",
+  "authority": {
+    "availableSource": "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+    "handoff": "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_HANDOFF.md",
+    "sourceArtifact": "COTAS_NATAL_ESTUDO_VIABILIDADE_HARMONY_MASTER_V1",
+    "sourceStatus": "CANONICAL_FROM_HARMONY_MASTER_V1",
+    "note": "Golden matemático canônico reconstruído e certificado contra os 48 meses publicados dos três cenários."
+  },
+  "assertions": {
+    "classification": "CANONICAL_FROM_HARMONY_MASTER_V1",
+    "horizonMonths": 144,
+    "physicalContracts": 3120,
+    "entryTotal": 3200,
+    "entryInstallments": 8,
+    "balanceInstallments": 84,
+    "grossSalesPerMonth": 100,
+    "grossSalesMonth45": 57,
+    "netSalesPerMonth": 70,
+    "netSalesMonth45": 40,
+    "cancellationRate": 0.3,
+    "delinquencyRateReference": 0.25,
+    "firstBalanceMonthOffset": 4,
+    "commissionPerActiveSale": 1500,
+    "postSaleVariableRate": 0.005497,
+    "consumablesAndGiftPerActiveSale": 425,
+    "cardStressPerActiveSale": 512,
+    "taxRateOnCashReceipts": 0.07,
+    "fixedCostFullMonthly": 195339,
+    "fixedCostRatesByYear": [0.6, 1, 1, 1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.1],
+    "preOperationalInvestment": 985500,
+    "annualDiscountRate": 0.18
+  },
+  "scenarios": {
+    "C1_28K": {
+      "price": "28000",
+      "published": { "capitalRequired": "1791990", "npv": "21612036", "irrAnnual": "1.308", "paybackMonths": "25", "vgv": "87360000" },
+      "reconstructed": { "capitalRequired": "1791989.83333333", "npv": "21612035.93196289", "irrAnnual": "1.30835396", "paybackMonths": "25.00000000", "vgv": "87360000.00000000" }
+    },
+    "C2_35K": {
+      "price": "35000",
+      "published": { "capitalRequired": "1756526", "npv": "30063688", "irrAnnual": "1.687", "paybackMonths": "21", "vgv": "109200000" },
+      "reconstructed": { "capitalRequired": "1756525.77500000", "npv": "30063687.97966507", "irrAnnual": "1.68681329", "paybackMonths": "21.00000000", "vgv": "109200000.00000000" }
+    },
+    "C3_40K": {
+      "price": "40000",
+      "published": { "capitalRequired": "1733413", "npv": "36100582", "irrAnnual": "1.952", "paybackMonths": "20", "vgv": "124800000" },
+      "reconstructed": { "capitalRequired": "1733413.20000000", "npv": "36100582.29945233", "irrAnnual": "1.95182177", "paybackMonths": "20.00000000", "vgv": "124800000.00000000" }
+    }
+  },
+  "reviewKpiTargets": {
+    "capitalRequired": { "target": "1791989.83333333", "absoluteTolerance": "0.00000001", "relativeTolerance": "0", "classification": "CANONICAL_RECONSTRUCTED", "observedAtImplementation": { "obtained": "1791989.83333333", "absoluteDelta": "0.00000000", "relativeDelta": "0.00000000", "status": "MATCH" } },
+    "npv": { "target": "21612035.93196289", "absoluteTolerance": "0.00000001", "relativeTolerance": "0", "classification": "CANONICAL_RECONSTRUCTED", "observedAtImplementation": { "obtained": "21612035.93196289", "absoluteDelta": "0.00000000", "relativeDelta": "0.00000000", "status": "MATCH" } },
+    "irrAnnual": { "target": "1.30835396", "absoluteTolerance": "0.00000001", "relativeTolerance": "0", "classification": "CANONICAL_RECONSTRUCTED", "observedAtImplementation": { "obtained": "1.30835396", "absoluteDelta": "0.00000000", "relativeDelta": "0.00000000", "status": "MATCH" } },
+    "paybackMonths": { "target": "25.00000000", "absoluteTolerance": "0", "relativeTolerance": "0", "classification": "CANONICAL_RECONSTRUCTED", "observedAtImplementation": { "obtained": "25.00000000", "absoluteDelta": "0.00000000", "relativeDelta": "0.00000000", "status": "MATCH" } },
+    "sellOutMonth": { "target": "45.00000000", "absoluteTolerance": "0", "relativeTolerance": "0", "classification": "CANONICAL_RECONSTRUCTED", "observedAtImplementation": { "obtained": "45.00000000", "absoluteDelta": "0.00000000", "relativeDelta": "0.00000000", "status": "MATCH" } }
+  },
+  "kpiConflicts": [],
+  "regressionConflictCauses": [
+    {
+      "id": "cross-mode-sales-inventory",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+      "reason": "Harmony preserva o cronograma inteiro 100/70 e 57/40; o TGR canônico mantém sua própria política de coortes e estoque.",
+      "adoptedRule": "Comparar sem misturar modos e classificar somente as células realmente divergentes.",
+      "metrics": ["qualifiedCouples", "contracts", "grossContracts", "canceledContracts", "netContracts", "cumulativeGrossContracts", "activeContracts", "returnedToInventory", "availableInventory", "sellOutRate", "grossSales"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-receivables",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+      "reason": "Harmony recebe entrada em 8x e saldo em M5; o TGR canônico preserva seu calendário autoritativo próprio.",
+      "adoptedRule": "Preservar os dois calendários e registrar as células divergentes.",
+      "metrics": ["recognizedRevenue", "grossEntryGenerated", "grossEntrySettled", "grossReceivablesGenerated", "grossReceivablesSettled", "installmentCollections", "canceledReceivables", "delinquentBalance", "curedCollections", "writtenOffBalance", "healthyD90", "netCollections"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-costs",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+      "reason": "Curva fixa, pós-venda, stress de cartão, comissão e imposto do Harmony não pertencem à política TGR canônica.",
+      "adoptedRule": "Manter custos por modo e justificar somente as competências divergentes.",
+      "metrics": ["variableCosts", "partnerShare", "taxes", "fixedCosts", "commercialOperationsCosts", "commissionPayments", "payroll", "capex", "preOperationalInvestment", "paymentFees"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-cash-dre",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+      "reason": "DRE e caixa são consequências das metodologias próprias de recebíveis, custos e timing do pré-operacional.",
+      "adoptedRule": "Derivar caixa em cada engine sem calibração cruzada.",
+      "metrics": ["cashOpening", "cashInflows", "cashOutflows", "contributionMargin", "operatingResult", "cashClosing", "operatingCashFlow", "cumulativeCashFlow", "discountedCashFlow"],
+      "monthFrom": 1,
+      "monthTo": 120
+    },
+    {
+      "id": "cross-mode-kpis",
+      "classification": "MODEL_DELTA",
+      "sourceRef": "docs/tgr/golden/COTAS_NATAL_HARMONY_GOLDEN_V1_RULES.json",
+      "reason": "Os KPIs refletem fluxos produzidos por metodologias diferentes.",
+      "adoptedRule": "Comparar sem promover equivalência entre modos.",
+      "metrics": ["capitalRequired", "npv", "irrAnnual", "paybackMonths", "sellOutMonth", "totalGrossContracts", "totalNetContracts", "delinquentBalance"],
+      "monthFrom": null,
+      "monthTo": null
+    }
+  ],
+  "sourceConflicts": [
+    {
+      "id": "SC-001",
+      "status": "SOURCE_CONFLICT",
+      "topic": "gross sell-out sales",
+      "values": { "monthlySchedule": 4457, "indicatorPage": 4458, "mathematicalCeil": 4458 },
+      "adopted": 4457,
+      "reason": "Preservar 4.457 no cronograma Harmony (44×100 + 57); 4.458 permanece somente como conflito na linha indicadora publicada."
+    }
+  ]
+}

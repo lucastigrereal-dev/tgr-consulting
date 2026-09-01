@@ -1,0 +1,1 @@
+ALTER TABLE `cost_catalog_items` ADD `cashflowTreatment` enum('incremental','included_in_project_totals') DEFAULT 'included_in_project_totals' NOT NULL;

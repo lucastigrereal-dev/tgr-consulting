@@ -1,0 +1,253 @@
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const state = vi.hoisted(() => ({
+  loading: false,
+  catalog: undefined as unknown,
+  conditions: undefined as unknown,
+}));
+
+vi.mock("@/components/ui/spinner", () => ({ Spinner: () => "loading" }));
+
+vi.mock("@/lib/trpc", () => ({
+  trpc: {
+    useUtils: () => ({
+      igr: {
+        productCatalog: { invalidate: vi.fn() },
+        commercialConditions: { invalidate: vi.fn() },
+        projectContext: { invalidate: vi.fn() },
+        scenarioComparison: { invalidate: vi.fn() },
+      },
+    }),
+    igr: {
+      productCatalog: {
+        useQuery: () => ({
+          data: state.catalog,
+          isLoading: state.loading,
+          isError: false,
+          error: null,
+        }),
+      },
+      commercialConditions: {
+        useQuery: () => ({
+          data: state.conditions,
+          isLoading: state.loading,
+          isError: false,
+          error: null,
+        }),
+      },
+      saveCommercialModel: {
+        useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+      },
+      calculate: {
+        useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+      },
+    },
+  },
+}));
+
+import {
+  AuthoritativeCommercialBuilder,
+  createPendingCommercialDraft,
+  normalizeCommercialDecimalInput,
+  toCommercialModelMutationInput,
+} from "./AuthoritativeCommercialBuilder";
+
+describe("AuthoritativeCommercialBuilder", () => {
+  beforeEach(() => {
+    state.loading = false;
+    state.catalog = undefined;
+    state.conditions = undefined;
+  });
+
+  it("expõe um estado de carregamento acessível", () => {
+    state.loading = true;
+    const html = renderToStaticMarkup(
+      <AuthoritativeCommercialBuilder versionId="version-1" />
+    );
+
+    expect(html).toContain("Carregando produto e condições comerciais");
+    expect(html).toContain('role="status"');
+  });
+
+  it("inicia um SKU pendente sem inventar produto, quantidades ou preço", () => {
+    const draft = createPendingCommercialDraft(1);
+
+    expect(draft.sku.name).toBe("");
+    expect(draft.sku.unitQuantity).toBe("");
+    expect(draft.sku.sharesPerUnit).toBe("");
+    expect(draft.sku.grossSoldShares).toBe("");
+    expect(draft.sku.returnedShares).toBe("");
+    expect(draft.sku.blockedShares).toBe("");
+    expect(draft.sku.pricePhases[0]?.price).toBe("");
+    expect(draft.condition.listPrice).toBe("");
+  });
+
+  it("renderiza SKU, condição, fases e bloqueios autoritativos", () => {
+    state.catalog = {
+      records: [
+        {
+          skuCode: "studio",
+          name: "Studio",
+          unitType: "apartamento",
+          unitQuantity: 10,
+          sharesPerUnit: 26,
+          grossSoldShares: 12,
+          returnedShares: 1,
+          blockedShares: 2,
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "Estudo Cotia, p. 12",
+          pricePhases: [
+            {
+              phaseCode: "lancamento",
+              startsAtMonth: 0,
+              priceText: "110000.50",
+              promotionalPriceText: null,
+            },
+          ],
+        },
+      ],
+      evaluation: {
+        status: "invalid",
+        violations: [
+          {
+            code: "INVENTORY_EXCEEDED",
+            path: "skus.studio",
+            message: "Vendas e bloqueios excedem o estoque.",
+          },
+        ],
+        totals: { availableShares: 247, availableVgv: "27170123.50" },
+      },
+    };
+    state.conditions = [
+      {
+        productSkuCode: "studio",
+        record: {
+          status: "provided",
+          sourceType: "current_document",
+          sourceRef: "Tabela comercial aprovada",
+        },
+        condition: {
+          id: "standard-studio",
+          name: "Condição padrão",
+          listPrice: "110000.50",
+          discount: "500.25",
+          entry: { total: "20000.25", installments: 2, firstDueMonth: 0 },
+          balance: {
+            principal: "89500.00",
+            installments: 36,
+            graceMonths: 1,
+            firstDueMonth: 2,
+          },
+          explicitCharges: "0",
+          correctionRate: "0",
+          interestRate: "0",
+          materialityTolerance: "0.01",
+          campaign: "Lançamento",
+        },
+        reconciliation: {
+          status: "invalid",
+          violations: [
+            {
+              code: "COMMERCIAL_CONDITION_MISMATCH",
+              message: "Preço líquido não reconciliado.",
+            },
+          ],
+        },
+      },
+    ];
+
+    const html = renderToStaticMarkup(
+      <AuthoritativeCommercialBuilder versionId="version-1" />
+    );
+
+    expect(html).toContain("Produto e condição comercial autoritativos");
+    expect(html).toContain("Studio");
+    expect(html).toContain("110000.50");
+    expect(html).toContain("Condição padrão");
+    expect(html).toContain("Fases de preço");
+    expect(html).toContain("Vendas e bloqueios excedem o estoque.");
+    expect(html).toContain("Preço líquido não reconciliado.");
+    expect(html).toContain("Salvar e calcular");
+  });
+
+  it("não anuncia reconciliação nem libera cálculo enquanto houver pendência", () => {
+    state.catalog = {
+      records: [{
+        skuCode: "pending-sku", name: "Produto pendente", unitType: "unidade",
+        unitQuantity: 0, sharesPerUnit: 1, grossSoldShares: 0, returnedShares: 0,
+        blockedShares: 0, status: "pending", sourceType: "current_decision",
+        sourceRef: null, pricePhases: [{ phaseCode: "base", startsAtMonth: 0, priceText: "0", promotionalPriceText: null }],
+      }],
+      evaluation: { status: "valid", violations: [], totals: { availableShares: 0, availableVgv: "0" } },
+    };
+    state.conditions = [];
+
+    const html = renderToStaticMarkup(
+      <AuthoritativeCommercialBuilder versionId="version-1" />
+    );
+
+    expect(html).toContain("item(ns) pendente(s)");
+    expect(html).not.toContain(">Reconciliado<");
+    expect(html).toMatch(
+      /<button(?=[^>]*disabled="")[^>]*>[\s\S]*?Salvar e calcular<\/button>/
+    );
+  });
+
+  it("normaliza decimais brasileiros no payload da mutação única", () => {
+    expect(normalizeCommercialDecimalInput("12.000,50")).toBe("12000.50");
+    expect(normalizeCommercialDecimalInput("1.234.567,89")).toBe("1234567.89");
+    expect(normalizeCommercialDecimalInput("12000,50")).toBe("12000.50");
+
+    const payload = toCommercialModelMutationInput("version-1", 3, [{
+      sku: {
+        id: "studio",
+        name: "Studio",
+        unitType: "apartamento",
+        unitQuantity: "10",
+        sharesPerUnit: "26",
+        grossSoldShares: "0",
+        returnedShares: "0",
+        blockedShares: "0",
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Tabela aprovada",
+        pricePhases: [{ id: "base", startsAtMonth: "0", price: "12.000,50" }],
+      },
+      condition: {
+        id: "standard-studio",
+        name: "Condição padrão",
+        listPrice: "12.000,50",
+        discount: "500,50",
+        entryTotal: "2.000,00",
+        entryInstallments: "2",
+        entryFirstDueMonth: "0",
+        balancePrincipal: "9.500,00",
+        balanceInstallments: "24",
+        graceMonths: "1",
+        balanceFirstDueMonth: "2",
+        explicitCharges: "0,00",
+        explicitChargesDueMonth: "",
+        correctionRate: "0",
+        interestRate: "0",
+        materialityTolerance: "0,01",
+        campaign: "",
+        status: "provided",
+        sourceType: "current_document",
+        sourceRef: "Tabela aprovada",
+      },
+    }]);
+
+    expect(payload.skus[0]?.pricePhases[0]?.price).toBe("12000.50");
+    expect(payload.conditions[0]?.condition).toMatchObject({
+      listPrice: "12000.50",
+      discount: "500.50",
+      entry: { total: "2000.00" },
+      balance: { principal: "9500.00" },
+      explicitCharges: "0.00",
+      materialityTolerance: "0.01",
+    });
+  });
+});

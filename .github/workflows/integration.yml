@@ -1,0 +1,67 @@
+name: TGR integration
+
+on:
+  push:
+    branches:
+      - codex/tgr-master-brd-v1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: tgr-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: mysql://root@127.0.0.1:3306/tgr_consulting_test
+      CHROMIUM_PATH: /usr/bin/google-chrome
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: tgr_consulting_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=45
+          --health-start-period=15s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - name: Apply all tracked migrations
+        run: pnpm exec drizzle-kit migrate
+      - name: Unit and UI test suite
+        run: pnpm test
+      - name: MySQL integration suite
+        run: pnpm run test:integration:ci
+      - name: TypeScript check
+        run: pnpm run check
+      - name: Production build
+        run: pnpm run build
+      - name: Production dependency audit
+        run: pnpm audit --prod --audit-level=high
+      - name: Verify E2E runner prerequisites
+        run: |
+          test -x "$CHROMIUM_PATH"
+          docker compose version
+      - name: Authenticated E2E master
+        run: pnpm run test:e2e:master

@@ -1,0 +1,20 @@
+name: tgr-consulting-integration
+
+services:
+  mysql:
+    image: ${TGR_MYSQL_IMAGE:-mysql:8.4}
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: tgr_consulting_test
+    ports:
+      - "127.0.0.1:${TGR_INTEGRATION_DB_PORT:-13306}:3306"
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test:
+        ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "--silent"]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+      start_period: 15s
+    restart: "no"
