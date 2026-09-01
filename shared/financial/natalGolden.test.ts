@@ -48,7 +48,7 @@ describe("GOLDEN_NATAL_PONTA_NEGRA_2026", () => {
     expect(entries.map(item => item.dueMonthOffset)).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7,
     ]);
-    expect(entries.every(item => item.grossAmount === "400")).toBe(true);
+    expect(entries.every(item => item.grossAmount === "400.00000000")).toBe(true);
     expect(balance).toHaveLength(84);
     expect(balance[0]?.dueMonthOffset).toBe(3);
     expect(balance.at(-1)?.dueMonthOffset).toBe(86);
@@ -262,7 +262,7 @@ describe("GOLDEN_NATAL_PONTA_NEGRA_2026", () => {
     );
   }, 15_000);
 
-  it("reproduz o vetor externo congelado no baseline 9fc5909", () => {
+  it("reproduz o vetor externo congelado com o calendário canônico", () => {
     const result = calculateGoldenNatalPontaNegra2026();
     const tolerance = new D(expected.tolerance);
     const expectDecimal = (actual: string | null, baseline: string | null) => {
@@ -274,9 +274,7 @@ describe("GOLDEN_NATAL_PONTA_NEGRA_2026", () => {
       expect(new D(actual!).minus(baseline).abs().lte(tolerance)).toBe(true);
     };
 
-    expect(expected.sourceBaselineCommit).toBe(
-      "9fc59096219f8eb053dcb7f6677823bdf510f058"
-    );
+    expect(expected.sourceBaselineRef).toBe("canonical-payment-calendar-v1");
     expect(result.formulaSetVersion).toBe(expected.formulaSet.semanticVersion);
     expect(result.engineVersion).toBe(expected.formulaSet.engineVersion);
     for (const [kpi, baseline] of Object.entries(expected.kpis)) {

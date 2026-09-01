@@ -8,6 +8,7 @@ import type {
   FinancialInputSnapshot,
   SourceType,
 } from "./types";
+import { buildPaymentCalendar } from "./paymentCalendar";
 
 const USER_SOURCE_REF = "user-provided:Natal-Ponta-Negra-2026";
 const TEST_DATA_SOURCE_REF = "TEST_DATA:Natal-Ponta-Negra-2026-v1";
@@ -41,18 +42,26 @@ export function createNatalPontaNegraPaymentSchedule(
     );
   }
 
-  return [
-    ...Array.from({ length: 8 }, (_, dueMonthOffset) => ({
-      component: "entry" as const,
-      dueMonthOffset,
-      grossAmount: "400",
-    })),
-    ...Array.from({ length: 84 }, (_, installmentIndex) => ({
-      component: "balance" as const,
-      dueMonthOffset: firstBalanceDueOffsetMonths + installmentIndex,
-      grossAmount: BALANCE_INSTALLMENT,
-    })),
-  ];
+  return buildPaymentCalendar({
+    id: "golden-natal-standard",
+    name: "Condição Golden Natal 2026",
+    listPrice: "28000",
+    discount: "0",
+    entry: { total: "3200", installments: 8, firstDueMonth: 0 },
+    balance: {
+      principal: "24800",
+      installments: 84,
+      graceMonths: firstBalanceDueOffsetMonths,
+      firstDueMonth: firstBalanceDueOffsetMonths,
+    },
+    explicitCharges: "0",
+    explicitChargesDueMonth: 0,
+    materialityTolerance: "0.01",
+  }).lines.map(({ component, dueMonthOffset, grossAmount }) => ({
+    component,
+    dueMonthOffset,
+    grossAmount,
+  }));
 }
 
 const inputs = {
