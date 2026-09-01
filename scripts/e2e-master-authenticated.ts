@@ -308,11 +308,18 @@ async function verifyCurrentUiAfterReload(page: Page, expectedPath: string, expe
   await page.waitForSelector("main", { timeout: 30_000 });
   const mainText = await page.locator("main").innerText();
   assert(typeof expectedText === "string" ? mainText.includes(expectedText) : expectedText.test(mainText), `Reloaded UI main content did not match ${expectedPath}`);
+  await page.waitForFunction(async expectedUser => {
+    const response = await fetch("/api/trpc/auth.me", { credentials: "include" });
+    return response.status === 200 && (await response.text()).includes(expectedUser);
+  }, expectedOpenId, { timeout: 30_000 });
   const authProbe = await page.evaluate(async () => {
     const response = await fetch("/api/trpc/auth.me", { credentials: "include" });
     return { status: response.status, body: await response.text() };
   });
-  assert(authProbe.status === 200 && authProbe.body.includes(expectedOpenId), "Reloaded browser session did not prove auth.me for expected user.");
+  assert(
+    authProbe.status === 200 && authProbe.body.includes(expectedOpenId),
+    `Reloaded browser session did not prove auth.me for expected user (status ${authProbe.status}, body ${authProbe.body.slice(0, 300)}).`
+  );
   const projectProbe = await page.evaluate(async id => {
     const url = new URL("/api/trpc/igr.projectContext", window.location.origin);
     url.searchParams.set("input", JSON.stringify({ json: { projectId: id } }));
@@ -493,6 +500,11 @@ async function main() {
 
     await verifyUi(page, app.baseUrl, "/builder", /Montagem|Produto|Condição/i);
     await page.screenshot({ path: path.join(tempRoot, "screenshots", "01-builder-authenticated.png"), fullPage: true });
+    await page.setViewportSize({ width: 375, height: 812 });
+    const builderMobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(builderMobileOverflow <= 2, `mobile Builder has ${builderMobileOverflow}px global horizontal overflow.`);
+    await page.screenshot({ path: path.join(tempRoot, "screenshots", "01b-builder-mobile.png"), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     const created = await caller.igr.createProject({ name: `TGR Master E2E ${Date.now()}`, inputs: baseInputs() });
     const versionId = created.versionId;
@@ -716,6 +728,22 @@ async function main() {
       const obtained = natalSnapshot.kpis[key as keyof typeof natalSnapshot.kpis];
       assert(obtained === expected, `Golden Natal KPI ${key} diverged: expected ${expected}, obtained ${obtained}`);
     }
+    await verifyUi(page, app.baseUrl, "/study", /Boardroom|Baseline|Snapshot/i);
+    await page.locator("#tgr-project").selectOption(natalProjectId);
+    await page.locator("#meta-vendas-brutas").scrollIntoViewIfNeeded();
+    await page.locator("#meta-vendas-brutas").fill("120");
+    await page.getByRole("button", { name: "Recalcular agora" }).click();
+    await page.getByText("HIPÓTESE ATUAL", { exact: true }).waitFor({ timeout: 30_000 });
+    const liveSalesRow = page.getByRole("row").filter({ hasText: "Vendas brutas · mês 1" });
+    const liveSalesCells = await liveSalesRow.locator("td").allInnerTexts();
+    const parsePresentedNumber = (value: string) => Number(
+      value.includes(",") ? value.replace(/\./g, "").replace(",", ".") : value
+    );
+    assert(
+      liveSalesCells.some(value => parsePresentedNumber(value) === 100) &&
+        liveSalesCells.some(value => parsePresentedNumber(value) === 120),
+      `Boardroom UI did not render the Golden Natal 100 → 120 delta: ${liveSalesCells.join(" | ")}`
+    );
     const natalSimulation = await caller.igr.simulateCaptadores({
       versionId: natalVersionId,
       horizonMonths: 120,
