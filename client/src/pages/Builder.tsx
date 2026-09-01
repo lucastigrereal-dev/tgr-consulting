@@ -377,6 +377,13 @@ export function getCotiaRegistrationFeedback(warnings: string[]) {
   };
 }
 
+export function hasUnsavedBuilderChanges(
+  financialInputsDirty: boolean,
+  cotiaDraftDirty: boolean,
+) {
+  return financialInputsDirty || cotiaDraftDirty;
+}
+
 export default function Builder() {
   const utils = trpc.useUtils();
   const projectsQuery = trpc.igr.projects.useQuery(undefined, { retry: false });
@@ -428,16 +435,20 @@ export default function Builder() {
   }, [savedInputsQuery.data]);
   const isDirty =
     Boolean(activeVersionId) && signature(inputs) !== persistedSignature;
+  const hasUnsavedChanges = hasUnsavedBuilderChanges(
+    isDirty,
+    assemblyHydrationRef.current.dirty,
+  );
   useEffect(() => {
     const blockExit = (event: BeforeUnloadEvent) => {
-      if (isDirty) {
+      if (hasUnsavedChanges) {
         event.preventDefault();
         event.returnValue = "";
       }
     };
     window.addEventListener("beforeunload", blockExit);
     return () => window.removeEventListener("beforeunload", blockExit);
-  }, [isDirty]);
+  }, [hasUnsavedChanges]);
   const upsertComponent = trpc.igr.upsertBuilderComponent.useMutation({
     onSuccess: async () => {
       await componentsQuery.refetch();
@@ -625,6 +636,7 @@ export default function Builder() {
         values={assemblyDraft.values}
         sourceRef={assemblyDraft.sourceRef}
         status={assemblyDisplayStatus}
+        dirty={assemblyHydrationRef.current.dirty}
         disabled={registerCotiaAssembly.isPending || createProjectFromCotiaAssembly.isPending}
         saving={registerCotiaAssembly.isPending || createProjectFromCotiaAssembly.isPending}
         onChange={(key, value) => {
@@ -645,7 +657,14 @@ export default function Builder() {
           };
           patchDraft(assemblyDomain, { sourceRef: value });
         }}
-        onStatusChange={value => patchDraft(assemblyDomain, { status: value })}
+        onStatusChange={value => {
+          assemblyHydrationRef.current = {
+            ...assemblyHydrationRef.current,
+            versionId: activeVersionId,
+            dirty: true,
+          };
+          patchDraft(assemblyDomain, { status: value });
+        }}
         onSave={registerAssembly}
       />
       <AuthoritativeCommercialBuilder

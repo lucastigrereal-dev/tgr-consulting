@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   calculateCotiaMatrix,
+  normalizeBrazilianDecimal,
   parseBrazilianDecimal,
 } from "@shared/financial/cotiaMatrix";
 import {
@@ -21,6 +22,7 @@ type CotiaProjectMatrixProps = {
   status: "provided" | "pending";
   disabled?: boolean;
   saving?: boolean;
+  dirty?: boolean;
   onChange: (key: string, value: string) => void;
   onSourceChange: (value: string) => void;
   onStatusChange: (value: "provided" | "pending") => void;
@@ -115,7 +117,30 @@ function humanizeField(key: string) {
 }
 
 function isPercentField(key: string) {
-  return /(?:Percentual|Taxa|Rate|Conversao|AtivoD90|eficiencia|cancelamento|inadimplencia|curaD|encargos)/i.test(key);
+  return /(?:Percentual|Taxa|Rate|Conversao|AtivoD90|eficiencia|cancelamento|inadimplencia|curaD|encargosSala|posVendaEncargos)/i.test(key)
+    && key !== "encargosExplicitos";
+}
+
+function scaledDecimal(value: string, factor: number) {
+  if (!value.trim() || value === "PENDENTE") return value;
+  const normalized = normalizeBrazilianDecimal(value);
+  if (normalized === null) return value;
+  const scaled = Number(normalized) * factor;
+  if (!Number.isFinite(scaled)) return value;
+  return String(Number(scaled.toPrecision(15)));
+}
+
+/**
+ * A Cotia historicamente persiste percentuais como pontos (25 = 25%).
+ * A UI usa a fração canônica do restante do produto (0,25 = 25%) sem migrar
+ * nem reinterpretar registros existentes.
+ */
+export function cotiaPercentPointsToDecimalInput(value: string) {
+  return scaledDecimal(value, 0.01).replace(".", ",");
+}
+
+export function decimalInputToCotiaPercentPoints(value: string) {
+  return scaledDecimal(value, 100);
 }
 
 function MatrixSection({
@@ -141,6 +166,7 @@ export function CotiaProjectMatrix({
   status,
   disabled,
   saving,
+  dirty = false,
   onChange,
   onSourceChange,
   onStatusChange,
@@ -152,8 +178,9 @@ export function CotiaProjectMatrix({
   const number = (value: number, digits = 0, known = hasAnyExplicitValue) => formatNumber(value, digits, known);
   const field = (key: string, placeholder = "PENDENTE", mode = "decimal", label?: string) => {
     const accessibleLabel = label ?? fieldLabels[key] ?? humanizeField(key);
-    const percentHint = isPercentField(key)
-      ? " Digite 1 para 1% e 0,5 para 0,5%. O motor financeiro recebe o decimal equivalente."
+    const percentField = isPercentField(key);
+    const percentHint = percentField
+      ? " Digite 0,01 para 1% e 0,005 para 0,5%. A interface usa fração decimal canônica."
       : "";
     return <Input
       id={`cotia-${key}`}
@@ -162,8 +189,14 @@ export function CotiaProjectMatrix({
       title={`Premissa editável: ${accessibleLabel}. Campo vazio permanece PENDENTE.${percentHint}`}
       disabled={disabled}
       inputMode={mode === "text" ? "text" : "decimal"}
-      value={v(key)}
-      onChange={event => onChange(key, event.target.value)}
+      value={percentField ? cotiaPercentPointsToDecimalInput(v(key)) : v(key)}
+      onChange={event => onChange(
+        key,
+        percentField
+          ? decimalInputToCotiaPercentPoints(event.target.value)
+          : event.target.value,
+      )}
+      data-percent-semantics={percentField ? "decimal-rate" : undefined}
       placeholder={placeholder}
       className="h-9 min-w-0 border-0 bg-amber-50/60 px-2 text-right text-sm font-semibold text-slate-900 shadow-none focus-visible:ring-2 focus-visible:ring-amber-500"
     />;
@@ -188,6 +221,11 @@ export function CotiaProjectMatrix({
             {status === "provided" ? "INFORMADO" : "PENDENTE"}
           </Badge>
         </div>
+        {dirty ? (
+          <div role="status" className="mt-3 rounded-md border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-xs font-black uppercase tracking-wide text-amber-100">
+            ALTERAÇÕES NÃO REGISTRADAS · registre a Página 1 antes de sair.
+          </div>
+        ) : null}
       </div>
 
       <MatrixSection title="TGR Consulting · Dados do projeto">
@@ -434,7 +472,7 @@ export function CotiaProjectMatrix({
             <div><p className="text-xs font-black uppercase tracking-[0.14em]">Pré-investimento / operação recorrente / entrada líquida</p><p className="mt-1 text-lg font-black">{money(calculations.preOperationalInvestment)} · {money(calculations.recurringOperationMonthly)} · {money(calculations.netEntryMonthly)}</p></div>
           <div className="w-full sm:w-72"><Label htmlFor="cotia-sourceRef" className="text-xs font-black uppercase">Fonte ou responsável pela folha</Label><Input id="cotia-sourceRef" name="sourceRef" aria-label="Fonte ou responsável pela folha" title="Proveniência obrigatória para campos informados." value={sourceRef} onChange={event => onSourceChange(event.target.value)} placeholder="Ata, briefing, responsável" className="mt-1 h-9 border-slate-950/30 bg-white/65 text-slate-950" /></div>
           <div><Label htmlFor="cotia-status" className="text-xs font-black uppercase">Status calculado</Label><select id="cotia-status" aria-label="Status calculado da Página 1" value={status} onChange={event => onStatusChange(event.target.value as "provided" | "pending")} disabled className="mt-1 h-9 rounded-md border border-slate-950/30 bg-white px-3 text-sm"><option value="pending">PENDENTE</option><option value="provided">INFORMADO</option></select></div>
-          <Button disabled={disabled || saving} onClick={onSave} className="bg-slate-950 text-white hover:bg-slate-800"><Save className="mr-2 h-4 w-4" />Registrar Página 1</Button>
+          <Button disabled={disabled || saving} onClick={onSave} className="bg-slate-950 text-white hover:bg-slate-800"><Save className="mr-2 h-4 w-4" />{dirty ? "Registrar alterações da Página 1" : "Registrar Página 1"}</Button>
         </div>
       </div>
     </div>
