@@ -135,7 +135,14 @@ export function createExportPackHash(params: {
     source: "investor_export_pack.v1",
     snapshotHash: params.snapshotHash,
     scenarioSelectionHash: params.scenarioComparison?.selectionHash ?? null,
-    exportMetadata: params.exportMetadata ?? null,
+    exportIdentity: params.exportMetadata
+      ? {
+          snapshotId: params.exportMetadata.snapshotId,
+          versionId: params.exportMetadata.versionId,
+          lifecycleStatus: params.exportMetadata.lifecycleStatus,
+          approvalStatus: params.exportMetadata.approvalStatus,
+        }
+      : null,
   });
 }
 

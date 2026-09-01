@@ -227,9 +227,17 @@ describe("geradores de artefato Boardroom", () => {
         generatedAt: "2026-08-31T12:35:00.000Z",
       },
     });
+    const anotherVersion = createExportPackHash({
+      snapshotHash: snapshot.snapshotHash,
+      exportMetadata: {
+        ...exportMetadata,
+        versionId: "version-other-baseline",
+      },
+    });
 
     expect(first).toBe(repeated);
-    expect(first).not.toBe(anotherGeneration);
+    expect(first).toBe(anotherGeneration);
+    expect(first).not.toBe(anotherVersion);
   });
 
   it("transporta hash completo, versão, geração, autor e lifecycle no PDF/PPTX/XLSX", async () => {
