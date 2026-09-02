@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { OAUTH_STATE_COOKIE } from "@shared/const";
 import {
   createRateLimitMiddleware,
@@ -443,7 +444,8 @@ describe("security hardening", () => {
 
   it("serve export do volume de staging somente depois de autenticar o tenant", async () => {
     ENV.storageDriver = "filesystem";
-    ENV.storageLocalDir = "C:\\tgr-staging-exports";
+    const storageRoot = path.resolve("tmp", "tgr-staging-exports");
+    ENV.storageLocalDir = storageRoot;
     let handler:
       | ((req: Request, res: Response) => Promise<void>)
       | undefined;
@@ -470,7 +472,7 @@ describe("security hardening", () => {
 
     expect(result.result.statusCode).toBe(200);
     expect(result.result.sentFile.replace(/\\/g, "/")).toBe(
-      "C:/tgr-staging-exports/igr/7/exports/snapshot.pdf",
+      path.join(storageRoot, "igr", "7", "exports", "snapshot.pdf").replace(/\\/g, "/"),
     );
     expect(result.result.headers["Cache-Control"]).toBe("no-store");
     authenticate.mockRestore();
