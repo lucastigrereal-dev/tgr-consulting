@@ -11,6 +11,11 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
 import { assertProductionConfiguration } from "./env";
+import { buildRuntimeHealth } from "./runtimeHealth";
+import { createStagingLoginHandler } from "./stagingAuth";
+import { getDb, getUserByOpenId, upsertUser } from "../db";
+import { sdk } from "./sdk";
+import { sql } from "drizzle-orm";
 
 type RateLimitOptions = {
   maxRequests?: number;
@@ -259,9 +264,29 @@ async function startServer() {
   app.use(createSecurityHeadersMiddleware());
   app.use(createRequestLoggingMiddleware());
   const sensitiveRouteLimiter = createRateLimitMiddleware();
-  app.use(["/api/trpc", "/api/oauth/callback", "/manus-storage"], sensitiveRouteLimiter);
+  app.use(["/api/trpc", "/api/oauth/callback", "/api/staging-auth/login", "/manus-storage"], sensitiveRouteLimiter);
   app.use(express.json({ limit: getDefaultBodyLimit() }));
   app.use(express.urlencoded({ limit: getDefaultBodyLimit(), extended: true }));
+  app.get("/health", async (_req, res) => {
+    const payload = await buildRuntimeHealth({
+      checkDatabase: async () => {
+        const database = await getDb();
+        if (!database) return false;
+        await database.execute(sql`SELECT 1`);
+        return true;
+      },
+    });
+    res.status(payload.ok ? 200 : 503).json(payload);
+  });
+  app.post(
+    "/api/staging-auth/login",
+    createStagingLoginHandler({
+      upsertUser,
+      getUserByOpenId,
+      createSessionToken: (openId, options) =>
+        sdk.createSessionToken(openId, options),
+    }),
+  );
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // tRPC API

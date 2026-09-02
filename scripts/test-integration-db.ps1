@@ -57,6 +57,7 @@ try {
   Wait-ForHealthyDatabase
   Invoke-Checked { pnpm exec drizzle-kit migrate } "Database migrations"
   Invoke-Checked { pnpm run test:integration:ci } "Database integration tests"
+  Invoke-Checked { pnpm run test:staging:seed:ci } "Staging seed integration test"
 }
 finally {
   if (-not $KeepDatabase) {

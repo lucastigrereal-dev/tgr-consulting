@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - codex/tgr-master-brd-v1
+      - codex/tgr-staging-v1
+      - main
   pull_request:
     branches:
       - main
@@ -53,6 +55,8 @@ jobs:
         run: pnpm test
       - name: MySQL integration suite
         run: pnpm run test:integration:ci
+      - name: Staging seed idempotency and Golden reconciliation
+        run: pnpm run test:staging:seed:ci
       - name: TypeScript check
         run: pnpm run check
       - name: Production build
@@ -65,3 +69,61 @@ jobs:
           docker compose version
       - name: Authenticated E2E master
         run: pnpm run test:e2e:master
+
+  deploy-staging:
+    needs: verify
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex/tgr-staging-v1' &&
+      vars.STAGING_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Railway CLI
+        run: npm install --global @railway/cli@4.29.0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Link staging service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: >-
+          railway link
+          --project "${{ vars.RAILWAY_PROJECT_ID }}"
+          --environment "${{ vars.RAILWAY_ENVIRONMENT }}"
+          --service "${{ vars.RAILWAY_SERVICE }}"
+
+      - name: Bind public staging runtime contract without triggering an extra deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: >-
+          railway variable set
+          "GIT_SHA=${GITHUB_SHA}"
+          "APP_ENV=staging"
+          "AUTH_MODE=staging_password"
+          "VITE_AUTH_MODE=staging_password"
+          --skip-deploys
+
+      - name: Deploy verified staging artifact
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --ci --message "staging ${GITHUB_SHA}"
+
+      - name: QA authenticated staging URL
+        env:
+          CHROMIUM_PATH: /usr/bin/google-chrome
+          STAGING_URL: ${{ vars.STAGING_URL }}
+          STAGING_AUTH_USERNAME: ${{ vars.STAGING_AUTH_USERNAME }}
+          STAGING_AUTH_PASSWORD: ${{ secrets.STAGING_AUTH_PASSWORD }}
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+        run: pnpm run test:staging:url

@@ -3,6 +3,8 @@
 // Downloads return /manus-storage/{key} paths served via 307 redirect.
 
 import { ENV } from "./_core/env";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 function getForgeConfig() {
   const forgeUrl = ENV.forgeApiUrl;
@@ -18,7 +20,18 @@ function getForgeConfig() {
 }
 
 function normalizeKey(relKey: string): string {
-  return relKey.replace(/^\/+/, "");
+  return relKey.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+export function resolveLocalStoragePath(relKey: string, root = ENV.storageLocalDir) {
+  const normalized = normalizeKey(relKey);
+  if (!root || !normalized || normalized.split("/").some(part => part === ".." || part === "."))
+    throw new Error("Storage key inválida para o volume de staging.");
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(resolvedRoot, ...normalized.split("/"));
+  if (!resolved.startsWith(`${resolvedRoot}${path.sep}`))
+    throw new Error("Storage key inválida para o volume de staging.");
+  return resolved;
 }
 
 function appendHashSuffix(relKey: string): string {
@@ -33,8 +46,16 @@ export async function storagePut(
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream",
 ): Promise<{ key: string; url: string }> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
   const key = appendHashSuffix(normalizeKey(relKey));
+
+  if (ENV.storageDriver === "filesystem") {
+    const filePath = resolveLocalStoragePath(key);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, data);
+    return { key, url: `/manus-storage/${key}` };
+  }
+
+  const { forgeUrl, forgeKey } = getForgeConfig();
 
   // 1. Get presigned PUT URL from Forge
   const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
@@ -77,6 +98,11 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
 }
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
+  if (ENV.storageDriver === "filesystem") {
+    const key = normalizeKey(relKey);
+    resolveLocalStoragePath(key);
+    return `/manus-storage/${key}`;
+  }
   const { forgeUrl, forgeKey } = getForgeConfig();
   const key = normalizeKey(relKey);
 

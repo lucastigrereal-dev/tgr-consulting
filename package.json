@@ -3,21 +3,28 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
-    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "build": "vite build && esbuild server/_core/index.ts server/staging-start.ts --platform=node --packages=external --bundle --format=esm --entry-names=[name] --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
+    "start:staging": "node --input-type=module -e \"process.env.NODE_ENV='production'; await import('./dist/staging-start.js')\"",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run --exclude \"**/*.integration.test.ts\"",
     "test:integration:ci": "vitest run server/db.integration.test.ts server/routers/igr.database.integration.test.ts server/routers/igr.goalseek.database.integration.test.ts",
+    "test:staging:seed:ci": "tsx scripts/test-staging-seed.ts",
+    "test:staging:url": "tsx scripts/smoke-staging-url.ts",
     "test:integration:db": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-integration-db.ps1",
     "test:migration:legacy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-legacy-component-migration.ps1",
     "test:backup-restore": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-backup-restore.ps1",
     "test:smoke": "node scripts/smoke-ui.mjs",
     "test:smoke:auth": "tsx scripts/smoke-authenticated-ui.ts",
     "test:e2e:master": "tsx scripts/e2e-master-authenticated.ts",
-    "db:push": "drizzle-kit generate && drizzle-kit migrate"
+    "db:push": "drizzle-kit generate && drizzle-kit migrate",
+    "staging:password-hash": "tsx scripts/hash-staging-password.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

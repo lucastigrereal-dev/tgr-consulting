@@ -37,6 +37,7 @@ function response() {
     headers: {} as Record<string, string>,
     body: undefined as unknown,
     redirectedTo: "",
+    sentFile: "",
   };
   const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
@@ -60,6 +61,11 @@ function response() {
     redirect(code: number, url: string) {
       result.statusCode = code;
       result.redirectedTo = url;
+      return res;
+    },
+    sendFile(file: string, callback?: (error?: Error) => void) {
+      result.sentFile = file;
+      callback?.();
       return res;
     },
   }) as unknown as Response;
@@ -433,5 +439,42 @@ describe("security hardening", () => {
 
     authenticate.mockRestore();
     fetchMock.mockRestore();
+  });
+
+  it("serve export do volume de staging somente depois de autenticar o tenant", async () => {
+    ENV.storageDriver = "filesystem";
+    ENV.storageLocalDir = "C:\\tgr-staging-exports";
+    let handler:
+      | ((req: Request, res: Response) => Promise<void>)
+      | undefined;
+    const app = {
+      get(_path: string, next: typeof handler) { handler = next; },
+    };
+    registerStorageProxy(app as never);
+    const authenticate = vi.spyOn(sdk, "authenticateRequest").mockResolvedValue({
+      id: 7,
+      openId: "staging:lucas",
+      name: "Lucas",
+      email: null,
+      loginMethod: "staging_password",
+      role: "admin",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSignedIn: new Date(),
+    });
+    const result = response();
+
+    await handler!(request({
+      params: { key: ["igr", "7", "exports", "snapshot.pdf"] },
+    } as unknown as Request), result.res);
+
+    expect(result.result.statusCode).toBe(200);
+    expect(result.result.sentFile.replace(/\\/g, "/")).toBe(
+      "C:/tgr-staging-exports/igr/7/exports/snapshot.pdf",
+    );
+    expect(result.result.headers["Cache-Control"]).toBe("no-store");
+    authenticate.mockRestore();
+    ENV.storageDriver = "forge";
+    ENV.storageLocalDir = "";
   });
 });

@@ -13,6 +13,7 @@ const CostCatalog = lazy(() => import("./pages/CostCatalog"));
 const Decisions = lazy(() => import("./pages/Decisions"));
 const Scenarios = lazy(() => import("./pages/Scenarios"));
 const Governance = lazy(() => import("./pages/Governance"));
+const Login = lazy(() => import("./pages/Login"));
 
 function PanelFallback() {
   return <div className="mx-auto max-w-7xl space-y-4 p-2" aria-live="polite"><div className="h-40 animate-pulse rounded-2xl border border-white/10 bg-card/70"/><div className="grid gap-3 md:grid-cols-3"><div className="h-32 animate-pulse rounded-xl border border-white/10 bg-card/60"/><div className="h-32 animate-pulse rounded-xl border border-white/10 bg-card/60"/><div className="h-32 animate-pulse rounded-xl border border-white/10 bg-card/60"/></div><p className="text-sm text-muted-foreground">Carregando painel e memória de decisão…</p></div>;
@@ -24,6 +25,7 @@ function Router() {
   const BoardroomPanel = () => <Suspense fallback={<PanelFallback />}><Boardroom /></Suspense>;
   return (
     <Switch>
+      <Route path={"/login"}>{() => <Suspense fallback={<PanelFallback />}><Login /></Suspense>}</Route>
       <Route path={"/"}>{() => <Panel><Builder /></Panel>}</Route>
       <Route path={"/builder"}>{() => <Panel><Builder /></Panel>}</Route>
       <Route path={"/study"}>{() => <BoardroomPanel />}</Route>

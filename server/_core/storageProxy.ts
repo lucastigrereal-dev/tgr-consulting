@@ -1,6 +1,8 @@
 import type { Express } from "express";
 import { ENV } from "./env";
 import { redactErrorForLog, sdk } from "./sdk";
+import { resolveLocalStoragePath } from "../storage";
+import path from "node:path";
 
 function getStorageKey(params: { key?: string | string[] }) {
   return Array.isArray(params.key) ? params.key.join("/") : params.key;
@@ -33,6 +35,21 @@ export function registerStorageProxy(app: Express) {
 
     if (!isAuthorizedExportKey(key, user.id)) {
       res.status(403).send("Storage key not authorized");
+      return;
+    }
+
+    if (ENV.storageDriver === "filesystem") {
+      try {
+        const filePath = resolveLocalStoragePath(key);
+        const downloadName = path.basename(filePath).replace(/["\r\n]/g, "_");
+        res.set("Cache-Control", "no-store");
+        res.set("Content-Disposition", `attachment; filename="${downloadName}"`);
+        res.sendFile(filePath, error => {
+          if (error && !res.headersSent) res.status(404).send("Storage object not found");
+        });
+      } catch {
+        res.status(400).send("Invalid storage key");
+      }
       return;
     }
 
